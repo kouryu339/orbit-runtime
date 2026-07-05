@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for contributing to `ai-framework`.
+Thank you for contributing to `orbit-runtime`.
 
 ## Before A Pull Request
 

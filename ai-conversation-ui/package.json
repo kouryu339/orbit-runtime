@@ -1,11 +1,11 @@
 {
   "name": "@agent-runtime/conversation-element",
   "version": "0.1.0",
-  "description": "Lit conversation element and host transport contracts for the Corework Agent Runtime",
-  "license": "MIT",
+  "description": "Lit conversation element and host transport contracts for Orbit Runtime",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xonion-tech/ai-framework.git",
+    "url": "git+https://github.com/kouryu339/orbit-runtime.git",
     "directory": "ai-conversation-ui"
   },
   "publishConfig": {

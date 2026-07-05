@@ -1,6 +1,6 @@
 # 1 LLM Gateway Architecture
 
-`llm-gateway` is the model-provider abstraction layer for `ai-framework`.
+`llm-gateway` is the model-provider abstraction layer for `orbit-runtime`.
 
 It hides provider-specific request formats behind a configuration-driven API so
 the Agent Runtime can call text, vision, speech, and OCR models through a common

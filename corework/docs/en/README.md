@@ -12,7 +12,6 @@ documents in `corework/docs/zh/`.
 | Execution units, modules, and state machines | `05_execution_unit_module_and_state_machine.md` |
 | Business development guide | `06_business_development_guide.md` |
 | RPC Tool protocol v1 | `09_rpc_tool_protocol_v1.md` |
-| `CHANGELOG.md` | `CHANGELOG.md` |
 
 Record/status documents have been removed. The current RPC Tool contract is
 `09_rpc_tool_protocol_v1.md` plus `proto/corework_agent_tool_v1.proto`.

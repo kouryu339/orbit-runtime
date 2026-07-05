@@ -1,6 +1,6 @@
 # 1 AI Assistant Architecture
 
-`ai-assistant` is the Agent Runtime layer of `ai-framework`.
+`ai-assistant` is the Agent Runtime layer of `orbit-runtime`.
 
 It connects user messages, model gateway calls, skills, tools, runtime events,
 ledger persistence, and host-facing snapshots.

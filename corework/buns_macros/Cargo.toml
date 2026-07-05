@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["寻乌洋葱科技有限公司"]
 description = "Procedural macros for Corework systems, models, and workflow nodes"
-license = "MIT"
-repository = "https://github.com/xonion-tech/ai-framework"
+license = "Apache-2.0"
+repository = "https://github.com/kouryu339/orbit-runtime"
 
 [lib]
 proc-macro = true

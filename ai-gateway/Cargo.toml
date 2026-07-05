@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 authors = ["寻乌洋葱科技有限公司"]
 description = "Config-driven LLM gateway supporting OpenAI-compatible providers (DeepSeek, Qwen, Doubao, MiniMax, Kimi, GLM, Yi, Step, etc.) with multimodal (VLM/ASR/OCR) support"
-license = "MIT"
+license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/xonion-tech/ai-framework"
+repository = "https://github.com/kouryu339/orbit-runtime"
 
 [dependencies]
 # Corework 框架（buns_system 宏 + inventory）

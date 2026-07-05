@@ -1,6 +1,6 @@
 # Corework
 
-`corework` is the orchestration foundation of `ai-framework`.
+`corework` is the orchestration foundation of `orbit-runtime`.
 
 It provides the runtime primitives used by the Agent layer: state machines,
 scoped cache, event bus, workflow execution, system registration, node metadata,

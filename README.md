@@ -71,9 +71,9 @@ dist/releases/orbit-runtime-runtime-vX.Y.Z-linux-x86_64.zip
 ```
 
 Each package contains the native library, `agent_runtime.h`, `LICENSE`, a short
-package README, and a `.sha256` checksum next to the zip file. macOS artifacts
-are intentionally not produced by this script because this release environment
-does not provide an Apple build machine.
+package README, `NOTICE`, and a `.sha256` checksum next to the zip file. macOS
+artifacts are intentionally not produced by this script because this release
+environment does not provide an Apple build machine.
 
 Useful variants:
 
@@ -82,6 +82,20 @@ Useful variants:
 .\scripts\prepare-release.ps1 -Targets linux
 .\scripts\prepare-release.ps1 -Targets linux -SkipBuild
 ```
+
+## Release Trust
+
+The source code in the Git tag is the primary artifact for this project. Native
+runtime binaries are convenience artifacts published from the corresponding
+GitHub Release.
+
+Only trust release assets published under
+[`kouryu339/orbit-runtime`](https://github.com/kouryu339/orbit-runtime). Do not
+treat third-party repackaged native binaries as official builds.
+
+Current release packages include SHA-256 checksums. The project aims to keep
+release packages reproducible from the tagged source and to add CI verification,
+SBOM publication, and signed release tags as the release process matures.
 
 ## Recommended Reading
 
@@ -115,3 +129,7 @@ Still evolving:
 - SDK package distribution around the native runtime artifact.
 - Additional host examples.
 - macOS release packaging from an Apple build environment.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

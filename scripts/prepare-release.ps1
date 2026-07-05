@@ -18,6 +18,7 @@
     lib\agent_runtime.dll.lib                (Windows, when emitted by MSVC)
     lib\libagent_runtime.so                  (Linux)
     LICENSE
+    NOTICE
     README.md
 
 .PARAMETER Targets
@@ -150,8 +151,11 @@ function New-ReleasePackage($platform) {
     Copy-RequiredFile `
         (Join-Path $repo 'LICENSE') `
         (Join-Path $packageRoot 'LICENSE')
+    Copy-RequiredFile `
+        (Join-Path $repo 'NOTICE') `
+        (Join-Path $packageRoot 'NOTICE')
 
-    $packagedArtifacts = @('include/agent_runtime.h', 'LICENSE')
+    $packagedArtifacts = @('include/agent_runtime.h', 'LICENSE', 'NOTICE')
 
     if ($platform -eq 'windows') {
         Copy-RequiredFile `

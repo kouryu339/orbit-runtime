@@ -11,5 +11,3 @@ milestones for `corework`.
 - Added field-path access helpers and tests.
 - Added RPC Tool protocol v1 for sidecar-based tools.
 - Added workflow draft, recorder, executor, snapshot, and command modules.
-
-The Chinese `CHANGELOG.md` remains the source note for historical details.
