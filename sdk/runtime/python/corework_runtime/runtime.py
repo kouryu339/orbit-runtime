@@ -9,10 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .native import DEFAULT_RUNTIME_VERSION, ensure_runtime_library
-
-
 ABI_VERSION = 1
+DEFAULT_RUNTIME_VERSION = "0.4.0"
 CONVERSATION_CREATED_EVENT_TYPE = "conversation:created"
 CONVERSATION_CLOSED_EVENT_TYPE = "conversation:closed"
 FRONTEND_STATE_SNAPSHOT_EVENT_TYPE = "frontend:state_snapshot"
@@ -472,6 +470,8 @@ class Runtime:
         force_download: bool = False,
         required_commands: tuple[str, ...] = (),
     ) -> "Runtime":
+        from .native import ensure_runtime_library
+
         library_path = ensure_runtime_library(
             version=version,
             cache_dir=cache_dir,
@@ -901,6 +901,8 @@ class RuntimeHostBuilder:
         platform_id: str | None = None,
         force_download: bool = False,
     ) -> "RuntimeHostBuilder":
+        from .native import ensure_runtime_library
+
         library_path = ensure_runtime_library(
             version=version,
             cache_dir=cache_dir,

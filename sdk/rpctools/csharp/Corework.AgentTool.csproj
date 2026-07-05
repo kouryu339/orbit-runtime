@@ -13,6 +13,6 @@
     <PackageReference Include="Google.Protobuf" Version="3.30.2" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
     <PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="All" />
-    <Protobuf Include="..\..\corework\proto\corework_agent_tool_v1.proto" GrpcServices="Server" />
+    <Protobuf Include="..\..\..\corework\proto\corework_agent_tool_v1.proto" GrpcServices="Server" />
   </ItemGroup>
 </Project>

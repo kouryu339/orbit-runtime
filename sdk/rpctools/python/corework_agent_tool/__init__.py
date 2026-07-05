@@ -400,7 +400,7 @@ def _proto_path() -> Path:
     env_path = os.environ.get("COREWORK_AGENT_TOOL_PROTO")
     if env_path:
         return Path(env_path)
-    repo_proto = Path(__file__).resolve().parents[3] / "corework" / "proto" / "corework_agent_tool_v1.proto"
+    repo_proto = Path(__file__).resolve().parents[4] / "corework" / "proto" / "corework_agent_tool_v1.proto"
     if repo_proto.exists():
         return repo_proto
     raise RuntimeError("Corework proto not found; set COREWORK_AGENT_TOOL_PROTO")

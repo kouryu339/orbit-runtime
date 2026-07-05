@@ -30,18 +30,28 @@ from .runtime import (
     ledger_delta_from_event,
     state_delta_from_event,
 )
-from .native import (
-    DEFAULT_RELEASE_TAG,
-    DEFAULT_REPOSITORY,
-    DEFAULT_RUNTIME_VERSION,
-    RuntimeArtifact,
-    UnsupportedRuntimePlatform,
-    ensure_runtime_library,
-    ensure_runtime_package,
-    resolve_runtime_library,
-    runtime_artifact,
-    runtime_platform_id,
-)
+_NATIVE_EXPORTS = {
+    "DEFAULT_RELEASE_TAG",
+    "DEFAULT_REPOSITORY",
+    "DEFAULT_RUNTIME_VERSION",
+    "RuntimeArtifact",
+    "UnsupportedRuntimePlatform",
+    "ensure_runtime_library",
+    "ensure_runtime_package",
+    "resolve_runtime_library",
+    "runtime_artifact",
+    "runtime_platform_id",
+}
+
+
+def __getattr__(name: str):
+    if name in _NATIVE_EXPORTS:
+        from . import native
+
+        value = getattr(native, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "ABI_VERSION",

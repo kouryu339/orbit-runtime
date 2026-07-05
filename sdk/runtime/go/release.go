@@ -1,4 +1,4 @@
-package runtimehost
+﻿package runtimehost
 
 import (
 	"fmt"
@@ -21,13 +21,13 @@ var runtimeArtifacts = map[string]RuntimeArtifact{
 	"windows-x86_64": {
 		PlatformID: "windows-x86_64",
 		Archive:    "orbit-runtime-runtime-v0.4.0-windows-x86_64.zip",
-		SHA256:     "1254883fece3bac0c636b5b918aa3750e923d9f248ad8fbe2065b72575a40fd3",
+		SHA256:     "948fa39b07155640e591bff94ca7d5c770f69c300e836f1dceda6f3d3b2e82ca",
 		Library:    "bin/agent_runtime.dll",
 	},
 	"linux-x86_64": {
 		PlatformID: "linux-x86_64",
 		Archive:    "orbit-runtime-runtime-v0.4.0-linux-x86_64.zip",
-		SHA256:     "a579df6c437f9d0cdb297a2ee62f46dc3d726dffeca2c7ab4de2cf35132cf299",
+		SHA256:     "7d6c8daa15287a828b861c8c5365f9c5dde432fdca90757943a4a845062e991a",
 		Library:    "lib/libagent_runtime.so",
 	},
 }

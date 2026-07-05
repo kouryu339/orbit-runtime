@@ -417,7 +417,7 @@ function findProtoPath() {
     return process.env.COREWORK_AGENT_TOOL_PROTO;
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const repoProto = path.resolve(here, "../../../corework/proto/corework_agent_tool_v1.proto");
+  const repoProto = path.resolve(here, "../../../../corework/proto/corework_agent_tool_v1.proto");
   if (fs.existsSync(repoProto)) {
     return repoProto;
   }

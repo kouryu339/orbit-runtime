@@ -14,7 +14,7 @@ class RequestArgsTests(unittest.TestCase):
 
         args = _request_args({"parameters": []}, request)
 
-        self.assertEqual(args["path"], r"C:\workspace\samples\nnnc")
+        self.assertEqual(args["path"], r"C:\Users\buzim\Desktop\nnnc")
 
     def test_falls_back_to_cli_for_legacy_clients(self):
         request = SimpleNamespace(
