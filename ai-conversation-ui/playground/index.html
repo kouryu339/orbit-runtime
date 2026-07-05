@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Conversation Element</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Aptos", "Segoe UI Variable Text", sans-serif;
+        background: #121210;
+      }
+      * { box-sizing: border-box; }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at 12% 8%, rgba(198, 95, 60, 0.16), transparent 28rem),
+          #121210;
+        color: #efede7;
+      }
+      .page {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 240px;
+        gap: 18px;
+        width: min(1180px, calc(100% - 32px));
+        height: calc(100vh - 32px);
+        margin: 16px auto;
+      }
+      agent-runtime-conversation { min-height: 0; }
+      .controls {
+        align-self: start;
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border: 1px solid #34332f;
+        border-radius: 16px;
+        background: rgba(31, 31, 28, 0.92);
+      }
+      .controls h1 { margin: 0; font-size: 15px; }
+      .controls label {
+        display: grid;
+        gap: 5px;
+        color: #aaa69d;
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .controls select,
+      .controls button {
+        height: 34px;
+        border: 1px solid #44413b;
+        border-radius: 8px;
+        background: #282722;
+        color: #efede7;
+      }
+      @media (max-width: 760px) {
+        .page { grid-template-columns: 1fr; height: auto; }
+        agent-runtime-conversation { height: 76vh; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <agent-runtime-conversation
+        id="conversation"
+        color-scheme="dark"
+        theme="midnight"
+        disclaimer="AI output may contain errors. Verify important results."
+      ></agent-runtime-conversation>
+      <aside class="controls">
+        <h1>Component playground</h1>
+        <label>
+          Color scheme
+          <select id="scheme">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">System</option>
+          </select>
+        </label>
+        <label>
+          Interface theme
+          <select id="theme">
+            <option value="midnight">Midnight</option>
+            <option value="studio">Studio</option>
+            <option value="paper">Paper</option>
+            <option value="soft">Soft</option>
+          </select>
+        </label>
+        <button id="preset" type="button">Queue preset reply</button>
+        <button id="external" type="button">External ask-AI</button>
+      </aside>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

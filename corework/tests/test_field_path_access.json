@@ -1,0 +1,225 @@
+{
+  "metadata": {
+    "name": "FieldPathAccessTest",
+    "description": "测试字段路径访问功能 - 从 SubQuestion 提取字段",
+    "version": "1.0.0"
+  },
+  "nodes": [
+    {
+      "id": "start_1",
+      "node_type": "StartNode",
+      "display_name": "Start",
+      "position": {
+        "x": 100,
+        "y": 200
+      },
+      "outputs": [
+        {
+          "pin_name": "reference",
+          "data_type": "ReferenceAnswer",
+          "description": "参考答案（包含 sub_questions）"
+        }
+      ]
+    },
+    {
+      "id": "extract_sub_id",
+      "node_type": "ExtractFieldNode",
+      "display_name": "提取题目ID",
+      "position": {
+        "x": 400,
+        "y": 150
+      },
+      "inputs": [
+        {
+          "pin_name": "reference",
+          "data_type": "ReferenceAnswer",
+          "description": "输入的参考答案对象",
+          "field_path": "sub_questions.0.sub_id"
+        }
+      ],
+      "outputs": [
+        {
+          "pin_name": "sub_id",
+          "data_type": "String",
+          "description": "提取的题目ID"
+        }
+      ]
+    },
+    {
+      "id": "extract_question_type",
+      "node_type": "ExtractFieldNode",
+      "display_name": "提取题目类型",
+      "position": {
+        "x": 400,
+        "y": 250
+      },
+      "inputs": [
+        {
+          "pin_name": "reference",
+          "data_type": "ReferenceAnswer",
+          "field_path": "sub_questions.0.question_type"
+        }
+      ],
+      "outputs": [
+        {
+          "pin_name": "question_type",
+          "data_type": "String"
+        }
+      ]
+    },
+    {
+      "id": "extract_full_score",
+      "node_type": "ExtractFieldNode",
+      "display_name": "提取满分值",
+      "position": {
+        "x": 400,
+        "y": 350
+      },
+      "inputs": [
+        {
+          "pin_name": "reference",
+          "data_type": "ReferenceAnswer",
+          "field_path": "sub_questions.0.full_score"
+        }
+      ],
+      "outputs": [
+        {
+          "pin_name": "full_score",
+          "data_type": "Float"
+        }
+      ]
+    },
+    {
+      "id": "print_fields",
+      "node_type": "PrintNode",
+      "display_name": "打印字段",
+      "position": {
+        "x": 700,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "pin_name": "sub_id",
+          "data_type": "String"
+        },
+        {
+          "pin_name": "question_type",
+          "data_type": "String"
+        },
+        {
+          "pin_name": "full_score",
+          "data_type": "Float"
+        }
+      ]
+    },
+    {
+      "id": "end_1",
+      "node_type": "EndNode",
+      "display_name": "End",
+      "position": {
+        "x": 1000,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "pin_name": "sub_id",
+          "data_type": "String"
+        },
+        {
+          "pin_name": "question_type",
+          "data_type": "String"
+        },
+        {
+          "pin_name": "full_score",
+          "data_type": "Float"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from_node": "start_1",
+      "from_pin": "Out",
+      "to_node": "extract_sub_id",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "extract_sub_id",
+      "from_pin": "Out",
+      "to_node": "extract_question_type",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "extract_question_type",
+      "from_pin": "Out",
+      "to_node": "extract_full_score",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "extract_full_score",
+      "from_pin": "Out",
+      "to_node": "print_fields",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "print_fields",
+      "from_pin": "Out",
+      "to_node": "end_1",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "start_1",
+      "from_pin": "reference",
+      "to_node": "extract_sub_id",
+      "to_pin": "reference"
+    },
+    {
+      "from_node": "start_1",
+      "from_pin": "reference",
+      "to_node": "extract_question_type",
+      "to_pin": "reference"
+    },
+    {
+      "from_node": "start_1",
+      "from_pin": "reference",
+      "to_node": "extract_full_score",
+      "to_pin": "reference"
+    },
+    {
+      "from_node": "extract_sub_id",
+      "from_pin": "sub_id",
+      "to_node": "print_fields",
+      "to_pin": "sub_id"
+    },
+    {
+      "from_node": "extract_question_type",
+      "from_pin": "question_type",
+      "to_node": "print_fields",
+      "to_pin": "question_type"
+    },
+    {
+      "from_node": "extract_full_score",
+      "from_pin": "full_score",
+      "to_node": "print_fields",
+      "to_pin": "full_score"
+    },
+    {
+      "from_node": "extract_sub_id",
+      "from_pin": "sub_id",
+      "to_node": "end_1",
+      "to_pin": "sub_id"
+    },
+    {
+      "from_node": "extract_question_type",
+      "from_pin": "question_type",
+      "to_node": "end_1",
+      "to_pin": "question_type"
+    },
+    {
+      "from_node": "extract_full_score",
+      "from_pin": "full_score",
+      "to_node": "end_1",
+      "to_pin": "full_score"
+    }
+  ]
+}

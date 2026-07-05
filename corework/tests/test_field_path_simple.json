@@ -1,0 +1,73 @@
+{
+  "metadata": {
+    "name": "SimpleFieldPathTest",
+    "description": "简化版字段路径测试 - 使用 StringNode 验证",
+    "version": "1.0.0"
+  },
+  "nodes": [
+    {
+      "id": "start_1",
+      "node_type": "StartNode",
+      "display_name": "Start",
+      "position": {
+        "x": 100,
+        "y": 200
+      },
+      "outputs": [
+        {
+          "pin_name": "test_data",
+          "data_type": "Object",
+          "description": "测试对象"
+        }
+      ]
+    },
+    {
+      "id": "field_path_1",
+      "node_type": "StringNode",
+      "display_name": "字段路径: name",
+      "position": {
+        "x": 400,
+        "y": 150
+      },
+      "properties": {
+        "value": "name",
+        "description": "要访问的字段路径"
+      }
+    },
+    {
+      "id": "end_1",
+      "node_type": "EndNode",
+      "display_name": "End",
+      "position": {
+        "x": 700,
+        "y": 200
+      },
+      "inputs": [
+        {
+          "pin_name": "field_path",
+          "data_type": "String"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from_node": "start_1",
+      "from_pin": "Out",
+      "to_node": "field_path_1",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "field_path_1",
+      "from_pin": "Out",
+      "to_node": "end_1",
+      "to_pin": "In"
+    },
+    {
+      "from_node": "field_path_1",
+      "from_pin": "Value",
+      "to_node": "end_1",
+      "to_pin": "field_path"
+    }
+  ]
+}

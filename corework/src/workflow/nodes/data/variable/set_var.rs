@@ -1,0 +1,92 @@
+//! SetVarNode - 可变变量写节点
+//!
+//! Impure 节点：把 Value 写入当前 execution scope 的 workflow variable 槽。
+//! 是实现循环累加、跨迭代状态传递的基础节点
+
+use crate::error::Result;
+use crate::register_node;
+use crate::workflow::core::{DataValue, NodeOutput, Pin};
+use crate::workflow::execution::ExecutionContext;
+use crate::workflow::nodes::traits::{BlueprintNode, NodeType};
+use std::collections::HashMap;
+
+/// SetVar 节点 - 可变变量写节点
+///
+/// 把 Value 写入以 Name 命名的声明变量槽。
+/// 同时将值以 `NodeOutput::Data` 形式透传，executor 会将其存入 `SetVar_nX:Value`
+#[derive(Debug, Clone, Default)]
+#[register_node(
+    node_type = "Impure",
+    version = "1.0.0",
+    category = "Variable",
+    display_name = "Set Variable",
+    description = "将{{Value}}写入变量{{Name}}，→{{Value}}传递",
+    permissions = 0,
+    exec_in  = ["In@执行输入"],
+    exec_out = ["Then@执行后继续"],
+    data_in  = ["Name:String@变量槽名称", "Value:Any@要写入的值"],
+    data_out = ["Value:Any@传递的值（便于链式引用）"]
+)]
+pub struct SetVarNode;
+
+impl BlueprintNode for SetVarNode {
+    fn name(&self) -> &str {
+        "SetVar"
+    }
+
+    fn node_type(&self) -> NodeType {
+        NodeType::Impure
+    }
+
+    fn pins(&self) -> Vec<Pin> {
+        vec![
+            Pin::exec_in("In"),
+            Pin::data_in("Name", "String"),
+            Pin::data_in("Value", "Any"),
+            Pin::exec_out("Then"),
+            Pin::data_out("Value", "Any"),
+        ]
+    }
+
+    fn description(&self) -> Option<&str> {
+        Some("Writes a value to a named variable slot, enabling mutable state across loop iterations")
+    }
+
+    fn category(&self) -> Option<&str> {
+        Some("Variable")
+    }
+
+    fn execute_node<'a>(
+        &'a self,
+        ctx: &'a mut ExecutionContext,
+        inputs: HashMap<String, DataValue>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<NodeOutput>> + Send + 'a>> {
+        Box::pin(async move { self.execute(ctx, inputs).await })
+    }
+}
+
+impl SetVarNode {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub async fn execute(
+        &self,
+        ctx: &mut ExecutionContext,
+        inputs: HashMap<String, DataValue>,
+    ) -> Result<NodeOutput> {
+        let name = inputs.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+
+        let value = inputs
+            .get("Value")
+            .cloned()
+            .unwrap_or_else(|| DataValue::from_string(""));
+
+        ctx.set_workflow_variable(name, &value).await?;
+
+        // 通过 NodeOutput::Data 透传，executor 写入 SetVar_nX:Value
+        let mut outputs = HashMap::new();
+        outputs.insert("Value".to_string(), value);
+        Ok(NodeOutput::Data(outputs))
+    }
+}

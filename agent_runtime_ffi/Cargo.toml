@@ -1,0 +1,29 @@
+[package]
+name = "agent-runtime-ffi"
+version = "0.4.0"
+edition = "2021"
+authors = ["寻乌洋葱科技有限公司"]
+description = "Stable C ABI and JSON command/event boundary for the Corework Agent Runtime"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/xonion-tech/ai-framework"
+
+[lib]
+name = "agent_runtime"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ai-assistant = { path = "../ai-assistant" }
+corework = { path = "../corework", default-features = false, features = ["memory-event-bus", "metrics", "type_structure"] }
+llm-gateway = { path = "../ai-gateway" }
+
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+inventory = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]

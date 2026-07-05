@@ -1,0 +1,52 @@
+[package]
+name = "ai-assistant"
+version = "0.1.0"
+edition = "2021"
+authors = ["寻乌洋葱科技有限公司"]
+description = "Agent conversation runtime built on Corework and the Corework LLM gateway"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/xonion-tech/ai-framework"
+
+[dependencies]
+# 核心框架依赖
+corework = { path = "../corework", default-features = false, features = ["memory-event-bus", "metrics", "type_structure"] }
+
+# AI 网关（LLM/VLM/ASR/OCR 调用封装）
+llm-gateway = { path = "../ai-gateway" }
+
+# 工具 crate（file-ops / audio-tools / browser-buns）已移除：
+# 它们通过 inventory 自动注册，由顶层 crate（tauri binary）负责 link，ai-assistant 无需直接依赖。
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7" }
+async-trait = "0.1"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Inventory（编译时静态收集）
+inventory = "0.3"
+
+# Workflows crate
+# workflows = { path = "../workflows" }  # 已解耦：recorder chain 走独立内部状态槽位
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "1.0"
+
+# 日志
+tracing = { version = "0.1", features = ["log"] }
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# 并发锁（全局 session_id）
+parking_lot = "0.12"
+
+[dev-dependencies]
+tokio-test = "0.4"
