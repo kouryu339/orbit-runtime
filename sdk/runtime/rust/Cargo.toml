@@ -1,0 +1,12 @@
+[package]
+name = "corework-runtime"
+version = "0.4.0"
+edition = "2021"
+description = "Rust Runtime Host SDK for Orbit Runtime ABI 1"
+license = "Apache-2.0"
+repository = "https://github.com/kouryu339/orbit-runtime"
+
+[dependencies]
+libloading = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

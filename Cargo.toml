@@ -5,6 +5,8 @@ members = [
     "ai-gateway",
     "ai-assistant",
     "agent_runtime_ffi",
+    "sdk/runtime/rust",
+    "sdk/rpctools/rust",
 ]
 resolver = "2"
 

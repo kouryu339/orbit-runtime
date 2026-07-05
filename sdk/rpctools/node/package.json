@@ -1,0 +1,23 @@
+{
+  "name": "@corework/agent-tool",
+  "version": "0.1.0",
+  "description": "Node.js SDK for Corework Agent Tool sidecars",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kouryu339/orbit-runtime.git",
+    "directory": "sdk/rpctools/node"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.13.3",
+    "@grpc/proto-loader": "^0.7.15"
+  }
+}

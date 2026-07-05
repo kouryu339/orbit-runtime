@@ -1,0 +1,13 @@
+[project]
+name = "corework-runtime"
+version = "0.4.0"
+description = "Python Runtime Host SDK for Orbit Runtime ABI 1"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+
+[project.scripts]
+corework-runtime-fetch-native = "corework_runtime.native:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
