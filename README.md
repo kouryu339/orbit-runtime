@@ -1,23 +1,43 @@
 # orbit-runtime
 
-`orbit-runtime` is an embeddable Rust Agent runtime for host applications.
+`orbit-runtime` is an embeddable Rust Agent runtime for applications that need
+LLM conversations, skills, tool execution, runtime events, snapshots, and
+persistence behind a stable native boundary.
 
-It packages model access, Agent conversations, skills, tool execution, runtime
-events, snapshots, and persistence behind a stable runtime boundary. Hosts can
-embed the runtime through the C ABI dynamic library and keep their application
-logic independent from the internal Rust implementation.
-
-The primary integration path is:
+The runtime is designed to be hosted by desktop apps, services, scripting
+bridges, or language SDKs. Host applications load the native library, register
+configuration, start conversations, and relay events without linking directly to
+the internal Rust crates.
 
 ```text
-Host app
+Host application
   -> agent_runtime.dll / libagent_runtime.so
   -> Agent Runtime
   -> LLM Gateway
   -> optional RPC Tool sidecars
 ```
 
-## What Is Included
+## Project Highlights
+
+- **Embeddable Agent runtime**: create and control conversations from a host
+  process while keeping the runtime implementation isolated behind an ABI.
+- **Stable C ABI boundary**: ship `agent_runtime.dll` or `libagent_runtime.so`
+  with `agent_runtime.h`, then build higher-level SDKs on top of that native
+  contract.
+- **Host-oriented event model**: hosts poll a single runtime event stream and
+  decide how to render UI state, persist archives, or fan out messages.
+- **Skills and tool governance**: role and feature Skills describe what an
+  Agent can see and which tools it may call, so product capability is explicit.
+- **RPC Tool sidecar protocol**: external tools run out of process and publish
+  descriptors through a language-neutral gRPC contract.
+- **LLM Gateway integration**: provider configuration and OpenAI-compatible
+  endpoints are handled through a dedicated gateway layer.
+- **Snapshots and persistence contracts**: conversations can export runtime
+  state for recovery, migration, and host-owned storage.
+- **Split SDK surface**: Runtime Host SDKs embed the runtime; RPC Tool SDKs
+  implement callable business tools.
+
+## Repository Layout
 
 | Path | Purpose |
 | --- | --- |
@@ -26,8 +46,48 @@ Host app
 | `ai-assistant/` | Agent runtime: conversation state machine, skills, tool execution, ledger, and persistence. |
 | `agent_runtime_ffi/` | C ABI wrapper that builds the native runtime library. |
 | `ai-conversation-ui/` | Lit-based conversation frontend used by host integrations. |
+| `sdk/` | Runtime Host SDKs and RPC Tool SDKs by language. |
 | `examples/guides/` | Host integration, skills, tool, frontend, and runtime guides. |
 | `scripts/` | Build, release packaging, and local development helper scripts. |
+
+## Example Programs
+
+The example material is intentionally split into two layers.
+
+### Integration Guides In This Repository
+
+`examples/guides/` is the recommended starting point for building your own host
+application. It walks through the full integration order:
+
+```text
+1. Tools       Prepare callable built-in tools or RPC sidecars.
+2. Configs     Register resources, LLM providers, and Agent clusters.
+3. Skills      Write role and feature Skills with explicit tool allowlists.
+4. Connect     Load the native runtime through a Runtime Host SDK.
+5. Run         Start conversations, relay events, and persist host state.
+```
+
+Start here:
+
+- `examples/guides/en/01-sdk-runtime-connection-flow.md`
+- `examples/guides/en/03-external-tools.md`
+- `examples/guides/en/04-skills.md`
+- `examples/guides/en/05-host-runtime-frontend.md`
+
+### Desktop Reference App
+
+A complete Tauri desktop host is maintained as a separate open-source example:
+
+```text
+https://github.com/kouryu339/assistant-tauri
+```
+
+Use it when you want to see a real host application wiring together the Runtime
+Host SDK, native runtime artifact, Lit conversation UI, RPC Tool sidecars,
+resource registration, frontend event relay, and release packaging.
+
+Keeping the desktop app in a separate repository helps `orbit-runtime` stay
+focused on the runtime, SDK contracts, and native release artifacts.
 
 ## Build The Runtime
 
@@ -54,6 +114,17 @@ The C ABI header is:
 ```text
 agent_runtime_ffi/include/agent_runtime.h
 ```
+
+## SDKs
+
+SDKs live under `sdk/` and are split by integration direction:
+
+| SDK family | Used by | Direction |
+| --- | --- | --- |
+| Runtime Host SDK | Desktop apps, services, scripting hosts | Host -> Runtime |
+| RPC Tool SDK | Tool sidecars and product capability adapters | Runtime -> Tool |
+
+See `sdk/README.md` for language support and the native runtime release manifest.
 
 ## Prepare Release Packages
 
@@ -99,12 +170,13 @@ SBOM publication, and signed release tags as the release process matures.
 
 ## Recommended Reading
 
-Start with the host-facing guides:
+Start with examples before reading implementation details:
 
 1. `examples/guides/en/01-sdk-runtime-connection-flow.md`
 2. `examples/guides/en/03-external-tools.md`
 3. `examples/guides/en/04-skills.md`
 4. `examples/guides/en/05-host-runtime-frontend.md`
+5. `sdk/README.md`
 
 Lower-level design documents live in:
 
@@ -127,7 +199,7 @@ Covered integration paths:
 Still evolving:
 
 - SDK package distribution around the native runtime artifact.
-- Additional host examples.
+- Additional host examples and packaging patterns.
 - macOS release packaging from an Apple build environment.
 
 ## License
