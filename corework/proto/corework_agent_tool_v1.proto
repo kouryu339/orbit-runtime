@@ -1,0 +1,204 @@
+syntax = "proto3";
+
+package corework.agent_tool.v1;
+
+// Corework Agent Tool Protocol v1.
+//
+// This is the only proto external language SDKs need to implement. Business
+// tools are dispatched by tool_name and described by ToolDescriptor; they do
+// not need their own protobuf service definitions.
+
+enum ToolErrorCode {
+  // Proto3 default. Runtimes should reject UNSPECIFIED in final tool results.
+  TOOL_ERROR_CODE_UNSPECIFIED = 0;
+
+  // Success. Corework uses an explicit non-zero OK so omitted values are
+  // visible during SDK and sidecar validation.
+  TOOL_ERROR_CODE_OK = 1;
+
+  // User/input side errors.
+  TOOL_ERROR_CODE_INVALID_ARGUMENT = 100;
+  TOOL_ERROR_CODE_MISSING_ARGUMENT = 101;
+  TOOL_ERROR_CODE_PERMISSION_DENIED = 102;
+  TOOL_ERROR_CODE_NOT_FOUND = 103;
+  TOOL_ERROR_CODE_CONFLICT = 104;
+
+  // Tool/runtime side errors.
+  TOOL_ERROR_CODE_INTERNAL = 200;
+  TOOL_ERROR_CODE_TIMEOUT = 201;
+  TOOL_ERROR_CODE_CANCELLED = 202;
+  TOOL_ERROR_CODE_UNAVAILABLE = 203;
+
+  // Host capability errors.
+  TOOL_ERROR_CODE_HOST_CAPABILITY_DENIED = 300;
+  TOOL_ERROR_CODE_HOST_CAPABILITY_UNSUPPORTED = 301;
+  TOOL_ERROR_CODE_HOST_CALL_FAILED = 302;
+
+  // Protocol/schema errors.
+  TOOL_ERROR_CODE_PROTOCOL_ERROR = 400;
+  TOOL_ERROR_CODE_INVALID_OUTPUT = 401;
+  TOOL_ERROR_CODE_SCHEMA_MISMATCH = 402;
+}
+
+service AgentToolService {
+  // Returns all AI tools exposed by this endpoint.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // Executes one tool call.
+  //
+  // This is a bidirectional stream so a remote tool can request controlled host
+  // capabilities while the call is in flight. In v1 the only official host
+  // capabilities are workspace.* operations declared below.
+  rpc Execute(stream ToolStreamMessage) returns (stream ToolStreamMessage);
+}
+
+message ListToolsRequest {
+  string runtime_version = 1;
+  repeated string accepted_schema = 2;
+}
+
+message ListToolsResponse {
+  string schema = 1; // "corework-agent-tool/v1"
+  repeated ToolDescriptor tools = 2;
+}
+
+message ToolDescriptor {
+  string name = 1;
+  string description = 2;
+  repeated ToolParameter parameters = 3;
+  repeated ToolOutputField outputs = 4;
+
+  // Behavior metadata mirrors corework::ai_system::AISystemMetadata.
+  bool destructive = 10;
+  bool readonly = 11;
+  bool idempotent = 12;
+  bool open_world = 13;
+  bool secret = 14;
+
+  // Optional UX/workflow projection hints.
+  string category = 20;
+  string display_name = 21;
+
+  // Host capability declarations. v1 supports:
+  // - "workspace.resolve_path"
+  // - "workspace.resolve_working_path"
+  // - "workspace.create_path"
+  // - "workspace.create_working_path"
+  // - "workspace.save_as_edited"
+  repeated string required_capabilities = 30;
+}
+
+message ToolParameter {
+  string name = 1;
+  string param_type = 2;
+  bool required = 3;
+  optional string default_value = 4;
+  string description = 5;
+}
+
+message ToolOutputField {
+  string name = 1;
+  string field_type = 2;
+  string description = 3;
+}
+
+message ToolStreamMessage {
+  string call_id = 1;
+
+  oneof message {
+    ExecuteRequest execute_request = 10;
+    HostCall host_call = 11;
+    HostResult host_result = 12;
+    AIOutput ai_output = 13;
+    ToolError error = 14;
+    ToolLog log = 15;
+  }
+}
+
+message ExecuteRequest {
+  string tool_name = 1;
+
+  // CLI-compatible argument string, e.g. "--path ./README.md --limit 10".
+  string args_cli = 2;
+
+  // JSON object encoded as text. SDKs may choose to expose this as a dict/map.
+  string args_json = 3;
+
+  string session_id = 4;
+  string request_id = 5;
+  string tool_call_id = 6;
+  string idempotency_key = 7;
+  string provider_id = 8;
+  string cluster_id = 9;
+  string runtime_instance_id = 10;
+  string conversation_id = 11;
+  string agent_id = 12;
+  string turn_id = 13;
+  repeated string permissions = 14;
+  string host_context_json = 15;
+}
+
+// The required execution response envelope.
+//
+// to_ai is mandatory and must be non-empty. Corework writes it back into the
+// AI-visible tool result channel.
+message AIOutput {
+  // JSON text. It may encode null, object, array, string, number, or bool.
+  string result_json = 1;
+  string to_ai = 2;
+  ToolErrorCode error_code = 3;
+}
+
+message HostCall {
+  string id = 1;
+
+  // v1 official ops:
+  // - workspace.resolve_path
+  // - workspace.resolve_working_path
+  // - workspace.create_path
+  // - workspace.create_working_path
+  // - workspace.save_as_edited
+  //
+  // Other ops are reserved for future protocol versions and should be rejected
+  // by v1 runtimes.
+  string op = 2;
+
+  // JSON object encoded as text.
+  //
+  // workspace.resolve_path and workspace.resolve_working_path args:
+  //   {"path":"D:/docs/source.pptx"}
+  // result:
+  //   {"working_path":"...","source_path":"D:/docs/source.pptx"}
+  //
+  // workspace.create_path and workspace.create_working_path args:
+  //   {"path":"D:/docs/output.pptx"}
+  // result:
+  //   {"working_path":"...","source_path":"D:/docs/output.pptx"}
+  //
+  // workspace.save_as_edited args:
+  //   {"source_path":"D:/docs/source.pptx","suffix":"_edited"}
+  // result:
+  //   {"saved_path":"D:/docs/source_edited.pptx"}
+  string args_json = 3;
+}
+
+message HostResult {
+  string id = 1;
+  bool ok = 2;
+
+  // JSON text on success; error text or structured error JSON on failure.
+  string value_json = 3;
+
+  // Required when ok is false. Should be TOOL_ERROR_CODE_OK when ok is true.
+  ToolErrorCode code = 4;
+}
+
+message ToolError {
+  string message = 1;
+  ToolErrorCode code = 2;
+}
+
+message ToolLog {
+  string level = 1;
+  string message = 2;
+}

@@ -1,0 +1,22 @@
+[package]
+name = "corework-agent-tool"
+version = "0.1.0"
+edition = "2021"
+description = "Rust SDK for Corework Agent Tool sidecars"
+license = "Apache-2.0"
+repository = "https://github.com/kouryu339/orbit-runtime"
+
+[dependencies]
+anyhow = "1"
+futures = "0.3"
+prost = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio-stream = "0.1"
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost = "0.14"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"

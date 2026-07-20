@@ -1,0 +1,91 @@
+[package]
+name = "corework"
+version = "0.1.0"
+edition = "2021"
+authors = ["kouryu339@163.com"]
+description = "A universal cache orchestration framework for building cache-system-orchestration layered applications"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/kouryu339/orbit-runtime"
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+async-recursion = "1.0"
+futures = "0.3"
+
+# 编译时自动注册
+inventory = "0.3"
+ctor = "0.2"
+
+# 装饰器宏（框架提供）
+buns_macros = { path = "buns_macros" }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+prost = "0.14"
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost = "0.14"
+tokio-stream = "0.1"
+
+# UUID 生成
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# 事件系统
+rdkafka = { version = "0.36", optional = true }
+lapin = { version = "2.3", optional = true }
+
+# 日志追踪和监控
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opentelemetry = { version = "0.21", optional = true }
+opentelemetry-otlp = { version = "0.14", optional = true }
+
+# 错误处理
+thiserror = "1.0"
+anyhow = "1.0"
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 正则表达式
+regex = "1.10"
+
+# 日志
+log = "0.4"
+
+# 并发工具
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# 指标
+metrics = "0.21"
+metrics-exporter-prometheus = { version = "0.13", optional = true, default-features = false }
+
+# 哈希（用于示例）
+md5 = "0.7"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
+criterion = "0.5"
+
+[[bench]]
+name = "runtime_state_concurrency"
+harness = false
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"
+
+[features]
+default = ["memory-event-bus", "metrics", "type_structure"]
+kafka-event-bus = ["rdkafka"]
+rabbitmq-event-bus = ["lapin"]
+memory-event-bus = []
+metrics = ["metrics-exporter-prometheus"]
+tracing = ["opentelemetry", "opentelemetry-otlp"]
+type_structure = []
+workflow_llm_systems = []

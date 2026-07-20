@@ -1,0 +1,15 @@
+[project]
+name = "corework-agent-tool"
+version = "0.1.0"
+description = "Python SDK for Corework Agent Tool sidecars"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+    "grpcio>=1.63",
+    "grpcio-tools>=1.63",
+    "protobuf>=5",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

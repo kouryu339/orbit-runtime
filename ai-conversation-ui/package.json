@@ -1,0 +1,48 @@
+{
+  "name": "@agent-runtime/conversation-element",
+  "version": "0.1.0",
+  "description": "Lit conversation element and host transport contracts for Orbit Runtime",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kouryu339/orbit-runtime.git",
+    "directory": "ai-conversation-ui"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "import": "./dist/protocol/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:playground": "vite build --config playground/vite.config.ts",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "dev": "vite --config playground/vite.config.ts --host 127.0.0.1",
+    "test": "vitest run --pool=forks"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.9",
+    "katex": "^0.17.0",
+    "lit": "^3.3.1",
+    "marked": "^18.0.5",
+    "mermaid": "^11.15.0"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.10.2",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vitest": "^3.2.4"
+  }
+}
