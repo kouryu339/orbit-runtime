@@ -1095,7 +1095,7 @@ fn pure_workflow_node_display_names_are_valid_input_templates() {
     use corework::workflow::registry::{NodeRegistry, PinKind};
 
     let mut violations = Vec::new();
-    for metadata in NodeRegistry::all() {
+    for metadata in NodeRegistry::all_registered() {
         let declared = metadata
             .pins
             .iter()
@@ -1205,6 +1205,22 @@ fn workflow_node_definitions_unify_corework_and_runtime_tools() {
     assert_eq!(array_item["display_name"], "获取{Array}中索引为{Index}的项");
     assert!(!node_types.contains("GetFirstNode"));
     assert!(!node_types.contains("GetLastNode"));
+
+    let get_var = nodes
+        .iter()
+        .find(|node| node["node_type"] == "GetVarNode")
+        .unwrap();
+    assert_eq!(get_var["category"], "data/variable");
+    assert_eq!(get_var["pure"], true);
+    assert_eq!(get_var["display_name"], "读取变量{Name}");
+
+    let set_var = nodes
+        .iter()
+        .find(|node| node["node_type"] == "SetVarNode")
+        .unwrap();
+    assert_eq!(set_var["category"], "data/variable");
+    assert_eq!(set_var["pure"], false);
+    assert_eq!(set_var["display_name"], "将变量{Name}设为{Value}");
 
     let branch = nodes
         .iter()

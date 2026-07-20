@@ -163,6 +163,11 @@ impl NodeRegistry {
             .collect()
     }
 
+    /// 获取所有注册节点元数据，包括由编译器生成、但不在节点面板中直接创建的节点。
+    pub fn all_registered() -> Vec<&'static NodeMetadata> {
+        inventory::iter::<NodeMetadata>().collect()
+    }
+
     /// 根据名称查找节点（使用 node_type 字段）
     pub fn get(node_type: &str) -> Option<&'static NodeMetadata> {
         inventory::iter::<NodeMetadata>().find(|meta| meta.node_type == node_type)

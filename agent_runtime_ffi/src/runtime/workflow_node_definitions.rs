@@ -31,7 +31,9 @@ pub(crate) fn workflow_node_definition_values(runtime_tools: &[RuntimeToolMetada
         .collect::<BTreeSet<_>>();
     let mut nodes = BTreeMap::<String, Value>::new();
 
-    for node in NodeRegistry::all() {
+    // The graph catalog must describe nodes already present in a Blueprint,
+    // including compiler-managed variable nodes hidden from creation palettes.
+    for node in NodeRegistry::all_registered() {
         let source = if static_tools.contains_key(node.node_type) {
             "local"
         } else {
