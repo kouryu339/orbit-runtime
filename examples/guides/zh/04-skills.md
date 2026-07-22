@@ -17,6 +17,14 @@ skills/
       SKILL.md
 ```
 
+这是推荐的分层布局。只要 `skills.root_dir` 下存在 `system/`、`role/`、`main/` 或
+`feature/` 中任意一个目录，Runtime 就按分层布局加载，不再扫描根目录中的 Skill。
+因此不能同时保留 `skills/product_instance/SKILL.md` 和 `skills/feature/...`：应把
+role 移动到 `skills/role/product_instance/SKILL.md`，不要复制两份，也不要把
+`kind: role` 的 Skill 放进 `feature/`。
+
+只有完全不包含上述分层目录时，旧的 `skills/<name>/SKILL.md` 扁平布局才会生效。
+
 资源注册通过 `skills.root_dir` 指向这个目录：
 
 ```json

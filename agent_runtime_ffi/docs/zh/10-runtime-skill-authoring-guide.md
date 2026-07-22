@@ -56,6 +56,42 @@ tools: ["OrderReturnEligibilityCheck", "ReturnCreate", "ReturnPlan", "ReturnRevi
 
 feature skill 可以由 `UpdateSkills` 动态切换。切换 feature 后，runtime 会根据当前 active skills 重新计算可见工具。
 
+### 10.1.3 Skill 目录布局与升级迁移
+
+`skills.root_dir` 支持两种布局，但不能混用。
+
+推荐使用分层布局：
+
+```text
+skills/
+  role/
+    product_instance/
+      SKILL.md
+  feature/
+    workflow/
+      SKILL.md
+```
+
+兼容的旧扁平布局如下：
+
+```text
+skills/
+  product_instance/
+    SKILL.md
+```
+
+目录检测规则是：只要 `skills.root_dir` 下存在 `system/`、`role/`、`main/` 或 `feature/` 中任意一个目录，Runtime 就进入分层模式。进入分层模式后，role 只从 `role/<name>/SKILL.md` 读取（`main/` 仅作为旧 role 目录兼容），feature 只从 `feature/<name>/SKILL.md` 读取，不再扫描根目录中的 Skill。
+
+因此不要使用下面这种混合布局：
+
+```text
+skills/
+  product_instance/SKILL.md
+  feature/workflow/SKILL.md
+```
+
+从旧扁平布局升级到分层布局时，应把 role **移动**到 `skills/role/<name>/SKILL.md`，不要在根目录和 `role/` 下复制两份。`kind: role` 的 Skill 也不能迁移到 `feature/`。Runtime 启动时会验证所有已配置 Agent（包括 cluster Agent）引用的 role，因此错误目录会在启动阶段直接报告。
+
 ## 10.2 Tools 可见性规则
 
 `SKILL.md` 的 `tools` 字段不是说明文字，而是 AI 工具可见性的关键入口。

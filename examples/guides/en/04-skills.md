@@ -9,6 +9,16 @@ skills/
   feature/after_sales/SKILL.md
 ```
 
+This is the recommended layered layout. If any of `system/`, `role/`, `main/`,
+or `feature/` exists under `skills.root_dir`, Runtime uses layered mode and no
+longer scans root-level Skills. Do not combine
+`skills/product_instance/SKILL.md` with `skills/feature/...`; move the role to
+`skills/role/product_instance/SKILL.md` instead of copying it, and never place a
+`kind: role` Skill under `feature/`.
+
+The legacy `skills/<name>/SKILL.md` flat layout is used only when none of the
+layer directories above exists.
+
 Register this root through `skills.root_dir` in the resource registration.
 
 ```markdown

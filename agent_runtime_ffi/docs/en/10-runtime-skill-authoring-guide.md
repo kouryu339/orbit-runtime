@@ -56,6 +56,42 @@ Put these in a feature skill:
 
 Feature skills can be switched dynamically through `UpdateSkills`. After a feature switch, runtime recomputes active tools from the current active skills.
 
+### 10.1.3 Skill Directory Layout and Upgrade Migration
+
+`skills.root_dir` supports two layouts, but they must not be mixed.
+
+The layered layout is recommended:
+
+```text
+skills/
+  role/
+    product_instance/
+      SKILL.md
+  feature/
+    workflow/
+      SKILL.md
+```
+
+The legacy flat layout remains supported:
+
+```text
+skills/
+  product_instance/
+    SKILL.md
+```
+
+Directory detection follows one rule: if any of `system/`, `role/`, `main/`, or `feature/` exists under `skills.root_dir`, Runtime enters layered mode. In layered mode, roles are loaded only from `role/<name>/SKILL.md` (`main/` is retained only as the legacy role-directory alias), features are loaded only from `feature/<name>/SKILL.md`, and root-level Skills are no longer scanned.
+
+Do not use this mixed layout:
+
+```text
+skills/
+  product_instance/SKILL.md
+  feature/workflow/SKILL.md
+```
+
+When migrating from the flat layout, **move** each role to `skills/role/<name>/SKILL.md`; do not keep duplicate copies at the root and under `role/`. A Skill with `kind: role` must not be moved under `feature/`. Runtime validates role references for every configured Agent, including cluster Agents, during startup, so an incorrect directory is reported before conversations begin.
+
 ## 10.2 Tool Visibility
 
 The `tools` field in `SKILL.md` is not just documentation. It controls which tools the AI can see.
