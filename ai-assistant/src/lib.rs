@@ -160,6 +160,9 @@ pub struct AIAssistantConfig {
     /// Whether this agent may emit frontend widget tags.
     #[serde(default = "default_frontend_widgets_enabled")]
     pub frontend_widgets_enabled: bool,
+    /// Maps logical state names to concrete system-layer skills.
+    #[serde(alias = "systemSkills", default)]
+    pub system_skills: std::collections::BTreeMap<String, String>,
 }
 
 fn default_language() -> String {
@@ -184,6 +187,7 @@ impl Default for AIAssistantConfig {
             retrieval: RetrievalConfig::default(),
             system_prompt_constraints: SystemPromptConstraints::default(),
             frontend_widgets_enabled: true,
+            system_skills: std::collections::BTreeMap::new(),
         }
     }
 }

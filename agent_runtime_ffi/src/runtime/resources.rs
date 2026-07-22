@@ -1,4 +1,42 @@
 use super::*;
+
+pub(super) const PARENT_WORKFLOW_REGISTRY: &str = "wf:parent_workflow_registry";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ParentWorkflowEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub file_name: String,
+    pub file_path: PathBuf,
+    pub inputs: Vec<corework::workflow::blueprint_json::PinMetadata>,
+    pub outputs: Vec<corework::workflow::blueprint_json::PinMetadata>,
+    pub nodes: usize,
+    pub connections: usize,
+    pub variables: usize,
+}
+
+impl ParentWorkflowEntry {
+    fn from_blueprint_path(path: PathBuf, blueprint: &BlueprintJson) -> Result<Self, String> {
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("workflow path has no file name: {}", path.display()))?;
+        Ok(Self {
+            id: blueprint.metadata.id.clone(),
+            name: blueprint.metadata.name.clone(),
+            description: blueprint.metadata.description.clone(),
+            file_name,
+            file_path: path,
+            inputs: blueprint.metadata.inputs.clone(),
+            outputs: blueprint.metadata.outputs.clone(),
+            nodes: blueprint.nodes.len(),
+            connections: blueprint.connections.len(),
+            variables: blueprint.variables.len(),
+        })
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResourceRegistration {
@@ -69,6 +107,8 @@ pub struct ResourceAgentProfileConfig {
     pub name: Option<String>,
     pub role: Option<String>,
     pub features: Vec<String>,
+    #[serde(alias = "systemSkills", default)]
+    pub system_skills: BTreeMap<String, String>,
     #[serde(alias = "modelUid")]
     pub model_uid: Option<u32>,
     pub retrieval: Option<RetrievalConfig>,
@@ -85,6 +125,7 @@ impl Default for ResourceAgentProfileConfig {
             name: None,
             role: None,
             features: Vec::new(),
+            system_skills: BTreeMap::new(),
             model_uid: None,
             retrieval: None,
             system_prompt_constraints: SystemPromptConstraints::default(),
@@ -308,6 +349,10 @@ fn build_agent_profile_registry(
         profile.features = normalize_string_list(
             &format!("agent profile '{}'.features", id),
             profile.features,
+        )?;
+        profile.system_skills = normalize_system_skills(
+            &format!("agent profile '{}'.system_skills", id),
+            profile.system_skills,
         )?;
         registry.insert(id, profile);
     }

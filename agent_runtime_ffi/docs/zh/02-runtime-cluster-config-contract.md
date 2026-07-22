@@ -72,6 +72,24 @@ Agent 的 system prompt 输出约束也归属于 Agent profile 或具体 cluster
 旧的 `frontendWidgetsEnabled` / `frontend_widgets_enabled` 布尔字段仍兼容读取；
 新配置应优先使用 `systemPromptConstraints`。
 
+系统状态使用哪个 system Skill 也归属于 Agent profile 或具体 cluster Agent 实例。
+当前公开映射键为 `thinking`：未配置时使用轻量 `thinking`；需要高级工具调用规则和
+一次性多行 Workflow 脚本执行时，可完整替换为 `thinking-pro`：
+
+```json
+{
+  "id": "service.researcher",
+  "systemSkills": {
+    "thinking": "thinking-pro"
+  }
+}
+```
+
+profile 提供默认映射，`cluster.agents[].systemSkills` 按键覆盖 profile。映射是状态实现
+替换，不是同时激活两个 feature Skill；目标必须是可加载且声明 `system_layer: true` 的
+非 role Skill。`thinking-pro` 不授予持久化 Workflow 目录权限；这类工具仍由宿主通过
+role/feature Skill 白名单开放。当前不接受除 `thinking` 外的状态键。
+
 ## 2.2 已移除 Runtime Config 字段的归属
 
 | 旧字段 | 当前归属 |

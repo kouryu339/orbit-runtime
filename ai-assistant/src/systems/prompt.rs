@@ -315,7 +315,7 @@ pub(crate) fn format_tools_section(tool_names: &[String]) -> String {
                     output.push_str(&format!(
                         "  - `{}` ({}): {}\n",
                         o.name,
-                        o.field_type,
+                        corework::data_type::public_type_name(o.field_type),
                         if o.description.is_empty() {
                             crate::prompt_assets::template("tool_output_value_fallback.md")
                                 .trim()
@@ -414,7 +414,7 @@ fn push_runtime_tool_section(output: &mut String, meta: &RuntimeToolMetadata) {
             output.push_str(&format!(
                 "  - `{}` ({}): {}\n",
                 o.name,
-                o.field_type,
+                corework::data_type::public_type_name(&o.field_type),
                 if o.description.is_empty() {
                     "Output value".to_string()
                 } else {
@@ -426,12 +426,12 @@ fn push_runtime_tool_section(output: &mut String, meta: &RuntimeToolMetadata) {
     output.push('\n');
 }
 
-fn runtime_param_type_label(parameter: &corework::rpc_tool::RuntimeAIParameter) -> &str {
+fn runtime_param_type_label(parameter: &corework::rpc_tool::RuntimeAIParameter) -> String {
     let ty = parameter.param_type.trim();
     if ty.is_empty() {
-        "String"
+        "String".to_string()
     } else {
-        ty
+        corework::data_type::public_type_name(ty)
     }
 }
 
@@ -703,6 +703,7 @@ pub fn build_system_prompt_text(
     workflows_section: &str,
     _page_structures_section: &str,
     current_state: &str,
+    state_skill: Option<&str>,
     frontend_widgets_enabled: bool,
 ) -> String {
     let mut sections: Vec<PromptSection> = Vec::new();
@@ -743,7 +744,7 @@ pub fn build_system_prompt_text(
     let state_section = PromptSection::new(format!(
         "{}\n\n{}",
         instruction_header,
-        state_instruction(current_state)
+        state_instruction(state_skill.unwrap_or(current_state))
     ));
     sections.push(state_section);
 
@@ -786,7 +787,7 @@ pub fn format_workflows_section(registry: &[serde_json::Value]) -> String {
 
     let mut output = String::from("## Registered Workflows\n\n");
     output.push_str(
-        "Available workflows can be executed with `WfRunWorkflow --name \"name\" --inputs \"{...}\"`.\n\n",
+        "Available Registered workflows can be executed with `executeWorkflow --workflow_id <id> --input.<name> <value>`.\n\n",
     );
 
     for entry in registry {
@@ -945,6 +946,7 @@ mod tests {
             "",
             "",
             "thinking",
+            None,
             true,
         );
         assert!(result.contains("You are a test assistant."));
@@ -962,6 +964,7 @@ mod tests {
             "",
             "volatile page snapshot",
             "thinking",
+            None,
             true,
         );
 
@@ -978,6 +981,7 @@ mod tests {
             "",
             "",
             "thinking",
+            None,
             false,
         );
 
@@ -1098,8 +1102,8 @@ mod tests {
 
         push_runtime_tool_section(&mut section, &meta);
 
-        assert!(section.contains("Call syntax: `EXEC UserGet --user_id <Number>`"));
-        assert!(section.contains("`--user_id` (**required**, type=Number)"));
+        assert!(section.contains("Call syntax: `EXEC UserGet --user_id <num>`"));
+        assert!(section.contains("`--user_id` (**required**, type=num)"));
         assert!(!section.contains("user_id ="));
     }
 

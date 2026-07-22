@@ -112,6 +112,9 @@ impl AIAssistant {
                 None,
             )
             .await?;
+        cache
+            .set(keys::SYSTEM_SKILLS, &self.config.system_skills, None)
+            .await?;
         // Initialize host-owned dynamic text fields for this agent.
         cache
             .set(

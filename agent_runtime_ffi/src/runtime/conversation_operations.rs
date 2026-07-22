@@ -237,6 +237,15 @@ impl RuntimeFacade {
         }
 
         let export_event_bus: Arc<dyn EventBus> = self.event_bus.clone();
+        let workflow_module = self.workflow_module()?;
+        let workflow_module_handle = Arc::new(
+            ai_assistant::systems::workflow::WorkflowModuleHandle::new(&workflow_module),
+        );
+        let workflow_tool_catalog = Arc::new(
+            ai_assistant::systems::workflow::WorkflowRuntimeToolCatalog::new(
+                self.runtime_tools.clone(),
+            ),
+        );
         let state_store = Arc::clone(&self.state_store);
         let coordination_backend = Arc::clone(&self.coordination_backend);
         let cluster_id = init
@@ -271,6 +280,15 @@ impl RuntimeFacade {
             let result = async {
                 let info = manager
                     .create_conversation(options, Arc::clone(&export_event_bus))
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+
+                manager
+                    .attach_shared_component(&conversation_id, Arc::clone(&workflow_module_handle))
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                manager
+                    .attach_shared_component(&conversation_id, Arc::clone(&workflow_tool_catalog))
                     .await
                     .map_err(|e| RuntimeError::Internal(e.to_string()))?;
 

@@ -504,10 +504,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         (persona_body, active, skill_workflows)
     };
 
+    let system_skills: BTreeMap<String, String> =
+        cache.get(keys::SYSTEM_SKILLS).await?.unwrap_or_default();
+    let thinking_skill = system_skills
+        .get(states::THINKING)
+        .map(String::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(states::THINKING);
+
     let all_tools = {
         let mut tools = AssistantContext::all_active_tools(&cache).await?;
         let m = mgr().read().await;
-        tools = m.filtered_tools_for_state(states::THINKING, tools);
+        tools = m.filtered_tools_for_state(thinking_skill, tools);
         tools
     };
     let tools_section = format_tools_section(&all_tools);
@@ -612,6 +620,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         &workflows_section,
         "",
         states::THINKING,
+        Some(thinking_skill),
         frontend_widgets_enabled,
     );
 

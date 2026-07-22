@@ -163,8 +163,9 @@ impl ChainDecompiler {
         let params: Vec<String> = data_outputs
             .iter()
             .map(|p| {
-                let dt = (!p.data_type.is_empty() && p.data_type != "Any")
-                    .then(|| format!(":{}", p.data_type))
+                let public_type = crate::data_type::public_type_name(&p.data_type);
+                let dt = (!public_type.is_empty() && public_type != "Any")
+                    .then(|| format!(":{}", public_type))
                     .unwrap_or_default();
                 // 查找对应 DataInput 引脚的默认值
                 let default_val = node
@@ -477,15 +478,13 @@ impl ChainDecompiler {
         node: &BlueprintNodeJson,
         output_pin: &str,
     ) -> Result<String, DecompileError> {
-        let spec = pure_function_codec::by_node_type(&node.node_type).ok_or_else(|| {
-            DecompileError::new(format!("pure 节点 {} 尚未加入脚本函数契约", node.node_type))
-        })?;
-        if output_pin != spec.default_output_pin {
-            return Err(DecompileError::new(format!(
-                "pure 函数 {} 不支持输出引脚 {}",
-                spec.name, output_pin
-            )));
-        }
+        let spec = pure_function_codec::by_node_type_and_output(&node.node_type, output_pin)
+            .ok_or_else(|| {
+                DecompileError::new(format!(
+                    "pure 节点 {} 的输出引脚 {} 尚未加入脚本函数契约",
+                    node.node_type, output_pin
+                ))
+            })?;
         let args = spec
             .input_pins
             .iter()
@@ -645,6 +644,27 @@ return result=add(3.0, 4.0)
         let types2: std::collections::HashSet<&str> =
             bp2.nodes.iter().map(|n| n.node_type.as_str()).collect();
         assert_eq!(types1, types2, "node type sets should match");
+    }
+
+    #[test]
+    fn test_decompile_distinguishes_division_and_remainder() {
+        let bp = compile_chain_v2(
+            r#"
+input dividend:num divisor:num
+return quotient=div(input.dividend, input.divisor) remainder=mod(input.dividend, input.divisor)
+"#,
+        )
+        .expect("compile failed");
+
+        let text = decompile_chain(&bp).expect("decompile failed");
+        assert!(
+            text.contains("div(input.dividend, input.divisor)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("mod(input.dividend, input.divisor)"),
+            "{text}"
+        );
     }
 
     #[test]

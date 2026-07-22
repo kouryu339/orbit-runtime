@@ -1150,6 +1150,11 @@ fn workflow_node_definitions_unify_corework_and_runtime_tools() {
                 "param_type": "String",
                 "required": true,
                 "description": "URL to open"
+            }, {
+                "name": "timeout",
+                "param_type": "Number",
+                "required": false,
+                "description": "Timeout"
             }],
             "outputs": [{
                 "name": "page_id",
@@ -1203,6 +1208,11 @@ fn workflow_node_definitions_unify_corework_and_runtime_tools() {
     assert_eq!(array_item["category"], "data/array");
     assert_eq!(array_item["pure"], true);
     assert_eq!(array_item["display_name"], "获取{Array}中索引为{Index}的项");
+    assert!(array_item["pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|pin| pin["name"] == "Index" && pin["data_type"] == "num"));
     assert!(!node_types.contains("GetFirstNode"));
     assert!(!node_types.contains("GetLastNode"));
 
@@ -1221,6 +1231,11 @@ fn workflow_node_definitions_unify_corework_and_runtime_tools() {
     assert_eq!(set_var["category"], "data/variable");
     assert_eq!(set_var["pure"], false);
     assert_eq!(set_var["display_name"], "将变量{Name}设为{Value}");
+    assert!(!set_var["pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|pin| pin["kind"] == "DataOutput"));
 
     let branch = nodes
         .iter()
@@ -1240,6 +1255,11 @@ fn workflow_node_definitions_unify_corework_and_runtime_tools() {
         browser["display_name"],
         "根据{url}打开并返回页面实例{page_id}"
     );
+    assert!(browser["pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|pin| pin["name"] == "timeout" && pin["data_type"] == "num"));
 
     facade.started = false;
     let _ = fs::remove_dir_all(root);
@@ -1365,7 +1385,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     let tools = definitions["tools"].as_array().unwrap();
     let local = tools
         .iter()
-        .find(|tool| tool["name"] == "openWorkflowDraft")
+        .find(|tool| tool["name"] == "createWorkflowDraft")
         .expect("local tool definition");
     assert_eq!(local["tool_kind"], "local");
     assert!(local["description"]
@@ -1390,6 +1410,34 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         .unwrap()
         .iter()
         .any(|output| output["name"] == "page_id"));
+    assert!(tools
+        .iter()
+        .flat_map(|tool| {
+            tool["parameters"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(tool["outputs"].as_array().into_iter().flatten())
+        })
+        .all(|field| {
+            field
+                .get("param_type")
+                .or_else(|| field.get("field_type"))
+                .and_then(Value::as_str)
+                .is_none_or(|data_type| !matches!(data_type, "i64" | "f64" | "Integer" | "Number"))
+        }));
+    assert!(tools.iter().any(|tool| {
+        tool["parameters"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|field| field["param_type"] == "num")
+            || tool["outputs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|field| field["field_type"] == "num")
+    }));
 
     let resource = json!({
         "schema": "agent-runtime-workflow-resource/v1",
@@ -2361,6 +2409,7 @@ fn studio_target_agent_resolves_runtime_cluster_focus_and_profile_ids() {
         name: "Product Instance Main".to_string(),
         role: Some("product_instance".to_string()),
         features: vec!["workflow_studio".to_string()],
+        system_skills: BTreeMap::new(),
         model_uid: 0,
         retrieval: None,
         system_prompt_constraints: SystemPromptConstraints::default(),
@@ -2451,6 +2500,13 @@ fn builtin_studio_clusters_are_separate_from_business_registry() {
     );
     assert_eq!(builtin.workflow_editor.id, "workflow-studio");
     assert_eq!(
+        builtin.workflow_editor.agents[0]
+            .system_skills
+            .get("thinking")
+            .map(String::as_str),
+        Some("thinking-pro")
+    );
+    assert_eq!(
         builtin.agent_test_supervisor.focus_agent_id,
         "agent-test-supervisor"
     );
@@ -2472,6 +2528,29 @@ fn builtin_studio_clusters_are_separate_from_business_registry() {
     );
 
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn dropping_started_runtime_releases_workflow_resource_ownership() {
+    let _guard = runtime_start_test_guard();
+    let first_root = unique_test_dir("runtime-drop-first");
+    let second_root = unique_test_dir("runtime-drop-second");
+
+    {
+        let mut facade =
+            RuntimeFacade::create(&minimal_runtime_create_options(&first_root)).unwrap();
+        facade.config.runtime.skills_dir = Some(first_root.join("skills"));
+        facade.start().unwrap();
+    }
+    {
+        let mut facade =
+            RuntimeFacade::create(&minimal_runtime_create_options(&second_root)).unwrap();
+        facade.config.runtime.skills_dir = Some(second_root.join("skills"));
+        facade.start().unwrap();
+    }
+
+    let _ = fs::remove_dir_all(first_root);
+    let _ = fs::remove_dir_all(second_root);
 }
 
 #[test]
@@ -3933,7 +4012,7 @@ async fn start_validation_requires_loadable_default_role_skill() {
         ..AgentSection::default()
     }];
 
-    validate_default_agent_role_skill(&config).await.unwrap();
+    validate_agent_skills(&config).await.unwrap();
     let _ = fs::remove_dir_all(root);
 }
 
@@ -3950,13 +4029,33 @@ async fn start_validation_rejects_missing_default_role_skill() {
         ..AgentSection::default()
     }];
 
-    let err = validate_default_agent_role_skill(&config)
-        .await
-        .unwrap_err();
+    let err = validate_agent_skills(&config).await.unwrap_err();
 
     assert!(err
         .to_string()
         .contains("role skill 'order_admin' failed to load"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn start_validation_accepts_embedded_thinking_pro_and_rejects_unknown_state() {
+    let root = unique_test_dir("thinking-pro-validation");
+    let mut config = RuntimeConfig::default();
+    config.runtime.skills_dir = Some(root.join("skills"));
+    config.agents = vec![AgentSection {
+        id: "agent-a".to_string(),
+        name: "Agent A".to_string(),
+        system_skills: BTreeMap::from([("thinking".to_string(), "thinking-pro".to_string())]),
+        ..AgentSection::default()
+    }];
+
+    validate_agent_skills(&config).await.unwrap();
+    config.agents[0].system_skills =
+        BTreeMap::from([("executing".to_string(), "thinking-pro".to_string())]);
+    let error = validate_agent_skills(&config).await.unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("only 'thinking' is configurable"));
     let _ = fs::remove_dir_all(root);
 }
 

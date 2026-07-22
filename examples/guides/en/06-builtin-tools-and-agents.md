@@ -37,11 +37,16 @@ field explicitly references them, not because they bypass the allowlist.
 `Wait` yields until a timeout or scoped event; it should replace polling, but
 does not itself read a task result.
 
-Workflow Editor has an isolated allowlist: `openWorkflowDraft`, `readWorkflow`,
-`updateCurrentWorkflowDraft`, `registerCurrentWorkflowDraft`,
-`compileWorkflowScript`, `testWorkflow`, and `searchSkillRefs`. These tools
-select and mutate the same Draft/Registered catalog exposed by the Runtime ABI;
-the browser canvas is a view, not a second draft store.
+Workflow Editor uses the unified `listWorkflows`, `readWorkflow`,
+`createWorkflowDraft`, `updateWorkflow`, `compileWorkflow`, `testWorkflow`,
+`registerWorkflow`, `deleteWorkflow`, `executeWorkflow`, and
+`executeWorkflowScript` tools through its `workflow_editor` role. Studio-only
+`searchSkillRefs` searches design references. The built-in editor also selects
+`thinking-pro` for common script syntax and temporary multiline execution.
+Ordinary Agents selecting the same thinking replacement gain only
+`executeWorkflowScript`; a host role/feature Skill must separately grant
+persistent catalog tools. All callers share the Runtime ABI Draft/Registered
+catalog; the browser canvas is only a view.
 
 Agent Test Studio has two isolated roles. The supervisor receives
 `AdversaryCreate`, `AdversaryDestroy`, `AdversaryInspect`, and `WriteMarkdown`;
@@ -49,8 +54,9 @@ the adversary receives only `AdversaryConclude`. The supervisor explicitly
 forbids `Wait`, polling, and planning tools. Studio tools also require the
 corresponding Studio runtime/context to be active.
 
-Internal prompt, ledger, `Draft*`, and workflow-node systems are not a default
-business-agent tool set merely because they are locally registered.
+The default `thinking` Skill stays lightweight. Legacy Draft systems and
+file-path Workflow execution tools are removed rather than exposed as another
+business-Agent tool set.
 
 For a background master-worker model, grant `CreateBackgroundAgentTask` to the
 front agent and `ReportAgentTask` to the worker profile. Register the worker as

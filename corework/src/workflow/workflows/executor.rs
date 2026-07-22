@@ -564,7 +564,7 @@ impl WorkflowsModule {
             .collect())
     }
 
-    /// 从 BlueprintJson 直接执行工作流（即用即弃，用于 WfRunScript）。
+    /// 从 BlueprintJson 直接执行临时工作流。
     pub async fn execute_from_blueprint(
         &self,
         blueprint: BlueprintJson,

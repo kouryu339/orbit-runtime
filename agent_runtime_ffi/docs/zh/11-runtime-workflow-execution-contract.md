@@ -31,7 +31,7 @@ Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resourc
     "id": "open-page",
     "name": "Open page",
     "description": "Open a URL and return the browser page identity",
-    "script": "input url\n1: BrowserOpenPage --url $url\nreturn page_id=1.page_id url=1.url"
+    "script": "input url:String\n1: EXEC BrowserOpenPage --url input.url\nreturn page_id=1.page_id url=1.url"
   }
 }
 ```
@@ -42,6 +42,14 @@ Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resourc
 两种表示。Script 是供 AI 与代码审阅使用的紧凑语义形式；Blueprint JSON 是可执行图，
 同时保存位置、尺寸和布局。Script 重新编译时按节点 id 或源 step 迁移已有布局。两个
 转换命令是无状态函数，不创建资源、不增加 revision，也不发出 Workflow 事件。
+
+Script、AI 提示词以及 Runtime 向宿主公开的工具/节点能力表统一使用 `num` 表示数字。
+编译器继续接受历史数字类型名称并在编译阶段规范化为 `num`，因此旧脚本保持兼容；
+Runtime 内部采用的具体数字表示不属于脚本或 ABI 语义。
+
+嵌套 `FOR` 中的 `$item`/`$index` 始终指向当前最内层循环，内层会暂时遮蔽外层绑定。
+若内层需要外层项，脚本必须提前声明变量，并在外层循环中通过 `setvar` 保存后再读取；
+离开内层循环后，外层隐式绑定恢复。
 
 Draft 存在于 Runtime state；Registered 持久化到配置的 workflow root。Draft 的跨重启
 恢复由宿主根据事件或资源视图自行持久化与重建。
@@ -54,7 +62,8 @@ Workflow 节点引脚以工具注册时声明的输入/输出 schema 为准。RP
 `page_id` 和 `url` 时，workflow 能看到的输出就只有 `page_id` 与 `url`：
 
 ```text
-1: BrowserOpenPage --url $url
+input url:String
+1: EXEC BrowserOpenPage --url input.url
 return page_id=1.page_id url=1.url
 ```
 
@@ -96,10 +105,15 @@ RPC 节点不会暴露虚构的 `Result` 引脚，脚本也不应写成 `1.Resul
 | `404` | 找不到已注册 workflow selector。 |
 | `-1` | 已经开始执行，但节点或 workflow 执行失败。 |
 
-编译失败的 `trace` 必须包含源码行号和编译器信息。执行 trace 包含逐节点状态、源码行、
-耗时、输入/结果预览、节点给 AI 的消息和错误详情。
+编译失败信息必须包含源码行号和编译器信息，并提示调用者确认所引用工具已经出现在当前
+Agent 的 active tools 中，且注册元数据具有明确的描述、输入引脚和输出引脚。执行 trace
+包含逐节点状态、源码行、耗时、输入/结果预览、节点给 AI 的消息和错误详情。
 
 ## 11.4 审计与宿主职责
+
+AI 工具入口 `executeWorkflow` 和 `executeWorkflowScript` 都声明为 `destructive`。因此宿主
+配置的 `destructive = ask/deny/full` 会在进入工作流执行前生效；开发期 Studio 若需要
+无确认执行，必须由宿主显式选择 `open_all`。
 
 目录变更产生 `workflow.resource_changed`；每次执行尝试产生
 `workflow.execution_completed`。二者位于全局 `event_line: "workflow"`，涉及目录资源时
@@ -114,9 +128,10 @@ Runtime 只串行化同一个 ABI handle 上的调用；跨进程鉴权、持久
 Workflow Studio、内部 Workflow Editor Agent 和 ABI 调用方共享同一个
 `WorkflowsModule` 实例。Editor conversation 只保存选择上下文
 （`workflow_id`、`revision`），Prompt 中的动态快照也是从目录资源投影出来的只读视图。
-`openWorkflowDraft`、`readWorkflow`、`updateCurrentWorkflowDraft`、
-`registerCurrentWorkflowDraft`、`compileWorkflowScript` 与 `testWorkflow`，以及画布 HTTP
-接口，都读写同一个模块。
+`listWorkflows`、`readWorkflow`、`createWorkflowDraft`、`updateWorkflow`、
+`compileWorkflow`、`testWorkflow`、`registerWorkflow`、`deleteWorkflow`、
+`executeWorkflow` 与 `executeWorkflowScript`，以及画布 HTTP 接口，都使用同一个模块。
+Studio 额外提供的 `searchSkillRefs` 只负责搜索设计参考，不拥有另一套资源 CRUD。
 
 浏览器画布只是 View，不持有另一份权威草稿，也不能绕过 revision 检查直接执行未保存的
 临时 blueprint。画布中的有效变更会带当前 `expected_revision` 自动保存到目录；若外部
@@ -124,8 +139,8 @@ Workflow Studio、内部 Workflow Editor Agent 和 ABI 调用方共享同一个
 `workflow_id` 刷新当前资源。仅打开或选择已有资源属于 UI/conversation 上下文，不产生
 目录变更事件。
 Runtime 还会监听这条全局事件线，将目录和当前资源投影到 Editor Agent 的动态尾部快照。
-Studio 会在 editor conversation ledger 中观察 `openWorkflowDraft` 完成记录，再重新读取
-当前选择的目录资源。
+Studio 会在 editor conversation ledger 中观察 `createWorkflowDraft` 或 `readWorkflow`
+完成记录，再按稳定 `workflow_id` 重新读取当前选择的目录资源。
 
 事件在本地状态变更成功后尽力发布。需要持久审计交付的宿主应自行持久化或转发事件，并用
 `workflow.list`/`workflow.read` 做状态对账；共享库内部不实现事务 outbox 或分布式事件代理。

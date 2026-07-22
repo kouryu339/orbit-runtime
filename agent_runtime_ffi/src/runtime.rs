@@ -24,7 +24,6 @@ use corework::prelude::{
 use corework::rpc_tool::RuntimeToolMetadata;
 use corework::workflow::blueprint_json::BlueprintJson;
 use corework::workflow::dynamic_node::DynamicExecute;
-use corework::workflow::workflows::script_tools::{ParentWorkflowEntry, PARENT_WORKFLOW_REGISTRY};
 use corework::workflow::WorkflowsModule;
 use llm_gateway::key_store;
 use serde::{Deserialize, Serialize};
@@ -232,6 +231,16 @@ pub struct RuntimeFacade {
     ai_auth_context_headers: BTreeMap<String, String>,
     registries: RuntimeRegistries,
     builtin_clusters: Option<BuiltinClusterConfigs>,
+}
+
+impl Drop for RuntimeFacade {
+    fn drop(&mut self) {
+        if self.started {
+            if let Err(error) = self.shutdown() {
+                tracing::warn!(%error, "runtime facade drop cleanup failed");
+            }
+        }
+    }
 }
 
 impl RuntimeFacade {
@@ -600,10 +609,28 @@ impl RuntimeFacade {
         self.builtin_clusters = Some(build_builtin_cluster_configs(&self.registries)?);
         self.registries.frozen = true;
 
-        let config_for_skill_validation = self.config.clone();
-        self.rt.block_on(async move {
-            validate_default_agent_role_skill(&config_for_skill_validation).await
-        })?;
+        let mut config_for_skill_validation = self.config.clone();
+        config_for_skill_validation.agents.extend(
+            self.registries
+                .agent_clusters
+                .values()
+                .flat_map(|cluster| cluster.agents.iter())
+                .map(runtime_agent_definition_to_agent_section),
+        );
+        if let Some(builtin) = self.builtin_clusters.as_ref() {
+            config_for_skill_validation.agents.extend(
+                [
+                    &builtin.workflow_editor,
+                    &builtin.agent_test_supervisor,
+                    &builtin.agent_test_adversary,
+                ]
+                .into_iter()
+                .flat_map(|cluster| cluster.agents.iter())
+                .map(runtime_agent_definition_to_agent_section),
+            );
+        }
+        self.rt
+            .block_on(async move { validate_agent_skills(&config_for_skill_validation).await })?;
 
         ai_assistant::prompt_assets::set_prompts_dir(
             ai_assistant::prompt_assets::default_prompts_dir(),
@@ -820,10 +847,6 @@ impl RuntimeFacade {
         ));
         let manager = self.manager()?;
         self.rt.block_on(async {
-            manager
-                .attach_shared_component(&editor_conversation_id, Arc::clone(&workflows))
-                .await
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             manager
                 .attach_shared_component(&editor_conversation_id, Arc::clone(&editor_session))
                 .await
@@ -1180,12 +1203,16 @@ impl RuntimeFacade {
             .map(str::to_string)
             .collect();
         let editor_tools = json!([
-            "openWorkflowDraft",
-            "updateCurrentWorkflowDraft",
-            "registerCurrentWorkflowDraft",
-            "compileWorkflowScript",
-            "testWorkflow",
+            "listWorkflows",
             "readWorkflow",
+            "createWorkflowDraft",
+            "updateWorkflow",
+            "compileWorkflow",
+            "testWorkflow",
+            "registerWorkflow",
+            "deleteWorkflow",
+            "executeWorkflow",
+            "executeWorkflowScript",
             "searchSkillRefs"
         ]);
         let studio_context = json!({
@@ -1498,6 +1525,7 @@ fn assistant_config_for_runtime(config: &RuntimeConfig, agent: &AgentSection) ->
             agent.frontend_widgets_enabled,
             &agent.system_prompt_constraints,
         ),
+        system_skills: agent.system_skills.clone(),
     }
 }
 
@@ -1515,6 +1543,11 @@ fn active_skill_names(agent: &AgentSection) -> Vec<String> {
             .filter(|name| !name.trim().is_empty())
             .cloned(),
     );
+    for skill in agent.system_skills.values() {
+        if !skill.trim().is_empty() && !names.contains(skill) {
+            names.push(skill.clone());
+        }
+    }
     names
 }
 
@@ -1599,20 +1632,10 @@ fn validate_registered_agent_retrieval(
     Ok(())
 }
 
-async fn validate_default_agent_role_skill(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    let agent = config.default_agent();
-    let Some(role) = agent
-        .role
-        .as_deref()
-        .map(str::trim)
-        .filter(|role| !role.is_empty())
-    else {
-        return Ok(());
-    };
+async fn validate_agent_skills(config: &RuntimeConfig) -> Result<(), RuntimeError> {
     let skills_dir = config.runtime.skills_dir.as_ref().ok_or_else(|| {
         RuntimeError::InvalidConfig("runtime.skills_dir must not be empty".to_string())
     })?;
-
     let mut manager = SkillManager::from_directory(skills_dir)
         .await
         .map_err(|e| {
@@ -1621,26 +1644,71 @@ async fn validate_default_agent_role_skill(config: &RuntimeConfig) -> Result<(),
                 skills_dir.display()
             ))
         })?;
-    let skill = manager.load(role).await.map_err(|e| {
-        RuntimeError::InvalidConfig(format!(
-            "default agent '{}' role skill '{}' failed to load from {}: {e}",
-            agent.id,
-            role,
-            skills_dir.display()
-        ))
-    })?;
 
-    if !skill.metadata.is_role() {
-        return Err(RuntimeError::InvalidConfig(format!(
-            "default agent '{}' role skill '{}' must have kind=role",
-            agent.id, role
-        )));
-    }
-    if skill.instructions.trim().is_empty() {
-        return Err(RuntimeError::InvalidConfig(format!(
-            "default agent '{}' role skill '{}' must include non-empty instructions",
-            agent.id, role
-        )));
+    for agent in &config.agents {
+        if let Some(role) = agent
+            .role
+            .as_deref()
+            .map(str::trim)
+            .filter(|role| !role.is_empty())
+        {
+            let skill = manager.load(role).await.map_err(|e| {
+                RuntimeError::InvalidConfig(format!(
+                    "agent '{}' role skill '{}' failed to load from {}: {e}",
+                    agent.id,
+                    role,
+                    skills_dir.display()
+                ))
+            })?;
+            if !skill.metadata.is_role() {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "agent '{}' role skill '{}' must have kind=role",
+                    agent.id, role
+                )));
+            }
+            if skill.instructions.trim().is_empty() {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "agent '{}' role skill '{}' must include non-empty instructions",
+                    agent.id, role
+                )));
+            }
+        }
+
+        for (state, skill_name) in &agent.system_skills {
+            if state != "thinking" {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "agent '{}' system_skills state '{}' is unsupported; only 'thinking' is configurable",
+                    agent.id, state
+                )));
+            }
+            let skill_name = skill_name.trim();
+            if skill_name.is_empty() {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "agent '{}' system_skills.thinking must not be empty",
+                    agent.id
+                )));
+            }
+            let skill = manager.load(skill_name).await.map_err(|error| {
+                RuntimeError::InvalidConfig(format!(
+                    "agent '{}' thinking system skill '{}' failed to load from {}: {error}",
+                    agent.id,
+                    skill_name,
+                    skills_dir.display()
+                ))
+            })?;
+            if !skill.metadata.system_layer || skill.metadata.is_role() {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "agent '{}' thinking system skill '{}' must have system_layer=true and must not be kind=role",
+                    agent.id, skill_name
+                )));
+            }
+            if skill.instructions.trim().is_empty() {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "agent '{}' thinking system skill '{}' must include non-empty instructions",
+                    agent.id, skill_name
+                )));
+            }
+        }
     }
 
     Ok(())

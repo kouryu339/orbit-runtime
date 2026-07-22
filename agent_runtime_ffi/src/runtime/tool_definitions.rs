@@ -1,6 +1,6 @@
 use super::*;
 use corework::system::SystemRegistry;
-use corework::workflow::registry::NodeRegistry;
+use corework::workflow::registry::{NodeRegistry, PinMetadata};
 
 impl RuntimeFacade {
     pub fn tool_definitions(&self) -> Result<String, RuntimeError> {
@@ -35,7 +35,7 @@ fn static_tool_definition(metadata: &corework::ai_system::AISystemMetadata) -> V
         json!({
             "version": node.version,
             "category": node.category,
-            "pins": node.pins,
+            "pins": public_node_pins(node.pins),
             "permissions": node.permissions,
             "wildcard_constraints": node.wildcard_constraints
         })
@@ -47,14 +47,14 @@ fn static_tool_definition(metadata: &corework::ai_system::AISystemMetadata) -> V
         "tool_kind": metadata.tool_kind,
         "parameters": metadata.parameters.iter().map(|parameter| json!({
             "name": parameter.name,
-            "param_type": parameter.param_type,
+            "param_type": corework::data_type::public_type_name(parameter.param_type),
             "required": parameter.required,
             "default_value": parameter.default_value,
             "description": parameter.description
         })).collect::<Vec<_>>(),
         "outputs": metadata.outputs.iter().map(|output| json!({
             "name": output.name,
-            "field_type": output.field_type,
+            "field_type": corework::data_type::public_type_name(output.field_type),
             "description": output.description
         })).collect::<Vec<_>>(),
         "destructive": metadata.destructive,
@@ -91,8 +91,18 @@ fn runtime_tool_definition(metadata: &RuntimeToolMetadata) -> Value {
         "display_name": metadata.display_name_or_name(),
         "description": metadata.description,
         "tool_kind": metadata.tool_kind,
-        "parameters": metadata.parameters,
-        "outputs": metadata.outputs,
+        "parameters": metadata.parameters.iter().map(|parameter| json!({
+            "name": parameter.name,
+            "param_type": corework::data_type::public_type_name(&parameter.param_type),
+            "required": parameter.required,
+            "default_value": parameter.default_value,
+            "description": parameter.description
+        })).collect::<Vec<_>>(),
+        "outputs": metadata.outputs.iter().map(|output| json!({
+            "name": output.name,
+            "field_type": corework::data_type::public_type_name(&output.field_type),
+            "description": output.description
+        })).collect::<Vec<_>>(),
         "destructive": metadata.destructive,
         "readonly": metadata.readonly,
         "idempotent": metadata.idempotent,
@@ -126,7 +136,7 @@ pub(super) fn runtime_tool_pins(metadata: &RuntimeToolMetadata) -> Vec<Value> {
         json!({
             "name": parameter.name,
             "kind": "DataInput",
-            "data_type": parameter.param_type,
+            "data_type": corework::data_type::public_type_name(&parameter.param_type),
             "description": parameter.description,
             "default_value": parameter.default_value
         })
@@ -135,10 +145,24 @@ pub(super) fn runtime_tool_pins(metadata: &RuntimeToolMetadata) -> Vec<Value> {
         json!({
             "name": output.name,
             "kind": "DataOutput",
-            "data_type": output.field_type,
+            "data_type": corework::data_type::public_type_name(&output.field_type),
             "description": output.description,
             "default_value": null
         })
     }));
     pins
+}
+
+pub(super) fn public_node_pins(pins: &[PinMetadata]) -> Vec<Value> {
+    pins.iter()
+        .map(|pin| {
+            json!({
+                "name": pin.name,
+                "kind": pin.kind,
+                "data_type": corework::data_type::public_type_name(pin.data_type),
+                "description": pin.description,
+                "default_value": pin.default_value
+            })
+        })
+        .collect()
 }

@@ -8,6 +8,38 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Canonical type label exposed to AI-authored scripts and host catalogs.
+/// Internal nodes may keep concrete numeric representations.
+pub fn public_type_name(type_name: &str) -> String {
+    let type_name = type_name.trim();
+    if let Some(inner) = type_name
+        .strip_prefix("Array<")
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        return format!("Array<{}>", public_type_name(inner));
+    }
+    if let Some(inner) = type_name
+        .strip_prefix("Vec<")
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        return format!("Array<{}>", public_type_name(inner));
+    }
+    if let Some(inner) = type_name
+        .strip_prefix("Option<")
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        return format!("Option<{}>", public_type_name(inner));
+    }
+
+    match type_name.to_ascii_lowercase().as_str() {
+        "num" | "number" | "integer" | "int" | "float" | "double" | "i8" | "i16" | "i32"
+        | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "f32" | "f64" => {
+            "num".to_string()
+        }
+        _ => type_name.to_string(),
+    }
+}
+
 /// 数据类型 trait
 pub trait DataType: Send + Sync {
     fn type_name() -> &'static str
@@ -301,3 +333,19 @@ macro_rules! impl_data_type {
 // Type structure validation system (feature-gated)
 #[cfg(feature = "type_structure")]
 pub mod type_structure;
+
+#[cfg(test)]
+mod tests {
+    use super::public_type_name;
+
+    #[test]
+    fn public_numeric_types_are_canonicalized_without_changing_internal_types() {
+        for alias in ["num", "Number", "Integer", "i64", "u64", "f32", "f64"] {
+            assert_eq!(public_type_name(alias), "num");
+        }
+        assert_eq!(public_type_name("Array<i64>"), "Array<num>");
+        assert_eq!(public_type_name("Vec<f64>"), "Array<num>");
+        assert_eq!(public_type_name("Option<Number>"), "Option<num>");
+        assert_eq!(public_type_name("String"), "String");
+    }
+}

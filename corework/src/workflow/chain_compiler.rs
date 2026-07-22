@@ -2843,8 +2843,7 @@ impl ChainCompiler {
         match value {
             serde_json::Value::String(_) => "String",
             serde_json::Value::Bool(_) => "Boolean",
-            serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "i64",
-            serde_json::Value::Number(_) => "f64",
+            serde_json::Value::Number(_) => "num",
             serde_json::Value::Array(_) => "Array<Any>",
             serde_json::Value::Object(_) => "Object",
             serde_json::Value::Null => "Any",

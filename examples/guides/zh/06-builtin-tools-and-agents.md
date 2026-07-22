@@ -57,8 +57,8 @@ Runtime 限制。它不会读取任务结果，唤醒后 Agent 应根据新 ledg
 
 ## 6.2 特殊 Agent 的专属工具
 
-两个内置特殊 Agent 使用独立 system role Skill。它们的工具不是普通业务 Agent
-的公共能力，也不应复制进业务 role。
+两个内置特殊 Agent 使用独立 system role Skill。Workflow 工具本身是统一能力，
+是否开放持久化目录操作由宿主配置的 role/feature Skill 决定。
 
 ### 6.2.1 Workflow Editor Agent
 
@@ -66,18 +66,21 @@ Runtime 限制。它不会读取任务结果，唤醒后 Agent 应根据新 ledg
 
 | 工具 | 作用 |
 |---|---|
-| `openWorkflowDraft` | 按稳定 id 选择已有资源，或创建空白 Draft。 |
-| `updateCurrentWorkflowDraft` | 编译脚本并按当前 revision 更新所选目录资源。 |
-| `readWorkflow` | 按稳定 id 只读查看 Draft 或 Registered。 |
-| `compileWorkflowScript` | 校验当前所选目录资源。 |
-| `registerCurrentWorkflowDraft` | 将有效 Draft 显式提升为可信 Registered。 |
-| `testWorkflow` | 通过统一 Workflow 模块测试所选资源。 |
+| `listWorkflows` / `readWorkflow` | 查看 Draft 或 Registered 资源。 |
+| `createWorkflowDraft` | 编译完整脚本并创建 Draft。 |
+| `updateWorkflow` | 按稳定 id 和当前 revision 更新资源。 |
+| `compileWorkflow` / `testWorkflow` | 编译或测试指定资源。 |
+| `registerWorkflow` / `deleteWorkflow` | 注册或删除指定资源。 |
+| `executeWorkflow` / `executeWorkflowScript` | 执行正式资源或一次性脚本。 |
 | `searchSkillRefs` | 搜索业务 Skill 参考资料，辅助设计节点和参数。 |
 
 这些工具只在 Workflow Studio conversation 中配合 editor selection/dynamic snapshots
 工作，但资源真相始终属于统一 Draft/Registered 目录；浏览器画布只是 View。
-`Draft*` 系统、workflow nodes、`execSC*` 等属于底层工作流编辑/执行能力，
-不是普通 Agent 应当直接获得的默认工具集。
+Studio 内置 Agent 通过 `workflow_editor` role 获得完整 Workflow 目录工具，并通过
+`systemSkills.thinking = "thinking-pro"` 获得通用脚本语法和一次性多行执行能力。普通
+Agent 选择 `thinking-pro` 时只会增加 `executeWorkflowScript`；需要 Draft/Registered
+CRUD、注册或正式执行时，宿主必须另行配置 role/feature Skill。旧 Draft 系统与文件路径
+工具已经移除。
 
 ### 6.2.2 Agent Test Studio
 

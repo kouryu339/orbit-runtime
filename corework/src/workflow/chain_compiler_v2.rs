@@ -53,7 +53,11 @@ pub fn parse_v2(text: &str) -> ChainResult<Chain> {
         return Err(ChainError::new(1, "工作流不能为空"));
     }
 
-    let mut parser = Parser { lines, pos: 0 };
+    let mut parser = Parser {
+        lines,
+        pos: 0,
+        loop_depth: 0,
+    };
     parser.parse_chain()
 }
 
@@ -108,6 +112,7 @@ fn strip_keyword<'a>(content: &'a str, keyword: &str) -> Option<&'a str> {
 struct Parser {
     lines: Vec<LogicalLine>,
     pos: usize,
+    loop_depth: usize,
 }
 
 impl Parser {
@@ -176,6 +181,13 @@ impl Parser {
 
         // 关键字优先
         if rest == "BREAK" {
+            if self.loop_depth == 0 {
+                return Err(ChainError::of_kind(
+                    lineno,
+                    ChainErrorKind::Syntax,
+                    "BREAK 必须写在 FOR 循环体内",
+                ));
+            }
             self.pos += 1;
             return Ok(Step::Break {
                 line: lineno,
@@ -330,24 +342,29 @@ impl Parser {
         let is_range = header.split_whitespace().any(|w| w == "TO");
 
         self.pos += 1;
-        let mut body: Vec<Step> = Vec::new();
-        loop {
-            if self.pos >= self.lines.len() {
-                return Err(ChainError::of_kind(
-                    lineno,
-                    ChainErrorKind::Syntax,
-                    "FOR 块缺少 END",
-                ));
+        self.loop_depth += 1;
+        let body = (|| {
+            let mut body: Vec<Step> = Vec::new();
+            loop {
+                if self.pos >= self.lines.len() {
+                    return Err(ChainError::of_kind(
+                        lineno,
+                        ChainErrorKind::Syntax,
+                        "FOR 块缺少 END",
+                    ));
+                }
+                let line = self.lines[self.pos].clone();
+                let (_, l_rest) = split_step_prefix(&line.content);
+                if l_rest == "END" {
+                    self.pos += 1;
+                    return Ok(body);
+                }
+                let s = self.parse_statement()?;
+                body.push(s);
             }
-            let line = self.lines[self.pos].clone();
-            let (_, l_rest) = split_step_prefix(&line.content);
-            if l_rest == "END" {
-                self.pos += 1;
-                break;
-            }
-            let s = self.parse_statement()?;
-            body.push(s);
-        }
+        })();
+        self.loop_depth -= 1;
+        let body = body?;
 
         if is_range {
             let (from, to) = parse_for_range(header, lineno)?;
@@ -396,11 +413,15 @@ fn parse_input_decl(content: &str, lineno: usize) -> ChainResult<Step> {
         }
         let (name, type_name, default) = if let Some((name, type_part)) = part.split_once(':') {
             if let Some(eq) = type_part.find('=') {
-                let type_name = type_part[..eq].trim().to_string();
+                let type_name = crate::data_type::public_type_name(&type_part[..eq]);
                 let default = parse_value(type_part[eq + 1..].trim(), lineno)?;
                 (name, Some(type_name), Some(default))
             } else {
-                (name, Some(type_part.trim().to_string()), None)
+                (
+                    name,
+                    Some(crate::data_type::public_type_name(type_part)),
+                    None,
+                )
             }
         } else if let Some((name, default)) = part.split_once('=') {
             (name, None, Some(parse_value(default.trim(), lineno)?))
@@ -726,7 +747,7 @@ fn parse_pure_function(text: &str, lineno: usize) -> ChainResult<Value> {
         ));
     }
     Ok(Value::Inline(Box::new(pure_function_codec::inline_expr(
-        spec, args, None,
+        spec, args,
     ))))
 }
 
@@ -1185,6 +1206,93 @@ RETURN result=add(3.0, 4.0)
     }
 
     #[test]
+    fn compile_division_and_remainder_to_distinct_outputs() {
+        let blueprint = compile_chain_v2(
+            r#"
+input dividend:num divisor:num
+return quotient=div(input.dividend, input.divisor) remainder=mod(input.dividend, input.divisor)
+"#,
+        )
+        .unwrap();
+
+        let end_id = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "EndNode")
+            .map(|node| node.id.as_str())
+            .unwrap();
+        let start = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .unwrap();
+        assert!(start
+            .pins
+            .iter()
+            .filter(|pin| pin.kind == "DataOutput")
+            .all(|pin| pin.data_type == "num"));
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_pin == "Quotient"
+                && connection.target_node == end_id
+                && connection.target_pin == "quotient"
+        }));
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_pin == "Remainder"
+                && connection.target_node == end_id
+                && connection.target_pin == "remainder"
+        }));
+    }
+
+    #[test]
+    fn numeric_input_aliases_are_canonicalized_to_num() {
+        let blueprint =
+            compile_chain_v2("input a:i64 b:f64 c:Number d:Integer values:Array<i64>\nreturn")
+                .unwrap();
+        let start = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .unwrap();
+        let types = start
+            .pins
+            .iter()
+            .filter(|pin| pin.kind == "DataOutput")
+            .map(|pin| pin.data_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(types, vec!["num", "num", "num", "num", "Array<num>"]);
+    }
+
+    #[tokio::test]
+    async fn num_inputs_keep_internal_numeric_transfer_implicit() {
+        let mut blueprint = compile_chain_v2(
+            "input dividend:num=17 divisor:num=5\nreturn quotient=div(input.dividend, input.divisor) remainder=mod(input.dividend, input.divisor)",
+        )
+        .unwrap();
+        blueprint.metadata.name = "num_divmod".to_string();
+
+        let framework = FrameworkState::initialize().unwrap();
+        let ctx = framework.create_context();
+        let loaded = BlueprintLoader::new()
+            .load_from_blueprint_json(blueprint, &ctx)
+            .unwrap();
+        let mut exec_ctx = ExecutionContext::from_context(ctx);
+        loaded
+            .compiled
+            .initialize_defaults(&mut exec_ctx)
+            .await
+            .unwrap();
+        let outputs = loaded
+            .compiled
+            .executor()
+            .execute_with_params(&mut exec_ctx, HashMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(outputs["quotient"].as_i64(), Some(3));
+        assert_eq!(outputs["remainder"].as_i64(), Some(2));
+    }
+
+    #[test]
     fn parse_var_init() {
         let chain = parse_v2(
             r#"
@@ -1216,6 +1324,18 @@ RETURN last=$num
             .iter()
             .find(|s| matches!(s, Step::ForLoop { .. }));
         assert!(for_step.is_some(), "ForLoop missing in {:#?}", chain);
+    }
+
+    #[test]
+    fn reject_break_outside_for() {
+        let error = parse_v2("input\n1: BREAK\nreturn").unwrap_err();
+        assert_eq!(error.kind, ChainErrorKind::Syntax);
+        assert!(error.message.contains("FOR"));
+    }
+
+    #[test]
+    fn allow_break_inside_for() {
+        parse_v2("input items:Array<String>\n1: FOR input.items\n1.1: BREAK\nEND\nreturn").unwrap();
     }
 
     #[test]
@@ -1284,6 +1404,44 @@ return
                 .any(|node| node.node_type == "SetVarNode"),
             "explicit setvar must generate SetVarNode"
         );
+        assert_eq!(blueprint.variables[0].name, "total");
+        assert_eq!(blueprint.variables[0].data_type, "num");
+        let get_var = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "GetVarNode");
+        assert!(get_var.is_none(), "an unread variable needs no GetVarNode");
+    }
+
+    #[test]
+    fn numeric_variable_reads_are_publicly_typed_as_num() {
+        let blueprint = compile_chain_v2(
+            "input\n$total = 1\n1: setvar total = add($total, 2)\nreturn result=$total",
+        )
+        .unwrap();
+        assert_eq!(blueprint.variables[0].data_type, "num");
+        let get_var = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "GetVarNode")
+            .unwrap();
+        assert!(get_var.pins.iter().any(|pin| {
+            pin.name == "Value" && pin.kind == "DataOutput" && pin.data_type == "num"
+        }));
+        let set_var = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "SetVarNode")
+            .unwrap();
+        assert!(!set_var
+            .pins
+            .iter()
+            .any(|pin| pin.name == "Value" && pin.kind == "DataOutput"));
+
+        let error =
+            compile_chain_v2("input\n$total = 1\n1: setvar total = 2\nreturn result=1.Value")
+                .expect_err("setvar must not expose a step output");
+        assert_eq!(error.kind, ChainErrorKind::UnknownReference);
     }
 
     #[test]
@@ -1344,6 +1502,66 @@ return item=2.Element
         }));
     }
 
+    #[test]
+    fn nested_foreach_requires_explicit_outer_item_promotion() {
+        let error = compile_chain_v2(
+            r#"
+input groups:Array<Any>
+1: FOR input.groups
+    1.1: FOR $item
+        1.1.1: EXEC DebugPrintNode --Value 1.Item
+    END
+END
+return
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ChainErrorKind::UnknownReference);
+        assert!(error.message.contains("未定义的步骤: 1"), "{error}");
+
+        let blueprint = compile_chain_v2(
+            r#"
+input groups:Array<Any>
+$outer_item = null
+1: FOR input.groups
+    1.1: setvar outer_item = $item
+    1.2: FOR $item
+        1.2.1: EXEC DebugPrintNode --Value $item
+        1.2.2: EXEC DebugPrintNode --Value $outer_item
+    END
+END
+return
+"#,
+        )
+        .unwrap();
+
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == "1"
+                && connection.source_pin == "Item"
+                && connection.target_node == "1.1"
+                && connection.target_pin == "Value"
+        }));
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == "1.2"
+                && connection.source_pin == "Item"
+                && connection.target_node == "1.2.1"
+                && connection.target_pin == "Value"
+        }));
+        let promoted_read = blueprint
+            .nodes
+            .iter()
+            .find(|node| {
+                node.node_type == "GetVarNode" && node.properties["variable_name"] == "outer_item"
+            })
+            .unwrap();
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == promoted_read.id
+                && connection.source_pin == "Value"
+                && connection.target_node == "1.2.2"
+                && connection.target_pin == "Value"
+        }));
+    }
+
     #[tokio::test]
     async fn execute_setvar_with_trace_without_ai_envelope() {
         let mut blueprint = compile_chain_v2(
@@ -1380,7 +1598,6 @@ return result=$total
             outputs.get("result").and_then(|value| value.as_i64()),
             Some(7)
         );
-
         let trace = exec_ctx.take_trace().unwrap();
         let setvar = trace
             .nodes
@@ -1406,7 +1623,7 @@ $total = 0
         2.1.1: setvar total = add($total, $index)
     END
 END
-return result=2.1.1.Value
+return result=$total
 "#,
         )
         .unwrap();

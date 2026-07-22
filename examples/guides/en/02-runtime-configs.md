@@ -45,7 +45,8 @@ Example:
       "id": "product.main",
       "name": "Product Agent",
       "role": "product_agent",
-      "features": ["word", "excel"]
+      "features": ["word", "excel"],
+      "systemSkills": { "thinking": "thinking-pro" }
     }]
   },
   "rpc_endpoints": [{
@@ -60,6 +61,10 @@ Example:
 Resources register availability. They do not start a conversation and do not
 make every tool visible to every Agent. Tool visibility still comes from active
 role/feature Skill `tools` allowlists.
+`systemSkills.thinking` is optional. Omitting it keeps lightweight `thinking`;
+selecting `thinking-pro` replaces that state and adds standard multiline script
+guidance plus temporary `executeWorkflowScript` execution. Persistent Workflow
+tools still come from role/feature Skills.
 
 ## 2.2 LLM Provider Registration
 
@@ -86,7 +91,8 @@ It creates concrete instances from resource-registered profiles:
   "focus_agent_id": "product.main",
   "agents": [{
     "id": "product-main-1",
-    "profile": "product.main"
+    "profile": "product.main",
+    "systemSkills": { "thinking": "thinking-pro" }
   }],
   "permissions": {
     "read_only": "full",
@@ -100,6 +106,10 @@ Profiles are reusable types; cluster `agents[]` are concrete instances.
 `focus_agent_id` is only the initial focus seed. Later focus handoff and routing
 are Runtime built-ins, driven by collaboration commands and conversation state.
 Use a concrete instance id when a profile has multiple instances.
+Concrete `systemSkills` entries override profile defaults by key, so a host can
+grant advanced tool rules and temporary multiline Workflow script execution to
+selected Agents only. Draft/Registered catalog access must be granted separately
+through a host role/feature Skill.
 
 Cluster `permissions` are conversation defaults. A trusted host may override
 individual categories when spawning one conversation; omitted categories keep

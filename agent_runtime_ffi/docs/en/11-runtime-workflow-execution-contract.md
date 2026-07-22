@@ -33,7 +33,7 @@ across Draft and Registered. A resource uses
     "id": "open-page",
     "name": "Open page",
     "description": "Open a URL and return the browser page identity",
-    "script": "input url\n1: BrowserOpenPage --url $url\nreturn page_id=1.page_id url=1.url"
+    "script": "input url:String\n1: EXEC BrowserOpenPage --url input.url\nreturn page_id=1.page_id url=1.url"
   }
 }
 ```
@@ -48,6 +48,18 @@ layout. Recompiling a script migrates existing position, size, display, and
 layout metadata by node id or source step. The two conversion commands are
 stateless: they do not create resources, advance revisions, or emit events.
 
+Scripts, AI prompts, and Runtime tool/node catalogs exposed to hosts use `num`
+as the single public numeric type. The compiler continues accepting historical
+numeric type labels and canonicalizes them to `num`, preserving old scripts.
+Runtime's concrete internal numeric representation is not part of script or
+ABI semantics.
+
+Inside nested `FOR` blocks, `$item` and `$index` always refer to the innermost
+loop; entering that loop temporarily shadows the outer bindings. To use an
+outer item inside the nested loop, declare a variable first and save the value
+with `setvar` in the outer loop. The outer implicit bindings are restored after
+the inner loop exits.
+
 Drafts live in Runtime state; Registered workflows are persisted in the
 configured workflow root. Durable Draft recovery is host-owned.
 `inputs` must be an object. Registered execution omits mode. Draft execution is
@@ -61,7 +73,8 @@ RPC tool that declares `page_id` and `url`, the workflow-visible outputs are
 exactly `page_id` and `url`:
 
 ```text
-1: BrowserOpenPage --url $url
+input url:String
+1: EXEC BrowserOpenPage --url input.url
 return page_id=1.page_id url=1.url
 ```
 
@@ -108,11 +121,18 @@ Failure responses always contain `code` and text `trace`, and omit `result`:
 | `404` | Registered workflow selector was not found. |
 | `-1` | Execution started but a node or workflow failed. |
 
-Compilation failures include the source line and compiler message in `trace`.
+Compilation failures include the source line and compiler message, and tell
+callers to verify that every referenced tool is present in the current Agent's
+active tools with explicit registered description, input pins, and output pins.
 Execution trace includes node status, source line, duration, input/result
 previews, AI-facing node message, and error details.
 
 ## 11.4 Audit and Host Ownership
+
+The AI tool entry points `executeWorkflow` and `executeWorkflowScript` are both
+declared `destructive`. The host's `destructive = ask/deny/full` policy therefore
+applies before Workflow execution begins. Development Studio sessions that need
+unconfirmed execution must have the host explicitly select `open_all`.
 
 Catalog mutation emits `workflow.resource_changed`; every attempted execution
 emits `workflow.execution_completed`. Both use the global
@@ -130,9 +150,11 @@ coordination remain host responsibilities.
 Workflow Studio, its internal Workflow Editor Agent, and ABI callers share one
 `WorkflowsModule` instance. The editor conversation stores only a selection
 (`workflow_id`, `revision`) and receives catalog-derived snapshots for prompt
-context. `openWorkflowDraft`, `readWorkflow`, `updateCurrentWorkflowDraft`,
-`registerCurrentWorkflowDraft`, `compileWorkflowScript`, and `testWorkflow`
-all read or mutate that module. The HTTP canvas endpoints use the same module.
+context. `listWorkflows`, `readWorkflow`, `createWorkflowDraft`,
+`updateWorkflow`, `compileWorkflow`, `testWorkflow`, `registerWorkflow`,
+`deleteWorkflow`, `executeWorkflow`, and `executeWorkflowScript` all use that
+module. The HTTP canvas endpoints use it too. Studio-only `searchSkillRefs`
+searches design references and does not own another resource CRUD path.
 
 The browser canvas is a View. It never owns an independent authoritative draft
 and cannot bypass optimistic revision checks by executing an unsaved temporary
@@ -142,8 +164,9 @@ overwriting external edits. After a global Workflow event, Studio refreshes `wor
 rereads the affected selected resource. Opening or selecting an existing
 resource is conversation/UI context and does not emit a catalog mutation event.
 Runtime also projects that global event line into the editor Agent's dynamic
-catalog/current-resource snapshots. Studio observes completion of `openWorkflowDraft` on the editor conversation
-ledger and then rereads the selected catalog resource.
+catalog/current-resource snapshots. Studio observes completion of
+`createWorkflowDraft` or `readWorkflow` on the editor conversation ledger and
+then rereads the selected catalog resource by stable `workflow_id`.
 
 Event publication is best effort after a successful local mutation. A host
 that needs durable audit delivery should persist/relay events and reconcile

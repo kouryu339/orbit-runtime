@@ -17,6 +17,7 @@ pub struct RuntimeAgentDefinition {
     pub name: String,
     pub role: Option<String>,
     pub features: Vec<String>,
+    pub system_skills: BTreeMap<String, String>,
     pub model_uid: u32,
     pub retrieval: Option<RetrievalConfig>,
     pub system_prompt_constraints: SystemPromptConstraints,
@@ -66,6 +67,8 @@ struct AgentClusterAgentRegistration {
     name: String,
     role: Option<String>,
     features: Vec<String>,
+    #[serde(alias = "systemSkills", default)]
+    system_skills: BTreeMap<String, String>,
     #[serde(alias = "modelUid")]
     model_uid: Option<u32>,
     retrieval: Option<RetrievalConfig>,
@@ -83,6 +86,7 @@ impl Default for AgentClusterAgentRegistration {
             name: String::new(),
             role: None,
             features: Vec::new(),
+            system_skills: BTreeMap::new(),
             model_uid: None,
             retrieval: None,
             system_prompt_constraints: SystemPromptConstraints::default(),
@@ -178,6 +182,10 @@ pub(super) fn build_agent_cluster_registry(
             registries.resources.as_ref(),
         )?;
         let features = normalize_string_list(&format!("agent '{}'.features", id), agent.features)?;
+        let system_skills = normalize_system_skills(
+            &format!("agent '{}'.system_skills", id),
+            agent.system_skills,
+        )?;
         let role = agent
             .role
             .map(|role| role.trim().to_string())
@@ -198,6 +206,7 @@ pub(super) fn build_agent_cluster_registry(
             name,
             role,
             features,
+            system_skills,
             model_uid,
             retrieval: agent.retrieval,
             system_prompt_constraints: effective_system_prompt_constraints(
@@ -307,6 +316,16 @@ fn apply_registered_agent_profile(
         }
         agent.features = features;
     }
+    if agent.system_skills.is_empty() {
+        agent.system_skills = profile.system_skills.clone();
+    } else {
+        for (state, skill) in &profile.system_skills {
+            agent
+                .system_skills
+                .entry(state.clone())
+                .or_insert_with(|| skill.clone());
+        }
+    }
     if agent.model_uid.is_none() {
         agent.model_uid = profile.model_uid;
     }
@@ -336,6 +355,11 @@ pub(super) fn build_builtin_cluster_configs(
         .as_ref()
         .and_then(|llm| llm.current_model_uid);
     let cluster = |id: &str, description: &str, agent_id: &str, agent_name: &str, role: &str| {
+        let system_skills = if role == crate::workflow_studio::WORKFLOW_EDITOR_ROLE_SKILL {
+            BTreeMap::from([("thinking".to_string(), "thinking-pro".to_string())])
+        } else {
+            BTreeMap::new()
+        };
         let registration = AgentClusterRegistration {
             id: id.to_string(),
             description: description.to_string(),
@@ -344,6 +368,7 @@ pub(super) fn build_builtin_cluster_configs(
                 id: agent_id.to_string(),
                 name: agent_name.to_string(),
                 role: Some(role.to_string()),
+                system_skills: system_skills.clone(),
                 model_uid: builtin_model_uid,
                 ..AgentClusterAgentRegistration::default()
             }],
@@ -364,6 +389,7 @@ pub(super) fn build_builtin_cluster_configs(
                     name: agent_name.to_string(),
                     role: Some(role.to_string()),
                     features: Vec::new(),
+                    system_skills,
                     model_uid: 0,
                     retrieval: None,
                     system_prompt_constraints: SystemPromptConstraints {
@@ -437,6 +463,26 @@ pub(super) fn normalize_string_list(
     Ok(normalized)
 }
 
+pub(super) fn normalize_system_skills(
+    label: &str,
+    values: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, RuntimeError> {
+    let mut normalized = BTreeMap::new();
+    for (state, skill) in values {
+        let state = state.trim().to_string();
+        let skill = skill.trim().to_string();
+        if state.is_empty() || skill.is_empty() {
+            return Err(RuntimeError::InvalidConfig(format!(
+                "{label} must not contain empty state or skill names"
+            )));
+        }
+        validate_resource_id(label, &state)?;
+        validate_resource_id(label, &skill)?;
+        normalized.insert(state, skill);
+    }
+    Ok(normalized)
+}
+
 pub(super) fn effective_frontend_widgets_enabled(
     legacy_frontend_widgets_enabled: bool,
     constraints: &SystemPromptConstraints,
@@ -477,6 +523,7 @@ pub(super) fn runtime_agent_definition_to_agent_section(
         skills_dir: PathBuf::from("skills"),
         role: agent.role.clone(),
         features: agent.features.clone(),
+        system_skills: agent.system_skills.clone(),
         retrieval: agent.retrieval.clone(),
         system_prompt_constraints: agent.system_prompt_constraints.clone(),
         frontend_widgets_enabled: agent.frontend_widgets_enabled,

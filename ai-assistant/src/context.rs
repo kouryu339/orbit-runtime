@@ -83,6 +83,7 @@ pub mod keys {
     // ---- Skills ----
 
     pub const MAIN_SKILLS: &str = "main_skills";
+    pub const SYSTEM_SKILLS: &str = "system_skills";
 
     /// Stable conversation-scoped text appended to the role persona.
     /// Hosts set this while constructing specialized conversations. It is part

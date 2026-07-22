@@ -471,7 +471,7 @@ impl RuntimeFacade {
         Ok(response)
     }
 
-    fn workflow_module(&self) -> Result<Arc<WorkflowsModule>, RuntimeError> {
+    pub(super) fn workflow_module(&self) -> Result<Arc<WorkflowsModule>, RuntimeError> {
         if !self.started {
             return Err(RuntimeError::NotStarted);
         }

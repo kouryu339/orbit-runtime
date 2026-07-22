@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ai_assistant::{RetrievalConfig, SystemPromptConstraints};
@@ -318,6 +319,8 @@ pub struct AgentSection {
     pub skills_dir: PathBuf,
     pub role: Option<String>,
     pub features: Vec<String>,
+    #[serde(alias = "systemSkills", default)]
+    pub system_skills: BTreeMap<String, String>,
     pub retrieval: Option<RetrievalConfig>,
     #[serde(alias = "systemPromptConstraints", default)]
     pub system_prompt_constraints: SystemPromptConstraints,
@@ -336,6 +339,7 @@ impl Default for AgentSection {
             skills_dir: PathBuf::from("skills"),
             role: None,
             features: Vec::new(),
+            system_skills: BTreeMap::new(),
             retrieval: None,
             system_prompt_constraints: SystemPromptConstraints::default(),
             frontend_widgets_enabled: true,

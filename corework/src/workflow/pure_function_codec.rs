@@ -45,6 +45,18 @@ const SPECS: &[PureFunctionSpec] = &[
         default_output_pin: "Power",
     },
     PureFunctionSpec {
+        name: "div",
+        node_type: "DivModNode",
+        input_pins: &["Dividend", "Divisor"],
+        default_output_pin: "Quotient",
+    },
+    PureFunctionSpec {
+        name: "mod",
+        node_type: "DivModNode",
+        input_pins: &["Dividend", "Divisor"],
+        default_output_pin: "Remainder",
+    },
+    PureFunctionSpec {
         name: "eq",
         node_type: "EqualNode",
         input_pins: &["A", "B"],
@@ -122,14 +134,18 @@ pub fn by_function_name(name: &str) -> Option<&'static PureFunctionSpec> {
     SPECS.iter().find(|spec| spec.name == name)
 }
 
-pub fn by_node_type(node_type: &str) -> Option<&'static PureFunctionSpec> {
-    SPECS.iter().find(|spec| spec.node_type == node_type)
+pub fn by_node_type_and_output(
+    node_type: &str,
+    output_pin: &str,
+) -> Option<&'static PureFunctionSpec> {
+    SPECS
+        .iter()
+        .find(|spec| spec.node_type == node_type && spec.default_output_pin == output_pin)
 }
 
 pub fn inline_expr(
     spec: &PureFunctionSpec,
     args: Vec<crate::workflow::chain_ast::Value>,
-    output_pin: Option<String>,
 ) -> InlineExpr {
     InlineExpr {
         node_type: spec.node_type.to_string(),
@@ -139,6 +155,6 @@ pub fn inline_expr(
             .zip(args)
             .map(|(pin, value)| ((*pin).to_string(), value))
             .collect(),
-        output_pin,
+        output_pin: Some(spec.default_output_pin.to_string()),
     }
 }

@@ -168,11 +168,11 @@ C++ RPC tool sidecars.
 
 ## Native Release Artifact
 
-This header targets Orbit Runtime native release `v0.4.5` / ABI 1.3. Download the
+This header targets Orbit Runtime native release `v0.4.6-beta.1` / ABI 1.3. Download the
 platform package from:
 
 ```text
-https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.5
+https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.6-beta.1
 ```
 
 Use `bin/agent_runtime.dll` on Windows x86_64 or `lib/libagent_runtime.so` on

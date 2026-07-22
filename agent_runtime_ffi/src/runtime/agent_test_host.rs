@@ -176,6 +176,7 @@ impl AgentTestRuntimeHost {
                 name: agent.name.clone(),
                 role: agent.role.clone(),
                 features: agent.features.clone(),
+                system_skills: agent.system_skills.clone(),
                 model_uid: key_store::current().unwrap_or(0),
                 retrieval: agent.retrieval.clone(),
                 system_prompt_constraints: effective_system_prompt_constraints(

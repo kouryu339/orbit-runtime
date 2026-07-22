@@ -128,6 +128,8 @@ tool_filter: "all"
 ---
 ```
 
+A system-layer thinking skill is not a role and must not define the Agent's identity, responsibilities, domain, or tone. It only defines general reasoning, action, planning, tool-dispatch, and verification behavior. Identity and business boundaries remain controlled by the role skill and host context.
+
 ## 10.4 Runtime Built-Ins
 
 These runtime built-in AI systems are currently recommended for skill use.
@@ -164,6 +166,8 @@ These runtime built-in AI systems are currently recommended for skill use.
 | `PlanFinish` | `note?` | Marks the current plan finished. |
 
 Planning tools are mainly for the system thinking skill. Business role skills usually do not need to reference them directly.
+
+For complex requests or requirements with explicit multiple steps, the Agent should create a plan with `PlanWrite` before execution. While an active plan exists, advancing it remains a high-priority task unless the user explicitly changes or cancels the goal. Use `PlanUpdate` after substantive progress, a plan change, or a clear blocker, and call `PlanFinish` only after every planned objective and required verification is complete. Incidental work and individual tool results must not silently replace the active plan.
 
 ### 10.4.3 Agent Collaboration Parameters
 
@@ -236,19 +240,32 @@ With only step one, the AI cannot see `OrderList`. With only step two, the AI ma
 
 An RPC tool endpoint may expose multiple concrete tools through `ListTools`. The skill `tools` list should reference concrete tool names, not the tool-set endpoint name. Tool implementations must return non-empty `AIOutput.to_ai`; both success and failure should provide a summary that can be written into AI context. RPC tools cannot update dynamic context: if a tool changes state that later reasoning needs, the host must send `conversation.set_dynamic_snapshot` through `agent_runtime_invoke_v1`. Old `snapshot.get` / `snapshot.put` methods are not compatible. For details, see [`09-runtime-rpc-tool-authoring-guide.md`](./09-runtime-rpc-tool-authoring-guide.md).
 
-## 10.7 Conditional Systems
+## 10.7 Advanced Thinking and Workflow Tools
 
-These systems are not part of the default stable contract. Reference them only when the module is compiled, registered, and explicitly allowed by the product.
+The default `thinking` Skill stays lightweight. To give an Agent advanced
+reasoning rules and temporary multiline script execution, replace the thinking
+system Skill on a resource Agent profile or concrete cluster Agent:
 
-| System | Category | Description |
-|---|---|---|
-| `WfListWorkflows` | workflow | Lists runnable workflows. |
-| `WfRunWorkflow` | workflow | Runs a workflow. |
-| `WfRunScript` | workflow | Runs workflow script. Confirm safety boundaries before exposing it. |
-| `WfReviseWorkflow` | workflow | Modifies a workflow. Expose only if the product allows the LLM to edit flows. |
-| `BuildWorkflowFromChainSystem` | workflow | Builds a workflow from a chain. More of an internal builder; not recommended by default. |
+```json
+{
+  "systemSkills": { "thinking": "thinking-pro" }
+}
+```
 
-If the agent only needs to call configured business RPC tools, workflow systems are not required.
+A concrete cluster Agent mapping overrides its profile default. `thinking-pro`
+replaces the `thinking` state implementation; it is not an additive feature, so
+both instruction sets are not injected together. It adds only
+`executeWorkflowScript`, which compiles and executes one complete temporary
+script without writing to the Workflow catalog.
+
+Persistent Workflow catalog access does not belong to the thinking state. A
+host must grant `listWorkflows`, `readWorkflow`, `createWorkflowDraft`,
+`updateWorkflow`, `compileWorkflow`, `testWorkflow`, `registerWorkflow`,
+`deleteWorkflow`, and `executeWorkflow` independently through a role or feature
+Skill `tools` allowlist. The built-in `workflow_editor` role is the standard
+full-catalog example. Ordinary Agents and Workflow Studio still share one
+`WorkflowsModule`, but obtain permission from different Skills. Legacy `Wf*`,
+file-path execution tools, and Studio-only Draft CRUD are removed.
 
 ## 10.8 Authoring Principles
 

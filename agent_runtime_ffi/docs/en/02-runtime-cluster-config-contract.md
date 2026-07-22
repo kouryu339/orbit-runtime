@@ -81,6 +81,27 @@ The legacy `frontendWidgetsEnabled` / `frontend_widgets_enabled` boolean is
 still accepted for compatibility, but new configs should use
 `systemPromptConstraints`.
 
+The system Skill selected for a system state also belongs to an Agent profile
+or concrete cluster Agent. The current public mapping key is `thinking`.
+Without a mapping Runtime uses lightweight `thinking`; select `thinking-pro`
+for advanced tool-use rules and temporary multiline Workflow script execution:
+
+```json
+{
+  "id": "service.researcher",
+  "systemSkills": {
+    "thinking": "thinking-pro"
+  }
+}
+```
+
+The profile supplies defaults and `cluster.agents[].systemSkills` overrides
+individual keys. This replaces the state implementation rather than activating
+two feature Skills. The target must load as a non-role Skill with
+`system_layer: true`. `thinking-pro` does not grant persistent Workflow catalog
+access; hosts still expose those tools through role/feature Skill allowlists.
+State keys other than `thinking` are currently rejected.
+
 ## 2.2 Ownership of Removed Runtime Config Fields
 
 | Old field | Current owner |

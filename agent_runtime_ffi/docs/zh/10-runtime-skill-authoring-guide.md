@@ -128,6 +128,8 @@ tool_filter: "all"
 ---
 ```
 
+系统层 thinking skill 不是 role，也不应定义 Agent 的身份、职责、领域或语气。它只规定通用的思考、行动、计划、工具调度与验证方式；Agent 的身份和业务边界仍由 role skill 与宿主上下文决定。
+
 ## 10.4 Runtime 内置系统
 
 以下系统是当前建议给 skill 引用的 runtime 内置 AI 系统。
@@ -164,6 +166,8 @@ tool_filter: "all"
 | `PlanFinish` | `note?` | 标记当前计划完成。 |
 
 计划工具适合系统级 thinking skill 使用。业务 role skill 如果不负责通用任务推进，通常不需要直接引用这些工具。
+
+复杂要求或用户明确给出的多步骤要求适合先用 `PlanWrite` 建立计划。active plan 存在时，除非用户明确改变或取消目标，否则 Agent 应把推进该计划作为高优先级任务；实质步骤完成、计划变化或出现阻塞时使用 `PlanUpdate`，全部目标和必要验证完成后才使用 `PlanFinish`。临时旁支和单次工具结果不应隐式替换当前计划。
 
 ### 10.4.3 Agent 协作参数
 
@@ -236,19 +240,27 @@ tools: ["OrderList"]
 
 RPC 工具端点可以通过 `ListTools` 暴露多个具体工具。skill 的 `tools` 中应引用具体工具名，而不是工具集端点名。工具实现必须返回非空 `AIOutput.to_ai`，成功和失败都要给出可写入 AI 上下文的摘要。RPC 工具不能更新动态上下文；如果工具改变了后续推理需要的状态，宿主必须通过 `agent_runtime_invoke_v1` 发送 `conversation.set_dynamic_snapshot`，重新发布当前纯文本字段。旧 `snapshot.get` / `snapshot.put` 方法全部不兼容。详细写法见 [`09-runtime-rpc-tool-authoring-guide.md`](./09-runtime-rpc-tool-authoring-guide.md)。
 
-## 10.7 条件开放系统
+## 10.7 高级思考与 Workflow 工具
 
-以下系统不是默认稳定契约，只有在对应模块编译、注册并被产品明确允许时，才建议写入 skill 的 `tools`。
+默认 `thinking` 保持轻量。需要让某类 Agent 使用高级思考规则并执行一次性多行脚本时，
+可在 resource Agent profile 或具体 cluster Agent 上完整替换 thinking system Skill：
 
-| 系统名 | 类别 | 说明 |
-|---|---|---|
-| `WfListWorkflows` | workflow | 列出可运行 workflow。 |
-| `WfRunWorkflow` | workflow | 执行指定 workflow。 |
-| `WfRunScript` | workflow | 执行 workflow script。暴露前需要确认安全边界。 |
-| `WfReviseWorkflow` | workflow | 修改 workflow。暴露前需要确认产品是否允许 LLM 改流程。 |
-| `BuildWorkflowFromChainSystem` | workflow | 从 chain 构建 workflow。更偏内部构建能力，不建议默认给业务 skill。 |
+```json
+{
+  "systemSkills": { "thinking": "thinking-pro" }
+}
+```
 
-如果只是让 agent 调用已经配置好的业务 RPC 工具，不需要启用 workflow 类系统。
+具体 cluster Agent 的映射覆盖 profile 默认值。`thinking-pro` 不是叠加 feature，而是
+`thinking` 状态的替代实现，因此不会同时注入两套思考规范。它只额外声明
+`executeWorkflowScript`，用于编译和执行一次性完整脚本，不会写入 Workflow 目录。
+
+持久化 Workflow 目录能力不属于思考状态。宿主必须通过 role 或 feature Skill 的 `tools`
+白名单独立开放 `listWorkflows`、`readWorkflow`、`createWorkflowDraft`、`updateWorkflow`、
+`compileWorkflow`、`testWorkflow`、`registerWorkflow`、`deleteWorkflow` 和
+`executeWorkflow`。内置 `workflow_editor` role 是完整目录能力的标准示例。普通 Agent 和
+Workflow Studio 仍共享同一个 `WorkflowsModule`，但权限来源不同。旧 `Wf*`、文件路径型
+执行工具和 Studio 专用 Draft CRUD 已移除，不应再写入 Skill。
 
 ## 10.8 编写原则
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 ABI_VERSION = 1
-DEFAULT_RUNTIME_VERSION = "0.4.5"
+DEFAULT_RUNTIME_VERSION = "0.4.6-beta.1"
 CONVERSATION_CREATED_EVENT_TYPE = "conversation:created"
 CONVERSATION_CLOSED_EVENT_TYPE = "conversation:closed"
 FRONTEND_STATE_SNAPSHOT_EVENT_TYPE = "frontend:state_snapshot"

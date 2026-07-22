@@ -1,6 +1,6 @@
 [package]
 name = "corework-runtime"
-version = "0.4.5"
+version = "0.4.6-beta.1"
 edition = "2021"
 description = "Rust Runtime Host SDK for Orbit Runtime ABI 1"
 license = "Apache-2.0"

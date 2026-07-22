@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex as StdMutex,
@@ -2127,19 +2127,19 @@ fn studio_skill_patch_propose_json(state: &WorkflowStudioState, body: &[u8]) -> 
     if workflow_name.is_empty() {
         return json!({"error": "workflow_name is required"});
     }
-    let workflow_path = input
-        .get("workflow_path")
+    let workflow_id = input
+        .get("workflow_id")
         .and_then(Value::as_str)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| {
-            let safe_name = safe_workflow_file_stem(workflow_name);
-            state
-                .workflows
-                .workflows_dir()
-                .join(format!("{safe_name}.workflow.json"))
-                .to_string_lossy()
-                .to_string()
-        });
+        .or_else(|| {
+            input
+                .get("blueprint")
+                .and_then(|blueprint| blueprint.get("metadata"))
+                .and_then(|metadata| metadata.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(workflow_name);
     let skill_name = input
         .get("skill_name")
         .and_then(Value::as_str)
@@ -2174,8 +2174,7 @@ fn studio_skill_patch_propose_json(state: &WorkflowStudioState, body: &[u8]) -> 
             })
         })
         .collect();
-    let section_markdown =
-        build_workflow_skill_section(workflow_name, &workflow_path, &input_names);
+    let section_markdown = build_workflow_skill_section(workflow_name, workflow_id, &input_names);
     json!({
         "schema": "workflow-studio-skill-patch-proposal/v1",
         "skill_name": skill_name,
@@ -2350,24 +2349,18 @@ fn skill_path_string(skill: &ai_assistant::Skill) -> String {
         .unwrap_or_default()
 }
 
-fn safe_workflow_file_stem(name: &str) -> String {
-    name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
-}
-
 fn build_workflow_skill_section(
     workflow_name: &str,
-    workflow_path: &str,
+    workflow_id: &str,
     inputs: &[String],
 ) -> String {
-    let workflow_file_name = Path::new(workflow_path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(workflow_path);
     let mut section = String::new();
     section.push_str(&format!("\n\n## Workflow: {workflow_name}\n\n"));
-    section.push_str("When the user needs this workflow, prefer executing the persisted local workflow file.\n\n");
-    section.push_str(&format!("- File: `{workflow_path}`\n"));
-    section.push_str("- Execution tool: `execSCForPath`\n");
+    section.push_str(
+        "When the user needs this workflow, execute the Registered resource by stable id.\n\n",
+    );
+    section.push_str(&format!("- Workflow id: `{workflow_id}`\n"));
+    section.push_str("- Execution tool: `executeWorkflow`\n");
     if !inputs.is_empty() {
         section.push_str("- Inputs:\n");
         for input in inputs {
@@ -2376,7 +2369,7 @@ fn build_workflow_skill_section(
     }
     section.push_str("\nExample:\n\n```text\n");
     section.push_str(&format!(
-        "EXEC execSCForPath --file_name \"{workflow_file_name}\""
+        "EXEC executeWorkflow --workflow_id \"{workflow_id}\""
     ));
     for input in inputs {
         section.push_str(&format!(" --input.{input} \"...\""));

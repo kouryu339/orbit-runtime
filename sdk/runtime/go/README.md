@@ -5,7 +5,7 @@ Go host SDK for Agent Runtime ABI 1.
 The package uses cgo and links against `agent_runtime`. Install the platform
 runtime library in the linker search path, or provide `CGO_LDFLAGS`.
 
-The SDK is aligned with Orbit Runtime native release `v0.4.5` / ABI 1.3. Use
+The SDK is aligned with Orbit Runtime native release `v0.4.6-beta.1` / ABI 1.3. Use
 `CurrentRuntimeArtifact()` and `RuntimeReleaseURL()` when your installer needs
 to fetch the matching package:
 

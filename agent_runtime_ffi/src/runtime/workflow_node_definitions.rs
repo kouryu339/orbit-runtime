@@ -53,7 +53,7 @@ pub(crate) fn workflow_node_definition_values(runtime_tools: &[RuntimeToolMetada
             "native_category": node.category,
             "pure": pure,
             "description": node.description,
-            "pins": node.pins,
+            "pins": super::tool_definitions::public_node_pins(node.pins),
             "parameters": [],
             "outputs": [],
             "permissions": node.permissions,

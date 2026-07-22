@@ -9,6 +9,7 @@ pub mod history;
 pub mod ledger;
 pub mod plan_file;
 pub mod prompt;
+pub mod workflow;
 pub mod workflow_studio;
 
 use async_trait::async_trait;

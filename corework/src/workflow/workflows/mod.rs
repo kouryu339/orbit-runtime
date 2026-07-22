@@ -4,13 +4,7 @@ pub mod draft;
 pub mod draft_ops;
 pub mod executor;
 pub mod flowchart;
-pub mod script_tools;
 pub mod snapshot;
-
-#[cfg(feature = "workflow_llm_systems")]
-pub mod recorder;
-#[cfg(feature = "workflow_llm_systems")]
-pub mod systems;
 
 pub use catalog::{
     preserve_workflow_blueprint_layout, WorkflowEditorSelection, WorkflowEditorSession,

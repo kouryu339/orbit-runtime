@@ -178,6 +178,7 @@ fn cluster_definition(cluster: &RuntimeAgentCluster, source: &str) -> Value {
             "name": agent.name,
             "role": agent.role,
             "features": agent.features,
+            "system_skills": agent.system_skills,
             "model_uid": (agent.model_uid != 0).then_some(agent.model_uid),
             "retrieval": agent.retrieval,
             "system_prompt_constraints": agent.system_prompt_constraints,

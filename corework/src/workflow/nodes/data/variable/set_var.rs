@@ -13,19 +13,18 @@ use std::collections::HashMap;
 /// SetVar 节点 - 可变变量写节点
 ///
 /// 把 Value 写入以 Name 命名的声明变量槽。
-/// 同时将值以 `NodeOutput::Data` 形式透传，executor 会将其存入 `SetVar_nX:Value`
 #[derive(Debug, Clone, Default)]
 #[register_node(
     node_type = "Impure",
     version = "1.0.0",
     category = "Variable",
     display_name = "将变量{Name}设为{Value}",
-    description = "将{{Value}}写入变量{{Name}}，→{{Value}}传递",
+    description = "将{{Value}}写入变量{{Name}}",
     permissions = 0,
     exec_in  = ["In@执行输入"],
     exec_out = ["Then@执行后继续"],
     data_in  = ["Name:String@变量槽名称", "Value:Any@要写入的值"],
-    data_out = ["Value:Any@传递的值（便于链式引用）"]
+    data_out = []
 )]
 pub struct SetVarNode;
 
@@ -44,7 +43,6 @@ impl BlueprintNode for SetVarNode {
             Pin::data_in("Name", "String"),
             Pin::data_in("Value", "Any"),
             Pin::exec_out("Then"),
-            Pin::data_out("Value", "Any"),
         ]
     }
 
@@ -84,9 +82,6 @@ impl SetVarNode {
 
         ctx.set_workflow_variable(name, &value).await?;
 
-        // 通过 NodeOutput::Data 透传，executor 写入 SetVar_nX:Value
-        let mut outputs = HashMap::new();
-        outputs.insert("Value".to_string(), value);
-        Ok(NodeOutput::Data(outputs))
+        Ok(NodeOutput::ExecPin("Then".to_string()))
     }
 }

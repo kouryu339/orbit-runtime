@@ -940,7 +940,7 @@ export function StudioApp() {
         }
         const selectionChanged = runtimeEventRecords(event).some((record) =>
           record.metadata?.subtype === 'tool_call_finished' &&
-          record.metadata?.tool_name === 'openWorkflowDraft'
+          ['createWorkflowDraft', 'readWorkflow'].includes(record.metadata?.tool_name ?? '')
         );
         if (selectionChanged) {
           void refreshSelectedWorkflow()

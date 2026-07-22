@@ -216,11 +216,11 @@ fn infer_var_default(value: &str) -> (String, Option<serde_json::Value>) {
         return ("Any".to_string(), Some(serde_json::Value::Null));
     }
     if let Ok(n) = value.parse::<i64>() {
-        return ("i64".to_string(), Some(serde_json::Value::Number(n.into())));
+        return ("num".to_string(), Some(serde_json::Value::Number(n.into())));
     }
     if let Ok(n) = value.parse::<f64>() {
         if let Some(num) = serde_json::Number::from_f64(n) {
-            return ("f64".to_string(), Some(serde_json::Value::Number(num)));
+            return ("num".to_string(), Some(serde_json::Value::Number(num)));
         }
     }
     if value.starts_with('[') || value.starts_with('{') {
@@ -301,10 +301,11 @@ pub fn describe_node_pins(node_type: &str) -> String {
                 } else {
                     "数据出"
                 };
+                let public_type = crate::data_type::public_type_name(pin.data_type);
                 let desc = if pin.description.is_empty() {
-                    pin.data_type
+                    public_type.clone()
                 } else {
-                    pin.description
+                    pin.description.to_string()
                 };
                 // 精确匹配独立的 T（如 Array<T>、T），不误触 DateTime、Int 等
                 let has_standalone_t = pin
@@ -312,9 +313,9 @@ pub fn describe_node_pins(node_type: &str) -> String {
                     .split(|c: char| !c.is_alphanumeric())
                     .any(|token| token == "T");
                 let type_str = if has_standalone_t {
-                    format!("{} [通配泛型]", pin.data_type)
+                    format!("{} [通配泛型]", public_type)
                 } else {
-                    pin.data_type.to_string()
+                    public_type
                 };
                 let default_hint = if matches!(pin.kind, PinKind::DataInput) {
                     pin.default_value
@@ -1082,9 +1083,9 @@ pub fn build_chain_compiler_prompt(
       "node_type": "AddNode",
       "display_name": "计算总价",
       "pins": [
-        {{ "name": "A", "kind": "DataInput", "data_type": "f64", "default_value": 0.0 }},
-        {{ "name": "B", "kind": "DataInput", "data_type": "f64" }},
-        {{ "name": "Result", "kind": "DataOutput", "data_type": "f64" }}
+        {{ "name": "A", "kind": "DataInput", "data_type": "num", "default_value": 0.0 }},
+        {{ "name": "B", "kind": "DataInput", "data_type": "num" }},
+        {{ "name": "Result", "kind": "DataOutput", "data_type": "num" }}
       ]
     }},
     {{
@@ -1093,7 +1094,7 @@ pub fn build_chain_compiler_prompt(
       "display_name": "结束",
       "pins": [
         {{ "name": "In", "kind": "ExecInput", "data_type": "" }},
-        {{ "name": "total", "kind": "DataInput", "data_type": "f64", "description": "总价" }}
+        {{ "name": "total", "kind": "DataInput", "data_type": "num", "description": "总价" }}
       ]
     }}
   ],
@@ -1114,12 +1115,12 @@ pub fn build_chain_compiler_prompt(
 - 固定引脚：`"name": "Out", "kind": "ExecOutput"` — 固定必须有
 - 动态引脚：工作流的每个**入参**，对应一条 `"kind": "DataOutput"` 引脚
   - 引脚名 = 参数名，data_type = 参数类型
-- 示例：工作流需要 userId(String) 和 amount(f64) 两个入参：
+- 示例：工作流需要 userId(String) 和 amount(num) 两个入参：
   ```json
   "pins": [
     {{"name":"Out","kind":"ExecOutput","data_type":""}},
     {{"name":"userId","kind":"DataOutput","data_type":"String","description":"用户ID"}},
-    {{"name":"amount","kind":"DataOutput","data_type":"f64","description":"金额"}}
+    {{"name":"amount","kind":"DataOutput","data_type":"num","description":"金额"}}
   ]
   ```
 
@@ -1151,10 +1152,10 @@ ExecOutput: False （条件为假）
 ### ForLoopNode（按范围循环）— Impure
 ```
 ExecInput:  In
-DataInput:  FirstIndex: i64  （起始，含）
-DataInput:  LastIndex: i64   （结束，含）
+DataInput:  FirstIndex: num  （起始，含）
+DataInput:  LastIndex: num   （结束，含）
 ExecOutput: LoopBody  （每次迭代）
-DataOutput: Index: i64 （当前索引）
+DataOutput: Index: num （当前索引）
 ExecOutput: Completed （循环结束后）
 ```
 - 循环 N 次时：FirstIndex=0, LastIndex=N-1
@@ -1165,7 +1166,7 @@ ExecInput:  In
 DataInput:  Array: Array<Any>  （要遍历的数组）
 ExecOutput: LoopBody  （每次迭代）
 DataOutput: Item: Any  （当前元素）
-DataOutput: Index: i64    （当前索引，从0开始）
+DataOutput: Index: num    （当前索引，从0开始）
 ExecOutput: Completed  （遍历结束后）
 ```
 - 操作链中 `FOR $item IN $array` → 用 ForEachNode
@@ -1200,12 +1201,10 @@ Pure 节点**不需要**在执行流中，只需数据连线：
 | 类型名 | 说明 | JSON 示例 |
 |--------|------|-----------|
 | `String` | 字符串 | `"default_value": "hello"` |
-| `i64` | 整数 | `"default_value": 42` |
-| `f64` | 浮点数 | `"default_value": 3.14` |
+| `num` | 数字 | `"default_value": 42` 或 `"default_value": 3.14` |
 | `bool` | 布尔 | `"default_value": true` |
 | `Array<String>` | 字符串数组 | `"default_value": ["a","b"]` |
-| `Array<i64>` | 整数数组 | `"default_value": [1,2,3]` |
-| `Array<f64>` | 浮点数组 | `"default_value": [1.0,2.5]` |
+| `Array<num>` | 数字数组 | `"default_value": [1,2.5,3]` |
 | `Array<bool>` | 布尔数组 | `"default_value": [true,false]` |
 | `Array<Any>` | 任意类型数组 | — |
 | `Any` | 任意类型（通配） | — |
@@ -1225,7 +1224,7 @@ Pure 节点**不需要**在执行流中，只需数据连线：
 |-----------|---------|---------|
 | `IF <cond>:` | `BranchNode` | Condition(bool) → True/False |
 | `FOR $item IN $arr:` | `ForEachNode` | Array(Array<Any>) → LoopBody, Item |
-| `FOR $i IN 0..N:` | `ForLoopNode` | FirstIndex/LastIndex(i64) → LoopBody, Index |
+| `FOR $i IN 0..N:` | `ForLoopNode` | FirstIndex/LastIndex(num) → LoopBody, Index |
 | `BREAK` | `BreakNode` | — |
 | `$var = <操作>` | 对应动作/计算节点 | 节点的 DataOutput 作为 $var 的来源 |
 | 常量 `"abc"` / `123` | 目标引脚的 `default_value` | 直接写在引脚上，无需新建节点 |
