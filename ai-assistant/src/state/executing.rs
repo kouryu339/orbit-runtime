@@ -1,7 +1,7 @@
-//! ## CLI 命令模式
-//! 1. 读取 `PENDING_TOOLS`（`Vec<String>`）
-//! 2. 对每个命令字符串：
-//!    - 解析 `"SystemName --arg1 val1"` 格式
+//! ## 工具执行模式
+//! 1. 读取结构化 EXEC 参数，并保留 `PENDING_TOOLS` 作为审计/兼容表示
+//! 2. 对每个工具调用：
+//!    - 结构化调用直接传参，旧调用继续解析 CLI 兼容格式
 //!    - 将结果以 `role: "tool"` 推入对话历史
 //! 3. 完成后 → 回到 thinking
 
@@ -70,6 +70,10 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
     // ---- 读取待执行命令 ----
     let tools: Vec<String> = cache.get(keys::PENDING_TOOLS).await?.unwrap_or_default();
+    let structured_tools: Vec<crate::decision_line::ParsedToolCall> = cache
+        .get(keys::PENDING_STRUCTURED_TOOLS)
+        .await?
+        .unwrap_or_default();
 
     if tools.is_empty() {
         tracing::warn!("执行状态无待执行工具，直接返回");
@@ -114,7 +118,15 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         .get(keys::PENDING_TOOL_RECOVERY_RESULTS)
         .await?
         .unwrap_or_default();
-    let results = run_tools(&tools, &call_ids, &recovery_results, &exec_ctx, &*cache).await;
+    let results = run_tools(
+        &tools,
+        &structured_tools,
+        &call_ids,
+        &recovery_results,
+        &exec_ctx,
+        &*cache,
+    )
+    .await;
 
     // ---- 构建结果文本 + DisplayMeta ----
     struct ToolPart {
@@ -240,6 +252,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         }
     }
     cache.delete(keys::PENDING_TOOL_CALLS).await?;
+    cache.delete(keys::PENDING_STRUCTURED_TOOLS).await?;
     cache.delete(keys::PENDING_TOOL_CALL_IDS).await?;
     cache.delete(keys::PENDING_TOOL_DISPLAY_COMMANDS).await?;
     cache.delete(keys::PENDING_TOOL_RECOVERY_RESULTS).await?;
@@ -289,6 +302,7 @@ async fn on_transition(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<Op
 /// 每个工具执行前后分别发布 TOOL_START / TOOL_END 事件。
 async fn run_tools(
     tools: &[String],
+    structured_tools: &[crate::decision_line::ParsedToolCall],
     call_ids: &[String],
     recovery_results: &BTreeMap<String, crate::decision::ToolResult>,
     ctx: &Context,
@@ -302,6 +316,11 @@ async fn run_tools(
 
     for (idx, cmd) in tools.iter().enumerate() {
         let cmd = cmd.clone();
+        let legacy_name = parse_tool_command(&cmd).0;
+        let parsed_call = structured_tools
+            .get(idx)
+            .filter(|call| call.name == legacy_name)
+            .cloned();
         let ctx = ctx.clone();
         let call_id = call_ids.get(idx).cloned();
         let recovery_result = call_id
@@ -310,7 +329,11 @@ async fn run_tools(
             .cloned();
 
         join_set.spawn(async move {
-            let (cmd_name, _) = parse_tool_command(&cmd);
+            let cmd_name = parsed_call
+                .as_ref()
+                .map(|call| call.name.as_str())
+                .unwrap_or_else(|| parse_tool_command(&cmd).0)
+                .to_string();
             if let Some(result) = recovery_result {
                 let turn_id = crate::context::AssistantContext::current_turn_id(&ctx.cache).await;
                 let src = crate::agent::source_id_from_cache(&*ctx.cache).await;
@@ -341,11 +364,20 @@ async fn run_tools(
             let turn_id = crate::context::AssistantContext::current_turn_id(&ctx.cache).await;
             let src = crate::agent::source_id_from_cache(&*ctx.cache).await;
             let call_id = call_id.unwrap_or_else(|| format!("{}:{}:{}", src, turn_id, idx));
-            let permission =
-                match authorize_tool(&ctx, &cmd, &cmd_name, &call_id, &src, turn_id).await {
-                    Ok(()) => None,
-                    Err(result) => Some(result),
-                };
+            let permission = match authorize_tool(
+                &ctx,
+                &cmd,
+                parsed_call.as_ref(),
+                &cmd_name,
+                &call_id,
+                &src,
+                turn_id,
+            )
+            .await
+            {
+                Ok(()) => None,
+                Err(result) => Some(result),
+            };
             if let Some(result) = permission {
                 publish_tool_end_event(&ctx, &cmd_name, &cmd, &src, turn_id, &result).await;
                 return (idx, result);
@@ -379,7 +411,11 @@ async fn run_tools(
                 let _ = ctx.event_bus.publish(event).await;
             }
 
-            let result = tool_runner::execute_single_with_call_id(&cmd, Some(&call_id), &ctx).await;
+            let result = if let Some(call) = parsed_call.as_ref() {
+                tool_runner::execute_parsed_with_call_id(call, Some(&call_id), &ctx).await
+            } else {
+                tool_runner::execute_single_with_call_id(&cmd, Some(&call_id), &ctx).await
+            };
 
             // 发布工具结束事件
             publish_tool_end_event(&ctx, &cmd_name, &cmd, &src, turn_id, &result).await;
@@ -409,6 +445,7 @@ async fn run_tools(
 async fn authorize_tool(
     ctx: &Context,
     command: &str,
+    parsed_call: Option<&crate::decision_line::ParsedToolCall>,
     tool_name: &str,
     tool_call_id: &str,
     agent_id: &str,
@@ -436,6 +473,8 @@ async fn authorize_tool(
                 effect: metadata.effect,
                 arguments: if metadata.secret {
                     serde_json::json!({"redacted": true})
+                } else if let Some(call) = parsed_call {
+                    tool_runner::permission_arguments_parsed(call)
                 } else {
                     tool_runner::permission_arguments(command)
                 },

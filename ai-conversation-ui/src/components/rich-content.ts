@@ -32,10 +32,15 @@ export class ConversationRichContentElement extends LitElement {
     :host {
       display: block;
       min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       color: var(--conversation-text);
     }
 
     .markdown {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       font: 400 14px/1.68 var(--conversation-font-body);
       overflow-wrap: anywhere;
     }
@@ -69,12 +74,16 @@ export class ConversationRichContentElement extends LitElement {
       color: var(--conversation-text-muted);
     }
     .markdown pre {
-      overflow: auto;
+      max-width: 100%;
+      overflow-x: hidden;
       padding: 13px;
       border: 1px solid var(--conversation-border);
       border-radius: 10px;
       background: var(--conversation-code-background);
       font: 12px/1.55 var(--conversation-font-mono);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .markdown code {
       padding: 0.15em 0.35em;
@@ -102,7 +111,8 @@ export class ConversationRichContentElement extends LitElement {
     }
     .markdown math[display="block"] {
       display: block;
-      overflow-x: auto;
+      max-width: 100%;
+      overflow-x: hidden;
       margin: 14px 0;
       text-align: center;
     }
@@ -112,6 +122,9 @@ export class ConversationRichContentElement extends LitElement {
     }
 
     .tool {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       border: 1px solid var(--conversation-border);
       border-radius: 10px;
       background: var(--conversation-surface-raised);
@@ -126,6 +139,8 @@ export class ConversationRichContentElement extends LitElement {
       cursor: pointer;
       list-style: none;
       font: 600 12px/1.4 var(--conversation-font-body);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .tool summary::-webkit-details-marker { display: none; }
@@ -146,14 +161,21 @@ export class ConversationRichContentElement extends LitElement {
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--conversation-accent) 18%, transparent);
     }
     .tool-detail {
+      max-width: 100%;
+      overflow-x: hidden;
       margin: 0;
       padding: 0 11px 11px 27px;
       color: var(--conversation-text-muted);
       font: 12px/1.55 var(--conversation-font-mono);
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .widgets {
       display: grid;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       gap: 9px;
       padding: 12px;
       border: 1px solid var(--conversation-border);

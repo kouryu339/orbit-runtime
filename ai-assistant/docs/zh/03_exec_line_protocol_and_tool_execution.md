@@ -6,8 +6,10 @@
 EXEC ToolName --arg value
 ```
 
-parser 支持引号、多行变量和 heredoc；`tool_runner` 将命令拆成工具名与原始参数文本，
-再交给 corework `DynamicSystem`。
+parser 支持引号、多行变量和 heredoc。新解析出的 EXEC 调用以结构化参数直接交给
+`tool_runner` 和 corework `DynamicSystem`，不会先降级为 CLI 字符串再二次解析；因此
+内联 `--script "..."` 中的换行和内部引号会按解析结果原样传递。CLI 字符串仅保留给
+日志、审批审计和旧状态兼容路径。
 
 ## 3.1 可调用条件
 
@@ -37,8 +39,9 @@ parser 支持引号、多行变量和 heredoc；`tool_runner` 将命令拆成工
 
 ## 3.3 并发与展示命令
 
-`executing` 可并发执行同一决策中的独立工具调用。Runtime 分开保存真实执行命令和
-display command，使变量展开后的参数用于执行，原始表达式用于日志/前端展示。
+`executing` 可并发执行同一决策中的独立工具调用。Runtime 分开保存结构化执行参数、
+兼容审计命令和 display command，使变量展开后的参数用于执行，原始表达式用于
+日志/前端展示。结构化调用与兼容命令按索引和工具名校验，错位时回退兼容解析。
 工具完成后结果回灌，再进入 thinking；不会把供应商要求成对的原生 tool role 历史
 直接复用。
 

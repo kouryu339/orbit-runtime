@@ -19,7 +19,10 @@ class TestTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id = 'test';
   disconnect = vi.fn();
-  resolveToolPermission = vi.fn(async () => ({ accepted: true }));
+  resolveToolPermission = vi.fn(async (): Promise<{
+    accepted: boolean;
+    rejectReason?: string;
+  }> => ({ accepted: true }));
 
   async connect(
     _context: unknown,
@@ -149,6 +152,47 @@ describe('AgentRuntimeConversationElement', () => {
         decision: 'deny',
       });
     });
+  });
+
+  it('keeps a rejected permission visible and shows the transport reason', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new TestTransport();
+    transport.resolveToolPermission.mockResolvedValueOnce({
+      accepted: false,
+      rejectReason: 'Runtime could not find the target approval.',
+    });
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+
+    element.state = conversationReducer(element.state, {
+      type: 'snapshot',
+      payload: {
+        revision: 2,
+        pending_permissions: [{
+          conversation_id: 'conversation-1',
+          tool_call_id: 'call-rejected',
+          agent_id: 'boss',
+          tool_name: 'BrowserClosePage',
+          display_name: 'Close page',
+          effect: 'controlled_change',
+          arguments: { page_id: 'page-with-a-very-long-identifier' },
+          turn_id: 2,
+          created_at: '2026-06-22T00:00:00Z',
+        }],
+      },
+    });
+    await element.updateComplete;
+
+    element.shadowRoot
+      ?.querySelector<HTMLButtonElement>('.permission-actions button:not(.deny)')
+      ?.click();
+    await vi.waitFor(() => {
+      expect(element.shadowRoot?.querySelector('[role="alert"]')?.textContent)
+        .toContain('Runtime could not find the target approval.');
+    });
+    expect(element.state.pendingPermissions).toHaveLength(1);
+    expect(element.shadowRoot?.querySelector('[part="permission-shelf"]')).not.toBeNull();
   });
 
   it('keeps approval actions in the shelf when the tool call is rendered', async () => {

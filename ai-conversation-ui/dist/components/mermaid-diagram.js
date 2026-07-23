@@ -12,10 +12,14 @@ export class MermaidDiagramElement extends LitElement {
     static styles = css `
     :host {
       display: block;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
     }
 
     .diagram {
-      overflow: auto;
+      max-width: 100%;
+      overflow-x: hidden;
       padding: 14px;
       border: 1px solid var(--conversation-border);
       border-radius: 12px;
@@ -24,14 +28,16 @@ export class MermaidDiagramElement extends LitElement {
 
     .diagram svg {
       display: block;
-      min-width: 320px;
+      width: 100%;
+      min-width: 0;
       max-width: 100%;
       height: auto;
       margin: 0 auto;
     }
 
     pre {
-      overflow: auto;
+      max-width: 100%;
+      overflow-x: hidden;
       margin: 0;
       padding: 12px;
       border: 1px solid var(--conversation-tool-error);
@@ -39,7 +45,9 @@ export class MermaidDiagramElement extends LitElement {
       background: var(--conversation-code-background);
       color: var(--conversation-text);
       font: 12px/1.55 var(--conversation-font-mono);
-      white-space: pre;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
   `;
     renderVersion = 0;

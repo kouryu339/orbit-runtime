@@ -34,6 +34,8 @@ SSE hosts normally receive events through SSE and expose the reverse command at
 `POST /api/tool-permission`; Tauri hosts map it to
 `ai_resolve_tool_permission`. The host owns authorization and forwards the
 decision to Runtime command `conversation.resolve_tool_permission`.
+The default Tauri permission payload uses Runtime's canonical
+`conversation_id` and `tool_call_id` field names inside `args`.
 
 ## Development
 

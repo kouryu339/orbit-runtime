@@ -31,6 +31,9 @@ and the matching tool bubble state is carried by ledger records with
 `tool_call_id`, and `decision`; no second permission-request id exists.
 The request direction is snapshot/event driven, while the decision direction
 is a host command. Do not wait for or invent a public permission-response event.
+The canonical ABI fields use snake_case. This command also accepts legacy
+`conversationId` and `toolCallId` inputs for older Lit clients, but new
+integrations should not emit camelCase ABI payloads.
 
 LLM usage/error facts are carried by `conversation.ledger_delta` records with
 `metadata.subtype = "llm_usage"` or `"llm_error"`. Runtime does not export a

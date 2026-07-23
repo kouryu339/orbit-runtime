@@ -80,8 +80,8 @@ describe('TauriConversationTransport', () => {
     })).resolves.toMatchObject({ accepted: true });
     expect(invoke).toHaveBeenCalledWith('ai_resolve_tool_permission', {
       args: {
-        conversationId: 'conversation-1',
-        toolCallId: 'call-1',
+        conversation_id: 'conversation-1',
+        tool_call_id: 'call-1',
         decision: 'deny',
       },
     });

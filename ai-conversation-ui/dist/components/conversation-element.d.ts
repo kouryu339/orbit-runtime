@@ -107,6 +107,9 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
         permissionOperation: {
             state: boolean;
         };
+        permissionError: {
+            state: boolean;
+        };
     };
     static styles: import("lit").CSSResult;
     transport: ConversationTransport | null;
@@ -141,6 +144,7 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private providerEditorModels;
     private providerOperation;
     private permissionOperation;
+    private permissionError;
     private connection;
     private connectAbort;
     private localMessageSequence;

@@ -100,6 +100,7 @@ $saved = null
 
 - 第一条逻辑行只能有一条 `input ...`；多个输入必须写在同一行。
 - 输入写作 `input name:Type` 或 `input name:Type=default`，引用写作 `input.name`。
+- String 默认值必须使用 `name:String="value"`。不得使用旧式括号写法 `name:String(=value)`，也不得写成未加引号的 `name:String=value`。
 - 最后一条逻辑行必须是 `return ...`；宿主需要的每个值都必须在这里显式返回。
 - 返回项写作 `return name=value other=2.pin`，项目之间使用空格，不使用逗号。
 - `input` 和 `return` 都允许没有字段，但不能省略这两条边界行。
@@ -124,6 +125,19 @@ EXEC executeWorkflowScript --script $script --input.value "example" --trace true
 ```
 
 上例中的 `ToolName`、`input_pin` 和 `output_pin` 只是结构占位，必须替换为 Available Tools 中真实声明的名称。
+
+当前工具接收完整脚本文本时，不得省略工具声明中必需的 `script` 参数。可以直接使用合法的内联 `--script "..."`，也可以先完成 `$script` 多行变量，再把该变量作为一个参数传入。工具执行器负责保留其中的换行和内部双引号。多行变量形式例如：
+
+```text
+$script = "
+input visibility:String="好友可见"
+1: EXEC ExistingTool --selector "button[data-action='publish']" --visibility input.visibility
+return output=1.output_pin
+"
+EXEC ScriptReceivingTool --script $script
+```
+
+调用任何要求脚本的工具时，先检查调用行已经提供 `--script` 参数，再输出 `EXEC`。`ScriptReceivingTool` 只是结构占位，必须替换为当前 Available Tools 中真实存在的工具。
 
 ### 6. 其他字面量规则
 

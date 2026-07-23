@@ -43,6 +43,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         providerEditorModels: { state: true },
         providerOperation: { state: true },
         permissionOperation: { state: true },
+        permissionError: { state: true },
     };
     static styles = css `
     :host {
@@ -71,7 +72,9 @@ export class AgentRuntimeConversationElement extends LitElement {
       --conversation-assistant-rule: 2px solid color-mix(in srgb, var(--conversation-accent) 44%, var(--conversation-border));
       display: block;
       min-width: 0;
+      max-width: 100%;
       height: 100%;
+      overflow-x: hidden;
       color: var(--conversation-text);
     }
 
@@ -186,6 +189,8 @@ export class AgentRuntimeConversationElement extends LitElement {
       grid-template-rows: auto minmax(0, 1fr) auto auto;
       height: 100%;
       min-height: 320px;
+      min-width: 0;
+      max-width: 100%;
       overflow: hidden;
       border: 1px solid var(--conversation-border);
       border-radius: var(--conversation-shell-radius);
@@ -547,6 +552,9 @@ export class AgentRuntimeConversationElement extends LitElement {
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--conversation-tool-success) 16%, transparent);
     }
     .messages {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
       padding: 22px clamp(14px, 4vw, 34px) 30px;
@@ -561,6 +569,8 @@ export class AgentRuntimeConversationElement extends LitElement {
     }
     .message {
       width: min(100%, 760px);
+      min-width: 0;
+      max-width: 100%;
       margin: 0 auto 20px;
     }
     .message.user {
@@ -579,6 +589,8 @@ export class AgentRuntimeConversationElement extends LitElement {
     }
     .pending { opacity: 0.62; }
     .assistant {
+      min-width: 0;
+      max-width: 100%;
       padding-left: 15px;
       border-left: var(--conversation-assistant-rule);
     }
@@ -608,14 +620,18 @@ export class AgentRuntimeConversationElement extends LitElement {
     .permission-shelf-wrap {
       position: relative;
       z-index: 4;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       padding: 0 12px;
       background: var(--conversation-surface);
     }
     .permission-shelf {
-      width: min(100%, 800px);
-      max-height: min(320px, 40vh);
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
       margin: 0 auto;
-      overflow: auto;
+      overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--conversation-accent) 38%, var(--conversation-border));
       border-radius: 8px 8px 0 0;
       background: var(--conversation-surface-raised);
@@ -641,12 +657,15 @@ export class AgentRuntimeConversationElement extends LitElement {
     }
     .permission-tools {
       display: grid;
+      min-width: 0;
     }
     .permission-tool {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
       align-items: center;
+      min-width: 0;
+      max-width: 100%;
       padding: 11px 12px;
     }
     .permission-tool + .permission-tool {
@@ -654,20 +673,25 @@ export class AgentRuntimeConversationElement extends LitElement {
     }
     .permission-copy {
       min-width: 0;
+      max-width: 100%;
     }
     .permission-tool-name {
       color: var(--conversation-text-strong);
       font: 650 13px var(--conversation-font-body);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .permission-effect {
       margin-top: 4px;
       color: var(--conversation-text-muted);
       font: 11px var(--conversation-font-body);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .permission-arguments {
-      max-height: 100px;
+      max-width: 100%;
       margin: 8px 0 0;
-      overflow: auto;
+      overflow: hidden;
       padding: 7px 8px;
       border-radius: 5px;
       background: var(--conversation-code-background);
@@ -675,6 +699,14 @@ export class AgentRuntimeConversationElement extends LitElement {
       font: 11px/1.5 var(--conversation-font-mono);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .permission-error {
+      margin-top: 8px;
+      color: var(--conversation-tool-error);
+      font: 11px/1.45 var(--conversation-font-body);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .permission-actions {
       display: flex;
@@ -830,6 +862,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         this.providerEditorModels = [this.createProviderEditorModelRow()];
         this.providerOperation = null;
         this.permissionOperation = null;
+        this.permissionError = null;
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -1058,6 +1091,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             return { accepted: false, rejectReason: 'Tool permission response is not supported.' };
         }
         this.permissionOperation = toolCallId;
+        this.permissionError = null;
         try {
             const result = await this.transport.resolveToolPermission({
                 conversationId,
@@ -1072,6 +1106,12 @@ export class AgentRuntimeConversationElement extends LitElement {
                     pendingPermissions: this.state.pendingPermissions.filter((permission) => permission.tool_call_id !== toolCallId),
                 };
             }
+            else {
+                this.permissionError = {
+                    toolCallId,
+                    message: result.rejectReason ?? 'Tool permission response was rejected.',
+                };
+            }
             this.emit('agent-conversation-tool-permission', {
                 conversationId,
                 toolCallId,
@@ -1082,6 +1122,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            this.permissionError = { toolCallId, message };
             this.emit('agent-conversation-error', {
                 code: 'tool-permission-response-failed',
                 message,
@@ -1992,6 +2033,9 @@ export class AgentRuntimeConversationElement extends LitElement {
         const busy = this.permissionOperation === permission.tool_call_id;
         const effect = this.permissionEffectLabel(permission, zh);
         const argumentText = this.permissionArguments(permission);
+        const error = this.permissionError?.toolCallId === permission.tool_call_id
+            ? this.permissionError.message
+            : null;
         return html `<div class="permission-tool" data-call-id=${permission.tool_call_id}>
         <div class="permission-copy">
           <div class="permission-tool-name">
@@ -2000,6 +2044,9 @@ export class AgentRuntimeConversationElement extends LitElement {
           <div class="permission-effect">${effect} · ${permission.tool_name}</div>
           ${argumentText
             ? html `<pre class="permission-arguments">${argumentText}</pre>`
+            : nothing}
+          ${error
+            ? html `<div class="permission-error" role="alert">${error}</div>`
             : nothing}
         </div>
           <div class="permission-actions">

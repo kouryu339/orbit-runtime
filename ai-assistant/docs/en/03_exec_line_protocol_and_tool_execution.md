@@ -4,8 +4,12 @@ The runtime supports structured tool execution derived from model output.
 
 ## 3.1 EXEC Line
 
-An EXEC line is a model-emitted instruction that names a tool and provides JSON
-arguments. The parser converts that instruction into a runtime tool call.
+An EXEC line is a model-emitted instruction that names a tool and provides
+CLI-style named arguments. The parser converts it into a structured runtime
+tool call. Parsed parameters go directly to the tool runner without a
+serialize-and-reparse round trip, so inline `--script "..."` values preserve
+their parsed line breaks and inner quotes. A CLI representation remains only
+for audit, approval display, and compatibility recovery.
 
 ## 3.2 Execution Flow
 

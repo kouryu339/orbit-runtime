@@ -1627,6 +1627,13 @@ async fn build_thinking_payload_from_parsed_tool_calls(
     let display_cmds = crate::runtime::parser::display_exec_commands(content);
     cache.set(keys::PENDING_TOOLS, &cli_cmds, None).await?;
     cache
+        .set(
+            keys::PENDING_STRUCTURED_TOOLS,
+            &parsed_tool_calls.to_vec(),
+            None,
+        )
+        .await?;
+    cache
         .set(keys::PENDING_TOOL_DISPLAY_COMMANDS, &display_cmds, None)
         .await?;
     cache

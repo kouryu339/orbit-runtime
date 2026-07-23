@@ -189,8 +189,8 @@ export class TauriConversationTransport implements ConversationTransport {
       'ai_resolve_tool_permission';
     const args = await this.config.permissionArgs?.(request) ?? {
       args: {
-        conversationId: request.conversationId,
-        toolCallId: request.toolCallId,
+        conversation_id: request.conversationId,
+        tool_call_id: request.toolCallId,
         decision: request.decision,
       },
     };

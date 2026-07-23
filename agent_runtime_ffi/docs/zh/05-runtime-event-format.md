@@ -51,6 +51,8 @@ Conversation。二者可以共用同一个 pull queue，但语义事件线与聚
 `conversation_id + tool_call_id + decision`。不要创建第二个 permission request id，
 也不要把某个事件到达本身当作工具已经执行。请求方向由 snapshot/event 驱动，
 决定方向是宿主 command；不要等待或虚构公共 permission-response 事件。
+字段规范使用 snake_case；为兼容旧 Lit 客户端，该命令也接受
+`conversationId + toolCallId`，但新集成不应继续生成 camelCase ABI payload。
 
 LLM 用量/错误事实由 `conversation.ledger_delta` 记录承载，其中
 `metadata.subtype = "llm_usage"` 或 `"llm_error"`。Runtime 不导出独立的公共

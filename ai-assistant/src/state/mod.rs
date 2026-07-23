@@ -38,6 +38,7 @@ pub(crate) async fn consume_pause_if_requested(
     thinking::request_cancel();
 
     cache.delete(keys::PENDING_TOOLS).await?;
+    cache.delete(keys::PENDING_STRUCTURED_TOOLS).await?;
     cache.delete(keys::PENDING_TOOL_CALLS).await?;
     cache.delete(keys::PENDING_TOOL_CALL_IDS).await?;
     cache.delete(keys::PENDING_TOOL_DISPLAY_COMMANDS).await?;
@@ -153,6 +154,17 @@ mod tests {
             .unwrap();
         cache
             .set(
+                keys::PENDING_STRUCTURED_TOOLS,
+                &vec![crate::decision_line::ParsedToolCall {
+                    name: "ReadFile".to_string(),
+                    params: vec![],
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+        cache
+            .set(
                 keys::PENDING_TOOL_CALLS,
                 &vec![crate::context::ToolCallRef {
                     id: "old-call".to_string(),
@@ -186,6 +198,11 @@ mod tests {
         assert!(consume_pause_if_requested(&cache).await.unwrap());
         assert!(cache
             .get::<Vec<String>>(keys::PENDING_TOOLS)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(cache
+            .get::<Vec<crate::decision_line::ParsedToolCall>>(keys::PENDING_STRUCTURED_TOOLS)
             .await
             .unwrap()
             .is_none());

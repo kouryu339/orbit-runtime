@@ -722,6 +722,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_inline_script_preserves_escaped_quotes_and_newlines() {
+        let text = r#"EXEC WorkflowOpen --name "发布视频" --script "input visibility:String=\"好友可见\"\n1: EXEC BrowserClick --selector \"button[aria-label=\\\"发布\\\"]\"\nreturn""#;
+        let calls = parse_tool_calls(text).unwrap();
+        let script = calls[0]
+            .params
+            .iter()
+            .find(|(name, _)| name == "script")
+            .map(|(_, value)| value.as_str())
+            .unwrap();
+
+        assert!(script.contains("visibility:String=\"好友可见\""));
+        assert!(script.contains("--selector \"button[aria-label=\\\"发布\\\"]\""));
+        assert_eq!(script.lines().count(), 3);
+    }
+
+    #[test]
     fn reject_legacy_block_style() {
         let text = "EXEC FooTool\n--script\nline a\nline b";
         let err = parse_tool_calls(text).unwrap_err();

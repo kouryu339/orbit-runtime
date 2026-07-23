@@ -26,13 +26,56 @@ pub async fn execute_single_with_call_id(
     ctx: &Context,
 ) -> ToolResult {
     let (system_name, args_str) = parse_tool_command(cmd);
+    execute_prepared(
+        system_name,
+        cmd,
+        tool_call_id,
+        validate_param_names(system_name, args_str),
+        build_tool_input_map(args_str),
+        ctx,
+    )
+    .await
+}
+
+/// Execute an already parsed EXEC call without serializing its parameters back
+/// into CLI text and parsing them a second time.
+pub async fn execute_parsed_with_call_id(
+    call: &crate::decision_line::ParsedToolCall,
+    tool_call_id: Option<&str>,
+    ctx: &Context,
+) -> ToolResult {
+    let command = call.to_legacy_command();
+    let used_names = call
+        .params
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    execute_prepared(
+        &call.name,
+        &command,
+        tool_call_id,
+        validate_param_name_list(&call.name, &used_names),
+        Ok(build_parsed_tool_input_map(call)),
+        ctx,
+    )
+    .await
+}
+
+async fn execute_prepared(
+    system_name: &str,
+    command: &str,
+    tool_call_id: Option<&str>,
+    validation_error: Option<String>,
+    input_map: corework::error::Result<HashMap<String, serde_json::Value>>,
+    ctx: &Context,
+) -> ToolResult {
     let tool_kind = tool_kind(system_name);
 
     let mut active_tools = match crate::AssistantContext::get_active_tools(&ctx.cache).await {
         Ok(tools) => tools,
         Err(error) => {
             return ToolResult {
-                command: cmd.to_string(),
+                command: command.to_string(),
                 success: false,
                 to_ai: format!("Unable to verify active tools: {error}"),
                 error_code: -5,
@@ -48,7 +91,7 @@ pub async fn execute_single_with_call_id(
     }
     if !active_tools.iter().any(|tool| tool == system_name) {
         return ToolResult {
-            command: cmd.to_string(),
+            command: command.to_string(),
             success: false,
             to_ai: format!(
                 "Tool '{}' is not active for this agent. Activate the matching skill first.",
@@ -63,7 +106,7 @@ pub async fn execute_single_with_call_id(
         Ok(e) => e,
         Err(_) => {
             return ToolResult {
-                command: cmd.to_string(),
+                command: command.to_string(),
                 success: false,
                 to_ai: format!(
                     "Tool '{}' ({}) is not available. Activate the matching skill or check runtime RPC registration.",
@@ -75,14 +118,14 @@ pub async fn execute_single_with_call_id(
             };
         }
     };
-    if let Some(err) = validate_param_names(system_name, args_str) {
+    if let Some(err) = validation_error {
         tracing::warn!(
             tool_name = %system_name,
             error_len = err.len(),
             "tool parameter validation failed"
         );
         return ToolResult {
-            command: cmd.to_string(),
+            command: command.to_string(),
             success: false,
             to_ai: err,
             error_code: -3,
@@ -90,11 +133,11 @@ pub async fn execute_single_with_call_id(
         };
     }
 
-    let mut input_map = match build_tool_input_map(args_str) {
+    let mut input_map = match input_map {
         Ok(input_map) => input_map,
         Err(e) => {
             return ToolResult {
-                command: cmd.to_string(),
+                command: command.to_string(),
                 success: false,
                 to_ai: format!("Tool argument parsing failed: {}", e),
                 error_code: -4,
@@ -128,7 +171,7 @@ pub async fn execute_single_with_call_id(
 
             if to_ai_raw.trim().is_empty() {
                 return ToolResult {
-                    command: cmd.to_string(),
+                    command: command.to_string(),
                     success: false,
                     to_ai: format!(
                         "System {} did not return a non-empty to_ai field",
@@ -140,7 +183,7 @@ pub async fn execute_single_with_call_id(
             }
 
             let tool_result = ToolResult {
-                command: cmd.to_string(),
+                command: command.to_string(),
                 success: error_code == 0,
                 to_ai: to_ai_raw,
                 error_code,
@@ -157,7 +200,7 @@ pub async fn execute_single_with_call_id(
                 "tool execution failed"
             );
             ToolResult {
-                command: cmd.to_string(),
+                command: command.to_string(),
                 success: false,
                 to_ai: format!(
                     "{} tool '{}' execution failed: {}",
@@ -224,6 +267,17 @@ pub fn permission_arguments(cmd: &str) -> serde_json::Value {
     };
     serde_json::Value::Object(
         args.into_iter()
+            .filter(|(name, _)| name != "input")
+            .collect(),
+    )
+}
+
+pub fn permission_arguments_parsed(
+    call: &crate::decision_line::ParsedToolCall,
+) -> serde_json::Value {
+    serde_json::Value::Object(
+        build_parsed_tool_input_map(call)
+            .into_iter()
             .filter(|(name, _)| name != "input")
             .collect(),
     )
@@ -306,6 +360,21 @@ fn build_tool_input_map(
     Ok(input_map)
 }
 
+fn build_parsed_tool_input_map(
+    call: &crate::decision_line::ParsedToolCall,
+) -> HashMap<String, serde_json::Value> {
+    let command = call.to_legacy_command();
+    let (_, args_str) = parse_tool_command(&command);
+    let mut input_map = HashMap::from([(
+        "input".to_string(),
+        serde_json::Value::String(args_str.to_string()),
+    )]);
+    for (name, value) in &call.params {
+        input_map.insert(name.clone(), serde_json::Value::String(value.clone()));
+    }
+    input_map
+}
+
 pub fn available_system_names() -> Vec<&'static str> {
     inventory::iter::<AISystemFactory>
         .into_iter()
@@ -329,6 +398,10 @@ fn validate_param_names(system_name: &str, args_str: &str) -> Option<String> {
         return None;
     }
 
+    validate_param_name_list(system_name, &extract_param_names(args_str))
+}
+
+fn validate_param_name_list(system_name: &str, used: &[String]) -> Option<String> {
     let valid_names: Vec<String> = if let Some(factory) =
         inventory::iter::<AISystemFactory>().find(|f| f.metadata.name == system_name)
     {
@@ -344,7 +417,6 @@ fn validate_param_names(system_name: &str, args_str: &str) -> Option<String> {
         return None;
     };
 
-    let used = extract_param_names(args_str);
     if valid_names.is_empty() {
         if used.is_empty() {
             return None;
@@ -397,6 +469,8 @@ mod tests {
 
     struct ForbiddenProbe;
 
+    struct EchoStructuredScript;
+
     #[async_trait]
     impl DynamicExecute for ForbiddenProbe {
         async fn execute_dynamic(
@@ -407,6 +481,25 @@ mod tests {
             Ok(json!({
                 "result": true,
                 "to_ai": "executed",
+                "error_code": 0
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl DynamicExecute for EchoStructuredScript {
+        async fn execute_dynamic(
+            &self,
+            input: HashMap<String, Value>,
+            _ctx: &corework::orchestration::Context,
+        ) -> corework::error::Result<Value> {
+            let script = input
+                .get("script")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Ok(json!({
+                "result": {"script": script},
+                "to_ai": script,
                 "error_code": 0
             }))
         }
@@ -428,6 +521,30 @@ mod tests {
         assert!(!result.success);
         assert_eq!(result.error_code, -5);
         assert!(result.to_ai.contains("not active"));
+    }
+
+    #[tokio::test]
+    async fn executes_parsed_script_without_cli_roundtrip() {
+        let script = "input visibility:String=\"好友可见\"\n1: EXEC BrowserClick --selector \"button[aria-label=\\\"发布\\\"]\"\nreturn";
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        crate::AssistantContext::set_active_tools(&cache, vec!["EchoStructuredScript".to_string()])
+            .await
+            .unwrap();
+        let registry = Arc::new(SystemRegistry::new());
+        registry.register_dynamic("EchoStructuredScript", Arc::new(EchoStructuredScript));
+        let event_bus = Arc::new(InMemoryEventBus::new());
+        let ctx = super::build_exec_ctx(cache, event_bus, registry);
+        let call = crate::decision_line::ParsedToolCall {
+            name: "EchoStructuredScript".to_string(),
+            params: vec![("script".to_string(), script.to_string())],
+        };
+
+        let result = super::execute_parsed_with_call_id(&call, None, &ctx).await;
+
+        assert!(result.success, "{}", result.to_ai);
+        assert_eq!(result.to_ai, script);
+        assert_eq!(result.result["script"], script);
+        assert_eq!(super::permission_arguments_parsed(&call)["script"], script);
     }
 
     #[test]
@@ -467,6 +584,23 @@ mod tests {
             .unwrap();
         assert!(script.contains("EXEC CallLlm --user_message input.text"));
         assert!(!input.contains_key("user_message"));
+    }
+
+    #[test]
+    fn parsed_tool_input_map_preserves_workflow_script_verbatim() {
+        let script = "input visibility:String=\"好友可见\"\n1: EXEC BrowserClick --selector \"button[aria-label=\\\"发布\\\"]\"\nreturn";
+        let call = crate::decision_line::ParsedToolCall {
+            name: "WorkflowOpen".to_string(),
+            params: vec![
+                ("name".to_string(), "发布视频".to_string()),
+                ("script".to_string(), script.to_string()),
+            ],
+        };
+
+        let input = super::build_parsed_tool_input_map(&call);
+
+        assert_eq!(input.get("script").and_then(Value::as_str), Some(script));
+        assert_eq!(input.get("name").and_then(Value::as_str), Some("发布视频"));
     }
 
     #[test]

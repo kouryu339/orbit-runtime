@@ -1464,6 +1464,23 @@ RETURN result=add(3.0, 4.0)
     }
 
     #[test]
+    fn quoted_string_defaults_preserve_escaped_inner_quotes() {
+        let blueprint = compile_chain_v2(
+            r#"input selector:String="button[aria-label=\"发布\"]" visibility:String="好友可见"
+return selector=input.selector visibility=input.visibility"#,
+        )
+        .unwrap();
+
+        let start = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .unwrap();
+        assert!(start.pins.iter().any(|pin| pin.name == "selector"));
+        assert!(start.pins.iter().any(|pin| pin.name == "visibility"));
+    }
+
+    #[test]
     fn dynamic_array_parses_as_inline_pure_expression() {
         let chain = parse_v2(
             "input video_path:String\n1: EXEC BrowserSetInputFiles --files [input.video_path]\nreturn",

@@ -299,6 +299,23 @@ fn required_string(payload: &Map<String, Value>, name: &str) -> Result<String, F
         .ok_or_else(|| FfiError::invalid_argument(format!("payload.{name} is required")))
 }
 
+fn required_string_with_aliases(
+    payload: &Map<String, Value>,
+    name: &str,
+    aliases: &[&str],
+) -> Result<String, FfiError> {
+    std::iter::once(name)
+        .chain(aliases.iter().copied())
+        .find_map(|candidate| {
+            payload
+                .get(candidate)
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| FfiError::invalid_argument(format!("payload.{name} is required")))
+}
+
 fn optional_object_json(payload: &Map<String, Value>, name: &str) -> Result<String, FfiError> {
     match payload.get(name) {
         None | Some(Value::Null) => Ok("{}".to_string()),
@@ -618,8 +635,8 @@ fn invoke_command(
                 }
             };
             let resolved = facade.resolve_tool_permission(
-                &required_string(payload, "conversation_id")?,
-                &required_string(payload, "tool_call_id")?,
+                &required_string_with_aliases(payload, "conversation_id", &["conversationId"])?,
+                &required_string_with_aliases(payload, "tool_call_id", &["toolCallId"])?,
                 decision,
             )?;
             json!({ "resolved": resolved })
@@ -1054,6 +1071,34 @@ pub(crate) fn ffi_error_code_internal() -> c_int {
 #[cfg(test)]
 mod abi_tests {
     use super::*;
+
+    #[test]
+    fn permission_identifiers_accept_canonical_and_legacy_names() {
+        let canonical = json!({
+            "conversation_id": "conversation-1",
+            "tool_call_id": "call-1"
+        });
+        let legacy = json!({
+            "conversationId": "conversation-2",
+            "toolCallId": "call-2"
+        });
+
+        for (payload, conversation_id, tool_call_id) in [
+            (canonical, "conversation-1", "call-1"),
+            (legacy, "conversation-2", "call-2"),
+        ] {
+            let payload = payload.as_object().unwrap();
+            assert_eq!(
+                required_string_with_aliases(payload, "conversation_id", &["conversationId"])
+                    .unwrap(),
+                conversation_id
+            );
+            assert_eq!(
+                required_string_with_aliases(payload, "tool_call_id", &["toolCallId"]).unwrap(),
+                tool_call_id
+            );
+        }
+    }
 
     #[test]
     fn registration_input_accepts_structured_json() {

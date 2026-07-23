@@ -16,6 +16,7 @@
 
 use crate::decision::AIDecision;
 use corework::workflow::syntax_lex;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // 公共类型
@@ -41,7 +42,7 @@ impl LineParseOutcome {
 /// 单个 EXEC 块的结构化表示
 /// 与现有 `"ToolName --k v"` 单行字符串相比，结构化表示能承载多行参数值。
 /// 通过 [`Self::to_legacy_command`] 可降级回单行命令字符串（短参数兼容路径）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedToolCall {
     pub name: String,
     /// 参数列表（保留顺序，允许同名后写覆盖前写——兜底容错）

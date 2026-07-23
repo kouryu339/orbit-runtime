@@ -120,6 +120,10 @@ pub mod keys {
 
     pub const PENDING_TOOLS: &str = "pending_tools";
 
+    /// Parsed EXEC calls for lossless argument delivery. `PENDING_TOOLS`
+    /// remains the audit/display and legacy recovery representation.
+    pub const PENDING_STRUCTURED_TOOLS: &str = "pending_structured_tools";
+
     pub const PENDING_TOOL_DISPLAY_COMMANDS: &str = "pending_tool_display_commands";
 
     pub const PENDING_TOOL_CALLS: &str = "pending_tool_calls";

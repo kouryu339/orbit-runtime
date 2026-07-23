@@ -137,6 +137,12 @@ mod tests {
         assert!(thinking_pro
             .instructions
             .contains("正确：`--page_id 1.page_id`；错误：`--page_id \"1.page_id\"`"));
+        assert!(thinking_pro
+            .instructions
+            .contains("可以直接使用合法的内联 `--script \"...\"`"));
+        assert!(thinking_pro
+            .instructions
+            .contains("不得使用旧式括号写法 `name:String(=value)`"));
         assert!(!thinking_pro.instructions.contains(":i64"));
         assert!(!thinking_pro.instructions.contains(":f64"));
         assert!(!thinking_pro.instructions.contains("first(array)"));

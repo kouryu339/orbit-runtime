@@ -1049,6 +1049,7 @@ pub async fn restore_cache_snapshot(
 /// 产生“工具已发起但结果丢失”的幽灵执行。
 pub const RECOVERY_TRANSIENT_KEYS: &[&str] = &[
     "pending_tools",
+    "pending_structured_tools",
     "pending_tool_calls",
     "pending_tool_display_commands",
     "pending_tool_recovery_results",

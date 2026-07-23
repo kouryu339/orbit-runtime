@@ -53,6 +53,10 @@ EXEC SomeTool --script $script
 
 Keep multi-line variable declarations and EXEC calls as raw standalone
 protocol lines. User-visible explanation may appear outside those lines.
+Inline `--script "..."` is valid; the tool executor preserves its line breaks
+and inner quotes. Long content may also be declared as a
+multi-line variable and passed by reference. Do not omit parameters marked as
+required by the tool schema.
 
 ### Direct Response
 
