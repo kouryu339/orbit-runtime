@@ -2,11 +2,25 @@
 //!
 //! Pure节点：连接两个数组
 
-use crate::workflow::core::{DataValue, Pin};
+use crate::error::Result;
+use crate::register_node;
+use crate::workflow::core::{DataValue, NodeOutput, Pin};
+use crate::workflow::execution::ExecutionContext;
+use crate::workflow::nodes::traits::{BlueprintNode, NodeType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[register_node(
+    node_type = "Pure",
+    version = "1.0.0",
+    category = "Array",
+    display_name = "{Array1}后拼接{Array2}",
+    description = "→{{Result}}：拼接两个数组",
+    permissions = 0,
+    data_in = ["Array1:Array<Any>@前半数组", "Array2:Array<Any>@后半数组"],
+    data_out = ["Result:Array<Any>@拼接后的数组"]
+)]
 pub struct ArrayConcatNode;
 
 impl ArrayConcatNode {
@@ -60,6 +74,36 @@ impl ArrayConcatNode {
             DataValue::from_array(result_elements, "Any"),
         );
         Ok(outputs)
+    }
+}
+
+impl BlueprintNode for ArrayConcatNode {
+    fn name(&self) -> &str {
+        "ArrayConcat"
+    }
+
+    fn node_type(&self) -> NodeType {
+        NodeType::Pure
+    }
+
+    fn pins(&self) -> Vec<Pin> {
+        ArrayConcatNode::pins(self)
+    }
+
+    fn description(&self) -> Option<&str> {
+        Some("Concatenates two arrays")
+    }
+
+    fn category(&self) -> Option<&str> {
+        Some("Array")
+    }
+
+    fn execute_node<'a>(
+        &'a self,
+        _ctx: &'a mut ExecutionContext,
+        inputs: HashMap<String, DataValue>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<NodeOutput>> + Send + 'a>> {
+        Box::pin(async move { Ok(NodeOutput::Data(self.evaluate(inputs)?)) })
     }
 }
 

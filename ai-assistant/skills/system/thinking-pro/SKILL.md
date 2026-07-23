@@ -127,7 +127,15 @@ EXEC executeWorkflowScript --script $script --input.value "example" --trace true
 
 ### 6. 其他字面量规则
 
-- 字符串使用引号；数字、`true`、`false`、`null` 直接书写。
+- 参数值先按写法确定语义：
+  - 加引号的内容一律是固定 `String`，例如 `"hello"`。`"input.title"`、`"$name"`、`"1.page_id"` 都只是文本，不会形成数据连接。
+  - 不加引号的整数或小数是 `num`。
+  - `true`、`false` 是 bool；目标参数是 bool 时也允许用 `1` 表示 true、`0` 表示 false。
+  - `[...]` 是数组；常量数组如 `["a", "b"]`，动态数组如 `[input.video_path, $backup_path, 1.path]`。
+  - `input.name` 引用 Workflow 输入，`$name` 引用变量，`N.pin` 引用前置步骤输出。这三类引用都不能加引号。
+  - `null` 表示空值。
+- 只要意图是引用输入、变量或前置步骤输出，就必须裸写 `input.name`、`$name` 或 `N.pin`。正确：`--page_id 1.page_id`；错误：`--page_id "1.page_id"`，后者只会传入固定字符串 `"1.page_id"`，不会生成数据连接。
+- 数组项使用逗号分隔，可以混合固定值和动态引用；动态项会生成真实数据连接。
 - 工具的长文本参数可以从起始引号换行，直到独占一行的 `"` 结束。
 - 空行和以 `#` 开头的整行注释会被忽略。
 

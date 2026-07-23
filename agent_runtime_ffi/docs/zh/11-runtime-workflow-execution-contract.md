@@ -67,6 +67,12 @@ input url:String
 return page_id=1.page_id url=1.url
 ```
 
+参数值由写法决定：引号内容是固定 `String`；裸数字是 `num`；`true`、`false`
+以及 bool 目标引脚上的 `1`、`0` 是布尔值；`[...]` 是数组；`input.name`、
+`$name`、`N.pin` 分别引用输入、变量和前序输出。引用不得加引号，否则只会得到
+固定字符串并失去数据连线。数组允许混合固定项和动态引用，例如
+`[input.video_path, $backup_path, 1.path]`。
+
 RPC transport 可以返回包含 `error_code`、`to_ai` 和 `result` 的 AI output envelope。
 该 envelope 是传输/执行结果，不是 workflow 引脚 schema。Runtime 会展开
 `AIOutput.result`，校验每个已注册输出字段，然后把这些字段作为节点输出。因此外部

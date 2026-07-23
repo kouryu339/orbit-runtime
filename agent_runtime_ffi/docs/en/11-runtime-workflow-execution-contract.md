@@ -78,6 +78,14 @@ input url:String
 return page_id=1.page_id url=1.url
 ```
 
+Value syntax determines parameter semantics. Quoted content is a fixed
+`String`; an unquoted number is `num`; `true` and `false` are booleans, and a
+bool target pin also accepts `1` and `0`; `[...]` is an array; `input.name`,
+`$name`, and `N.pin` reference an input, variable, and previous output. Do not
+quote references: quoting turns them into fixed strings and removes the data
+connection. Arrays may mix literals and dynamic references, for example
+`[input.video_path, $backup_path, 1.path]`.
+
 The RPC transport may return an AI output envelope containing `error_code`,
 `to_ai`, and `result`. That envelope is a transport/execution result, not a
 workflow pin schema. Runtime unwraps `AIOutput.result`, validates every

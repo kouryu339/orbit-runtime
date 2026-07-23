@@ -128,6 +128,15 @@ mod tests {
         assert!(thinking_pro
             .instructions
             .contains("不得写进它所执行的 Workflow 内部形成递归调用"));
+        assert!(thinking_pro
+            .instructions
+            .contains("`\"input.title\"`、`\"$name\"`、`\"1.page_id\"` 都只是文本"));
+        assert!(thinking_pro
+            .instructions
+            .contains("[input.video_path, $backup_path, 1.path]"));
+        assert!(thinking_pro
+            .instructions
+            .contains("正确：`--page_id 1.page_id`；错误：`--page_id \"1.page_id\"`"));
         assert!(!thinking_pro.instructions.contains(":i64"));
         assert!(!thinking_pro.instructions.contains(":f64"));
         assert!(!thinking_pro.instructions.contains("first(array)"));

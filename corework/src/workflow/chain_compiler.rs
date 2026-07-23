@@ -2969,7 +2969,7 @@ impl ChainCompiler {
         self.wire_data_inputs(&node_id, inputs)?;
 
         // 设置默认字面量值到节点引脚的 default_value
-        self.set_literal_defaults(&node_id, inputs);
+        self.set_literal_defaults(&node_id, inputs)?;
 
         if !pure {
             // exec 输出前进
@@ -3200,7 +3200,7 @@ impl ChainCompiler {
             ("LastIndex".to_string(), to.clone()),
         ];
         self.wire_data_inputs(&node_id, &range_inputs)?;
-        self.set_literal_defaults(&node_id, &range_inputs);
+        self.set_literal_defaults(&node_id, &range_inputs)?;
 
         // $index 是隐式固定变量，保存外层绑定（支持嵌套）
         let saved_index = self.step_map.remove("index");
@@ -3415,7 +3415,7 @@ impl ChainCompiler {
 
         // 递归连接 inputs
         self.wire_data_inputs(&node_id, &expr.inputs)?;
-        self.set_literal_defaults(&node_id, &expr.inputs);
+        self.set_literal_defaults(&node_id, &expr.inputs)?;
 
         // 确定输出引脚
         let out_pin = match &expr.output_pin {
@@ -3459,17 +3459,104 @@ impl ChainCompiler {
     }
 
     /// 将字面量值写入目标节点引脚的 default_value
-    fn set_literal_defaults(&mut self, target_node: &str, inputs: &[(String, Value)]) {
+    fn set_literal_defaults(
+        &mut self,
+        target_node: &str,
+        inputs: &[(String, Value)],
+    ) -> ChainResult<()> {
         for (pin_name, val) in inputs {
             if let Value::Literal(json_val) = val {
+                let pin_type = self
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == target_node)
+                    .and_then(|node| node.pins.iter().find(|pin| pin.name == *pin_name))
+                    .map(|pin| pin.data_type.clone())
+                    .unwrap_or_default();
+                let json_val = self.normalize_literal_for_pin(pin_name, &pin_type, json_val)?;
                 // 找到目标节点，设置引脚的 default_value
                 if let Some(node) = self.nodes.iter_mut().find(|n| n.id == target_node) {
                     if let Some(pin) = node.pins.iter_mut().find(|p| p.name == *pin_name) {
-                        pin.default_value = Some(json_val.clone());
+                        pin.default_value = Some(json_val);
                     }
                 }
             }
         }
+        Ok(())
+    }
+
+    fn normalize_literal_for_pin(
+        &self,
+        pin_name: &str,
+        pin_type: &str,
+        value: &serde_json::Value,
+    ) -> ChainResult<serde_json::Value> {
+        let normalized_type = pin_type.trim().to_ascii_lowercase();
+        let is_array = normalized_type.starts_with("array<")
+            || normalized_type.starts_with("array[")
+            || normalized_type.starts_with("vec<");
+        if is_array {
+            if value.is_array() {
+                return Ok(value.clone());
+            }
+            if let Some(text) = value.as_str() {
+                if text.starts_with('[') && text.ends_with(']') {
+                    return Err(ChainError::of_kind(
+                        self.current_line,
+                        ChainErrorKind::TypeMismatch,
+                        format!(
+                            "数组参数 `{pin_name}` 的值 `\"{text}\"` 带引号后是固定字符串。请去掉外层引号，改为 `{text}`"
+                        ),
+                    ));
+                }
+            }
+            return Err(ChainError::of_kind(
+                self.current_line,
+                ChainErrorKind::TypeMismatch,
+                format!("数组参数 `{pin_name}` 需要 `[...]`，得到 `{value}`"),
+            ));
+        }
+        if pin_type.eq_ignore_ascii_case("bool") || pin_type.eq_ignore_ascii_case("boolean") {
+            if let Some(value) = value.as_bool() {
+                return Ok(serde_json::Value::Bool(value));
+            }
+            if let Some(value) = value.as_i64() {
+                return match value {
+                    0 => Ok(serde_json::Value::Bool(false)),
+                    1 => Ok(serde_json::Value::Bool(true)),
+                    _ => Err(ChainError::of_kind(
+                        self.current_line,
+                        ChainErrorKind::TypeMismatch,
+                        format!(
+                            "bool 参数 `{pin_name}` 只接受 `true`、`false`、`1` 或 `0`，得到数字 `{value}`"
+                        ),
+                    )),
+                };
+            }
+            if let Some(text) = value.as_str() {
+                if matches!(
+                    text.to_ascii_lowercase().as_str(),
+                    "true" | "false" | "1" | "0"
+                ) {
+                    return Err(ChainError::of_kind(
+                        self.current_line,
+                        ChainErrorKind::TypeMismatch,
+                        format!(
+                            "bool 参数 `{pin_name}` 的值 `\"{text}\"` 带引号后是固定字符串。请去掉引号，写成 `{}`",
+                            text.to_ascii_lowercase()
+                        ),
+                    ));
+                }
+            }
+            return Err(ChainError::of_kind(
+                self.current_line,
+                ChainErrorKind::TypeMismatch,
+                format!(
+                    "bool 参数 `{pin_name}` 只接受 `true`、`false`、`1` 或 `0`，得到 `{value}`"
+                ),
+            ));
+        }
+        Ok(value.clone())
     }
 }
 

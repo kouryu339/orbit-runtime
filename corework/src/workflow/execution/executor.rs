@@ -53,6 +53,23 @@ impl BlueprintExecutor {
         self.entry_node = Some(node_name.into());
     }
 
+    fn output_cache_key(node_key: &str, node: &NodeWrapper, pin_name: &str) -> String {
+        let instance_default = format!("{}:{}", node_key, pin_name);
+        let trait_default = format!("{}:{}", node.name(), pin_name);
+        let (_, output_mappings) = node.pin_cache_mappings();
+        output_mappings
+            .iter()
+            .find(|mapping| mapping.pin_name == pin_name)
+            .map(|mapping| {
+                if mapping.cache_key == trait_default {
+                    instance_default.clone()
+                } else {
+                    mapping.cache_key.clone()
+                }
+            })
+            .unwrap_or(instance_default)
+    }
+
     /// 执行蓝图，支持输入参数和返回值
     ///
     /// # 参数
@@ -498,12 +515,8 @@ impl BlueprintExecutor {
                             conn.from_node
                         ))
                     })?;
-                    let (_, source_output_mappings) = source_node.pin_cache_mappings();
-                    let cache_key = source_output_mappings
-                        .iter()
-                        .find(|m| m.pin_name == conn.from_pin)
-                        .map(|m| m.cache_key.clone())
-                        .unwrap_or_else(|| format!("{}:{}", conn.from_node, conn.from_pin));
+                    let cache_key =
+                        Self::output_cache_key(&conn.from_node, source_node, &conn.from_pin);
                     lookups.push((pin_name, cache_key));
                 } else {
                     // 未连接 → 用节点默认值
@@ -545,16 +558,8 @@ impl BlueprintExecutor {
             .nodes
             .get(node_name)
             .ok_or_else(|| FrameworkError::SystemError(format!("Node not found: {}", node_name)))?;
-        let (_, output_mappings) = node.pin_cache_mappings();
-
         for (pin_name, value) in outputs {
-            // 查找cache key：优先使用映射，否则使用旧格式
-            let cache_key =
-                if let Some(mapping) = output_mappings.iter().find(|m| m.pin_name == pin_name) {
-                    mapping.cache_key.clone()
-                } else {
-                    format!("{}:{}", node_name, pin_name)
-                };
+            let cache_key = Self::output_cache_key(node_name, node, &pin_name);
             ctx.set_cached(&cache_key, &value).await?;
         }
         Ok(())

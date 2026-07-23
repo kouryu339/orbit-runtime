@@ -478,6 +478,15 @@ impl ChainDecompiler {
         node: &BlueprintNodeJson,
         output_pin: &str,
     ) -> Result<String, DecompileError> {
+        if matches!(
+            (node.node_type.as_str(), output_pin),
+            ("MakeArrayNode", "Array") | ("ArrayConcatNode", "Result")
+        ) {
+            return Ok(format!(
+                "[{}]",
+                self.decompile_array_items(node, output_pin)?.join(", ")
+            ));
+        }
         let spec = pure_function_codec::by_node_type_and_output(&node.node_type, output_pin)
             .ok_or_else(|| {
                 DecompileError::new(format!(
@@ -491,6 +500,73 @@ impl ChainDecompiler {
             .map(|pin| self.resolve_data_input(&node.id, pin))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(format!("{}({})", spec.name, args.join(", ")))
+    }
+
+    fn decompile_array_items(
+        &self,
+        node: &BlueprintNodeJson,
+        output_pin: &str,
+    ) -> Result<Vec<String>, DecompileError> {
+        match (node.node_type.as_str(), output_pin) {
+            ("MakeArrayNode", "Array") => {
+                let mut items = Vec::new();
+                for index in 0..5 {
+                    let pin_name = format!("Element{index}");
+                    let has_connection = self
+                        .data_in
+                        .contains_key(&(node.id.clone(), pin_name.clone()));
+                    let has_default = node.pins.iter().any(|pin| {
+                        pin.kind == "DataInput"
+                            && pin.name == pin_name
+                            && pin.default_value.is_some()
+                    });
+                    if has_connection || has_default {
+                        items.push(self.resolve_data_input(&node.id, &pin_name)?);
+                    }
+                }
+                Ok(items)
+            }
+            ("ArrayConcatNode", "Result") => {
+                let mut items = self.decompile_array_input_items(node, "Array1")?;
+                items.extend(self.decompile_array_input_items(node, "Array2")?);
+                Ok(items)
+            }
+            _ => Err(DecompileError::new(format!(
+                "节点 {}.{} 不是可折叠的数组构造输出",
+                node.node_type, output_pin
+            ))),
+        }
+    }
+
+    fn decompile_array_input_items(
+        &self,
+        node: &BlueprintNodeJson,
+        pin_name: &str,
+    ) -> Result<Vec<String>, DecompileError> {
+        let key = (node.id.clone(), pin_name.to_string());
+        if let Some((source_node, source_pin)) = self.data_in.get(&key) {
+            let source = self
+                .node_map
+                .get(source_node)
+                .ok_or_else(|| DecompileError::new(format!("未找到数组源节点 {source_node}")))?;
+            return self.decompile_array_items(source, source_pin);
+        }
+
+        let default_value = node
+            .pins
+            .iter()
+            .find(|pin| pin.kind == "DataInput" && pin.name == pin_name)
+            .and_then(|pin| pin.default_value.as_ref());
+        match default_value {
+            Some(serde_json::Value::Array(items)) => Ok(items
+                .iter()
+                .map(|item| self.format_json_value(item))
+                .collect()),
+            _ => Err(DecompileError::new(format!(
+                "数组拼接节点 {} 的 {} 必须连接数组构造表达式",
+                node.id, pin_name
+            ))),
+        }
     }
 
     // ── 辅助方法 ─────────────────────────────────────────────────────────
@@ -644,6 +720,42 @@ return result=add(3.0, 4.0)
         let types2: std::collections::HashSet<&str> =
             bp2.nodes.iter().map(|n| n.node_type.as_str()).collect();
         assert_eq!(types1, types2, "node type sets should match");
+    }
+
+    #[test]
+    fn test_roundtrip_preserves_dynamic_array_syntax_over_five_items() {
+        let original = r#"
+input a:String b:String c:String d:String e:String f:String
+return files=[input.a, input.b, input.c, input.d, input.e, input.f]
+"#;
+        let bp1 = compile_chain_v2(original).expect("first compile failed");
+        let text = decompile_chain(&bp1).expect("decompile failed");
+        assert!(
+            text.contains("files=[input.a, input.b, input.c, input.d, input.e, input.f]"),
+            "{text}"
+        );
+
+        let bp2 = compile_chain_v2(&text).expect("second compile failed");
+        assert_eq!(
+            bp1.nodes
+                .iter()
+                .filter(|node| node.node_type == "MakeArrayNode")
+                .count(),
+            bp2.nodes
+                .iter()
+                .filter(|node| node.node_type == "MakeArrayNode")
+                .count()
+        );
+        assert_eq!(
+            bp1.nodes
+                .iter()
+                .filter(|node| node.node_type == "ArrayConcatNode")
+                .count(),
+            bp2.nodes
+                .iter()
+                .filter(|node| node.node_type == "ArrayConcatNode")
+                .count()
+        );
     }
 
     #[test]

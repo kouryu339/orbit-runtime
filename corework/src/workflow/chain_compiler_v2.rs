@@ -698,13 +698,7 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
     }
 
     if s.starts_with('[') {
-        return Err(ChainError::of_kind(
-            lineno,
-            ChainErrorKind::Syntax,
-            format!(
-                "当前 Workflow 脚本不支持内联数组构造 `{s}`。请将输入声明为 `Array[String]` 等数组类型，然后直接引用输入，例如：`input files:Array[String]` 与 `input.files`"
-            ),
-        ));
+        return parse_array_expression(s, lineno);
     }
 
     // Pure 函数：add(a, b)、gt(a, b)、text_concat(a, b)
@@ -797,6 +791,75 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
             s
         ),
     ))
+}
+
+fn parse_array_expression(s: &str, lineno: usize) -> ChainResult<Value> {
+    if !s.ends_with(']') {
+        return Err(ChainError::of_kind(
+            lineno,
+            ChainErrorKind::Syntax,
+            format!("数组表达式缺少结束的 `]`：`{s}`"),
+        ));
+    }
+    let inner = &s[1..s.len() - 1];
+    let values = if inner.trim().is_empty() {
+        Vec::new()
+    } else {
+        split_top_level(inner, ',')
+            .into_iter()
+            .map(|item| {
+                let item = item.trim();
+                if item.is_empty() {
+                    return Err(ChainError::of_kind(
+                        lineno,
+                        ChainErrorKind::Syntax,
+                        format!("数组表达式存在空项：`{s}`"),
+                    ));
+                }
+                parse_value(item, lineno)
+            })
+            .collect::<ChainResult<Vec<_>>>()?
+    };
+
+    if values
+        .iter()
+        .all(|value| matches!(value, Value::Literal(_)))
+    {
+        let items = values
+            .into_iter()
+            .map(|value| match value {
+                Value::Literal(item) => item,
+                _ => unreachable!("literal array checked above"),
+            })
+            .collect();
+        return Ok(Value::Literal(JsonValue::Array(items)));
+    }
+
+    let mut chunks = values.chunks(5).map(make_array_inline);
+    let Some(mut result) = chunks.next() else {
+        return Ok(Value::Literal(JsonValue::Array(Vec::new())));
+    };
+    for next in chunks {
+        result = Value::Inline(Box::new(InlineExpr {
+            node_type: "ArrayConcatNode".to_string(),
+            inputs: vec![("Array1".to_string(), result), ("Array2".to_string(), next)],
+            output_pin: Some("Result".to_string()),
+        }));
+    }
+    Ok(result)
+}
+
+fn make_array_inline(values: &[Value]) -> Value {
+    Value::Inline(Box::new(InlineExpr {
+        node_type: "MakeArrayNode".to_string(),
+        inputs: values
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, value)| (format!("Element{index}"), value))
+            .collect(),
+        output_pin: Some("Array".to_string()),
+    }))
 }
 
 fn parse_pure_function(text: &str, lineno: usize) -> ChainResult<Value> {
@@ -1128,6 +1191,55 @@ mod tests {
         }
     }
 
+    fn workflow_value_tool_metadata(name: &str) -> RuntimeToolMetadata {
+        RuntimeToolMetadata {
+            name: name.to_string(),
+            display_name: "Workflow value test".to_string(),
+            description: "Accept workflow value forms".to_string(),
+            tool_kind: "rpc".to_string(),
+            parameters: vec![
+                RuntimeAIParameter {
+                    name: "page_id".to_string(),
+                    param_type: "String".to_string(),
+                    required: true,
+                    default_value: None,
+                    description: String::new(),
+                },
+                RuntimeAIParameter {
+                    name: "value".to_string(),
+                    param_type: "String".to_string(),
+                    required: true,
+                    default_value: None,
+                    description: String::new(),
+                },
+                RuntimeAIParameter {
+                    name: "files".to_string(),
+                    param_type: "Array<String>".to_string(),
+                    required: true,
+                    default_value: None,
+                    description: String::new(),
+                },
+                RuntimeAIParameter {
+                    name: "checked".to_string(),
+                    param_type: "bool".to_string(),
+                    required: true,
+                    default_value: None,
+                    description: String::new(),
+                },
+            ],
+            outputs: vec![],
+            destructive: false,
+            readonly: false,
+            idempotent: false,
+            open_world: true,
+            secret: false,
+            required_capabilities: Vec::new(),
+            endpoint_id: "workflow-value-test".to_string(),
+            service: "test.WorkflowValue".to_string(),
+            method: "Apply".to_string(),
+        }
+    }
+
     struct BrowserOpenPageTestSystem;
 
     #[async_trait]
@@ -1352,15 +1464,243 @@ RETURN result=add(3.0, 4.0)
     }
 
     #[test]
-    fn inline_array_reports_supported_input_shape() {
-        let error = parse_v2(
+    fn dynamic_array_parses_as_inline_pure_expression() {
+        let chain = parse_v2(
             "input video_path:String\n1: EXEC BrowserSetInputFiles --files [input.video_path]\nreturn",
         )
-        .unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("不支持内联数组构造"), "{message}");
-        assert!(message.contains("input files:Array[String]"), "{message}");
-        assert!(message.contains("input.files"), "{message}");
+        .unwrap();
+        let Step::Node { inputs, .. } = &chain.steps[1] else {
+            panic!("expected workflow tool node");
+        };
+        assert!(matches!(
+            inputs.first().map(|(_, value)| value),
+            Some(Value::Inline(expr)) if expr.node_type == "MakeArrayNode"
+        ));
+    }
+
+    #[test]
+    fn dynamic_values_create_connections_and_bool_one_is_normalized() {
+        let browser = browser_tool_metadata("BrowserOpenPageValueSyntaxTest");
+        let form = workflow_value_tool_metadata("WorkflowValueSyntaxTest");
+        let blueprint = compile_chain_v2_with_runtime_tools(
+            r#"
+input title:String video_path:String
+1: EXEC BrowserOpenPageValueSyntaxTest --url "https://example.com"
+2: EXEC WorkflowValueSyntaxTest --page_id 1.page_id --value input.title --files [input.video_path] --checked 1
+return
+"#,
+            &[browser, form],
+        )
+        .unwrap();
+
+        let start_id = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .map(|node| node.id.as_str())
+            .unwrap();
+        let array_id = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "MakeArrayNode")
+            .map(|node| node.id.as_str())
+            .unwrap();
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == "1"
+                && connection.source_pin == "page_id"
+                && connection.target_node == "2"
+                && connection.target_pin == "page_id"
+        }));
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == start_id
+                && connection.source_pin == "title"
+                && connection.target_node == "2"
+                && connection.target_pin == "value"
+        }));
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == start_id
+                && connection.source_pin == "video_path"
+                && connection.target_node == array_id
+                && connection.target_pin == "Element0"
+        }));
+        assert!(blueprint.connections.iter().any(|connection| {
+            connection.source_node == array_id
+                && connection.source_pin == "Array"
+                && connection.target_node == "2"
+                && connection.target_pin == "files"
+        }));
+        let checked = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.id == "2")
+            .and_then(|node| node.pins.iter().find(|pin| pin.name == "checked"))
+            .and_then(|pin| pin.default_value.as_ref());
+        assert_eq!(checked, Some(&JsonValue::Bool(true)));
+    }
+
+    #[test]
+    fn literal_array_stays_a_literal_default() {
+        let form = workflow_value_tool_metadata("WorkflowLiteralArrayTest");
+        let blueprint = compile_chain_v2_with_runtime_tools(
+            r#"
+input
+1: EXEC WorkflowLiteralArrayTest --page_id "page-1" --value "title" --files ["a.mp4", "b.mp4"] --checked false
+return
+"#,
+            &[form],
+        )
+        .unwrap();
+        assert!(!blueprint
+            .nodes
+            .iter()
+            .any(|node| node.node_type == "MakeArrayNode"));
+        let files = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.id == "1")
+            .and_then(|node| node.pins.iter().find(|pin| pin.name == "files"))
+            .and_then(|pin| pin.default_value.as_ref());
+        assert_eq!(files, Some(&serde_json::json!(["a.mp4", "b.mp4"])));
+    }
+
+    #[tokio::test]
+    async fn dynamic_array_over_five_items_executes_in_source_order() {
+        let mut blueprint = compile_chain_v2(
+            r#"
+input a:String b:String c:String d:String e:String f:String
+return files=[input.a, input.b, input.c, input.d, input.e, input.f]
+"#,
+        )
+        .unwrap();
+        blueprint.metadata.name = "dynamic_array_over_five_items".to_string();
+
+        assert_eq!(
+            blueprint
+                .nodes
+                .iter()
+                .filter(|node| node.node_type == "MakeArrayNode")
+                .count(),
+            2
+        );
+        assert_eq!(
+            blueprint
+                .nodes
+                .iter()
+                .filter(|node| node.node_type == "ArrayConcatNode")
+                .count(),
+            1
+        );
+
+        let framework = FrameworkState::initialize().unwrap();
+        let ctx = framework.create_context();
+        let loaded = BlueprintLoader::new()
+            .load_from_blueprint_json(blueprint, &ctx)
+            .unwrap();
+        let mut exec_ctx = ExecutionContext::from_context(ctx);
+        loaded
+            .compiled
+            .initialize_defaults(&mut exec_ctx)
+            .await
+            .unwrap();
+        let outputs = loaded
+            .compiled
+            .executor()
+            .execute_with_params(
+                &mut exec_ctx,
+                HashMap::from([
+                    (
+                        "a".to_string(),
+                        crate::workflow::core::DataValue::from_string("a"),
+                    ),
+                    (
+                        "b".to_string(),
+                        crate::workflow::core::DataValue::from_string("b"),
+                    ),
+                    (
+                        "c".to_string(),
+                        crate::workflow::core::DataValue::from_string("c"),
+                    ),
+                    (
+                        "d".to_string(),
+                        crate::workflow::core::DataValue::from_string("d"),
+                    ),
+                    (
+                        "e".to_string(),
+                        crate::workflow::core::DataValue::from_string("e"),
+                    ),
+                    (
+                        "f".to_string(),
+                        crate::workflow::core::DataValue::from_string("f"),
+                    ),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outputs.get("files").map(|value| value.json_value()),
+            Some(&serde_json::json!(["a", "b", "c", "d", "e", "f"]))
+        );
+    }
+
+    #[test]
+    fn quoted_reference_shapes_remain_fixed_strings_without_connections() {
+        let browser = browser_tool_metadata("BrowserOpenPageQuotedValueTest");
+        let form = workflow_value_tool_metadata("WorkflowQuotedValueTest");
+        let blueprint = compile_chain_v2_with_runtime_tools(
+            r#"
+input title:String video_path:String
+1: EXEC BrowserOpenPageQuotedValueTest --url "https://example.com"
+2: EXEC WorkflowQuotedValueTest --page_id "1.page_id" --value "input.title" --files [input.video_path] --checked true
+return
+"#,
+            &[browser, form],
+        )
+        .unwrap();
+        let node = blueprint.nodes.iter().find(|node| node.id == "2").unwrap();
+        assert_eq!(
+            node.pins
+                .iter()
+                .find(|pin| pin.name == "page_id")
+                .and_then(|pin| pin.default_value.as_ref()),
+            Some(&serde_json::json!("1.page_id"))
+        );
+        assert_eq!(
+            node.pins
+                .iter()
+                .find(|pin| pin.name == "value")
+                .and_then(|pin| pin.default_value.as_ref()),
+            Some(&serde_json::json!("input.title"))
+        );
+        assert!(!blueprint.connections.iter().any(|connection| {
+            connection.target_node == "2"
+                && matches!(connection.target_pin.as_str(), "page_id" | "value")
+        }));
+    }
+
+    #[test]
+    fn quoted_array_and_bool_report_target_aware_fixes() {
+        let browser = browser_tool_metadata("BrowserOpenPageQuotedTypeTest");
+        let form = workflow_value_tool_metadata("WorkflowQuotedTypeTest");
+        let cases = [
+            (
+                r#"--page_id 1.page_id --value input.title --files "[input.video_path]" --checked true"#,
+                "改为 `[input.video_path]`",
+            ),
+            (
+                r#"--page_id 1.page_id --value input.title --files [input.video_path] --checked "true""#,
+                "请去掉引号，写成 `true`",
+            ),
+        ];
+        for (args, expected) in cases {
+            let script = format!(
+                "input title:String video_path:String\n1: EXEC BrowserOpenPageQuotedTypeTest --url \"https://example.com\"\n2: EXEC WorkflowQuotedTypeTest {args}\nreturn"
+            );
+            let error =
+                compile_chain_v2_with_runtime_tools(&script, &[browser.clone(), form.clone()])
+                    .unwrap_err();
+            assert!(error.to_string().contains(expected), "{}", error);
+        }
     }
 
     #[test]

@@ -2,14 +2,70 @@
 //!
 //! Pure节点：从多个元素构造数组
 
-use crate::workflow::core::{DataValue, Pin};
+use crate::error::Result;
+use crate::register_node;
+use crate::workflow::core::{DataValue, NodeOutput, Pin};
+use crate::workflow::execution::ExecutionContext;
+use crate::workflow::nodes::traits::{BlueprintNode, NodeType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[register_node(
+    node_type = "Pure",
+    version = "1.0.0",
+    category = "Array",
+    display_name = "[{Element0},{Element1},{Element2},{Element3},{Element4}]",
+    description = "→{{Array}}：按顺序构造数组",
+    permissions = 0,
+    data_in = [
+        "Element0:Any@第1项",
+        "Element1:Any@第2项",
+        "Element2:Any@第3项",
+        "Element3:Any@第4项",
+        "Element4:Any@第5项"
+    ],
+    data_out = ["Array:Array<Any>@构造后的数组"]
+)]
 pub struct MakeArrayNode {
     /// 数组元素类型提示
     pub element_type: String,
+}
+
+impl Default for MakeArrayNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlueprintNode for MakeArrayNode {
+    fn name(&self) -> &str {
+        "MakeArray"
+    }
+
+    fn node_type(&self) -> NodeType {
+        NodeType::Pure
+    }
+
+    fn pins(&self) -> Vec<Pin> {
+        MakeArrayNode::pins(self)
+    }
+
+    fn description(&self) -> Option<&str> {
+        Some("Constructs an array from up to five values")
+    }
+
+    fn category(&self) -> Option<&str> {
+        Some("Array")
+    }
+
+    fn execute_node<'a>(
+        &'a self,
+        _ctx: &'a mut ExecutionContext,
+        inputs: HashMap<String, DataValue>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<NodeOutput>> + Send + 'a>> {
+        Box::pin(async move { Ok(NodeOutput::Data(self.evaluate(inputs)?)) })
+    }
 }
 
 impl MakeArrayNode {
