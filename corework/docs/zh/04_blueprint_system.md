@@ -152,7 +152,8 @@ let output = executor.execute_dynamic(input, &ctx).await?;
 Chain 脚本直接引用声明字段：
 
 ```text
-1: BrowserOpenPage --url $url
+input url:String
+1: EXEC BrowserOpenPage --url input.url
 return page_id=1.page_id url=1.url
 ```
 
@@ -210,6 +211,27 @@ chain_id.rs
 ```
 
 Chain Text 是编辑 / 生成语法，不改变核心执行模型。最终仍会编译为 blueprint JSON 并由 `BlueprintExecutor` 执行。
+
+### 4.7.1 脚本边界与步骤编号
+
+标准结构：
+
+```text
+input a:num=1 b:String="a" c:bool
+$variable = literal
+1: EXEC ToolName --count input.a --label input.b --checked input.c
+return output=1.output_pin
+```
+
+- 首选在一条 `input` 中声明全部字段，以便直接查看完整输入契约。编译器兼容开头连续多条 `input` 并将它们合并到同一个 StartNode，但生成新脚本时不推荐多行写法；输入字段不可重名。
+- 结尾允许连续写一条或多条 `return`。编译器把它们合并到同一个 EndNode，并拒绝重名输出。
+- 输入类型仅支持 `num`、`String`、`bool`、`Any` 和递归的 `Array<T>`，例如 `Array<String>`、`Array<Array<num>>`、`Array<Any>`。`Any` 可以接收任意已有表达式结果，但不引入新的对象字面量语法。
+- 外部工具必须写成 `N: EXEC ToolName --param value`；Pure 表达式只能嵌入参数、条件、`setvar` 或 `return`，不单独编号。
+- 顶层执行步骤必须使用唯一且连续的整数编号：`1`、`2`、`3`。
+- 嵌套编号只在进入分支或循环体时出现：IF 分支内步骤编号 = `当前 IF 节点编号.当前分支编码.分支内步骤序号`；FOR 循环体步骤编号 = `当前 FOR 节点编号.循环体步骤序号`，步骤序号均从 `1` 开始。
+- IF 分支编码中，首个真分支为 `1`，ELIF 依次为 `2`、`3`，ELSE 为 `0`。`END` 不编号。
+- 编号不能重复、跳号或包含字母。引用步骤输出时使用同一编号，例如 `2.page_id`。
+- `input.name`、`$variable`、`N.pin` 是动态引用，不能加引号；加引号后始终是固定字符串。
 
 ## 4.8 使用建议
 

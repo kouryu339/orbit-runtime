@@ -17,6 +17,8 @@
 //! 解析完成后调用 [`compile_chain_from_ast`] 走和 v1 完全相同的
 //! AST → BlueprintJson 流水线，确保两个前端产生**语义等价**的蓝图。
 
+use std::collections::HashSet;
+
 use serde_json::Value as JsonValue;
 
 use crate::workflow::blueprint_json::BlueprintJson;
@@ -58,7 +60,9 @@ pub fn parse_v2(text: &str) -> ChainResult<Chain> {
         pos: 0,
         loop_depth: 0,
     };
-    parser.parse_chain()
+    let chain = parser.parse_chain()?;
+    validate_step_numbering(&chain)?;
+    Ok(chain)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,7 +123,7 @@ impl Parser {
     fn parse_chain(&mut self) -> ChainResult<Chain> {
         let mut steps: Vec<Step> = Vec::new();
 
-        // 1. 第一行必须是 INPUT
+        // 1. 开头必须是一个或多个连续 INPUT 声明。
         let first = self
             .lines
             .first()
@@ -128,14 +132,21 @@ impl Parser {
             return Err(ChainError::of_kind(
                 first.lineno,
                 ChainErrorKind::Syntax,
-                "第1行必须是 INPUT 声明",
+                "第1条逻辑行必须是 INPUT 声明",
             ));
         }
-        let input_step = parse_input_decl(&first.content, first.lineno)?;
-        steps.push(input_step);
-        self.pos = 1;
+        let mut input_names = HashSet::new();
+        while self.pos < self.lines.len()
+            && starts_with_keyword(&self.lines[self.pos].content, "input")
+        {
+            let line = &self.lines[self.pos];
+            let input_step = parse_input_decl(&line.content, line.lineno)?;
+            validate_new_input_names(&input_step, &mut input_names, line.lineno)?;
+            steps.push(input_step);
+            self.pos += 1;
+        }
 
-        // 2. 循环解析中段，直到 RETURN
+        // 2. 循环解析中段，直到第一个 RETURN。
         while self.pos < self.lines.len() {
             let line = &self.lines[self.pos];
             if starts_with_keyword(&line.content, "return") {
@@ -145,7 +156,7 @@ impl Parser {
             steps.push(step);
         }
 
-        // 3. 最后必须是 RETURN
+        // 3. 结尾必须是一个或多个连续 RETURN 声明，并合并为一个 End 契约。
         if self.pos >= self.lines.len() {
             let last_lineno = self.lines.last().map(|l| l.lineno).unwrap_or(1);
             return Err(ChainError::of_kind(
@@ -154,17 +165,39 @@ impl Parser {
                 "缺少 RETURN 语句",
             ));
         }
-        let ret_line = &self.lines[self.pos];
-        let ret_step = parse_return(&ret_line.content, ret_line.lineno)?;
-        steps.push(ret_step);
-        self.pos += 1;
+        let return_line = self.lines[self.pos].lineno;
+        let mut return_names = HashSet::new();
+        let mut return_assigns = Vec::new();
+        while self.pos < self.lines.len()
+            && starts_with_keyword(&self.lines[self.pos].content, "return")
+        {
+            let line = &self.lines[self.pos];
+            let Step::Return { assigns, .. } = parse_return(&line.content, line.lineno)? else {
+                unreachable!("parse_return always returns Step::Return");
+            };
+            for (name, value) in assigns {
+                if !return_names.insert(name.clone()) {
+                    return Err(ChainError::of_kind(
+                        line.lineno,
+                        ChainErrorKind::Syntax,
+                        format!("RETURN 输出 `{name}` 重复声明"),
+                    ));
+                }
+                return_assigns.push((name, value));
+            }
+            self.pos += 1;
+        }
+        steps.push(Step::Return {
+            line: return_line,
+            assigns: return_assigns,
+        });
 
         if self.pos < self.lines.len() {
             let extra = &self.lines[self.pos];
             return Err(ChainError::of_kind(
                 extra.lineno,
                 ChainErrorKind::Syntax,
-                "RETURN 之后不应再有其它语句",
+                "RETURN 声明必须连续位于工作流结尾，之后不能再有其它语句",
             ));
         }
 
@@ -177,6 +210,16 @@ impl Parser {
         let lineno = line.lineno;
         let content = line.content.as_str();
 
+        if let Some(prefix) = malformed_step_prefix(content) {
+            return Err(ChainError::of_kind(
+                lineno,
+                ChainErrorKind::Syntax,
+                format!(
+                    "步骤编号 `{prefix}` 非法。编号只能由十进制数字和点组成，例如 `1:`、`1.2:`、`1.1.1:`"
+                ),
+            ));
+        }
+
         let (step_id, rest) = split_step_prefix(content);
 
         if starts_with_keyword(rest, "input") {
@@ -184,7 +227,7 @@ impl Parser {
                 lineno,
                 ChainErrorKind::Syntax,
                 format!(
-                    "第 {lineno} 行不能再次声明 INPUT。Workflow 只能有一条 INPUT 逻辑行；多个输入请写在同一行，例如：`input video_path:String title:String=\"\" description:String=\"\"`"
+                    "第 {lineno} 行不能在执行步骤之后声明 INPUT。多个 INPUT 可以分行书写，但必须连续位于工作流开头"
                 ),
             ));
         }
@@ -249,6 +292,24 @@ impl Parser {
         rest: &str,
         lineno: usize,
     ) -> ChainResult<Step> {
+        let root_id = step_id.clone().ok_or_else(|| {
+            ChainError::of_kind(
+                lineno,
+                ChainErrorKind::Syntax,
+                "IF 缺少步骤编号，例如 `1: IF condition`",
+            )
+        })?;
+        self.parse_if_branch(step_id, rest, lineno, &root_id, 1)
+    }
+
+    fn parse_if_branch(
+        &mut self,
+        step_id: Option<String>,
+        rest: &str,
+        lineno: usize,
+        root_id: &str,
+        branch_index: usize,
+    ) -> ChainResult<Step> {
         // 读 condition：IF cond  / IF
         let cond_str = rest
             .strip_prefix("IF")
@@ -271,8 +332,22 @@ impl Parser {
         while self.pos < self.lines.len() {
             let l = self.lines[self.pos].clone();
             let l_lineno = l.lineno;
-            let (_, l_rest) = split_step_prefix(&l.content);
+            if let Some(prefix) = malformed_step_prefix(&l.content) {
+                return Err(ChainError::of_kind(
+                    l_lineno,
+                    ChainErrorKind::Syntax,
+                    format!("步骤编号 `{prefix}` 非法，只能使用数字和点"),
+                ));
+            }
+            let (l_sid, l_rest) = split_step_prefix(&l.content);
             if l_rest == "END" {
+                if l_sid.is_some() {
+                    return Err(ChainError::of_kind(
+                        l_lineno,
+                        ChainErrorKind::Syntax,
+                        "END 是控制流结束标记，不应添加步骤编号",
+                    ));
+                }
                 self.pos += 1;
                 return Ok(Step::If {
                     line: lineno,
@@ -284,9 +359,18 @@ impl Parser {
             }
             if l_rest.starts_with("ELIF ") || l_rest == "ELIF" {
                 // 把 ELIF 转成嵌套 IF
-                let (elif_sid, _) = split_step_prefix(&l.content);
+                let expected = format!("{root_id}.{}", branch_index + 1);
+                if l_sid.as_deref() != Some(expected.as_str()) {
+                    return Err(numbering_error(
+                        l_lineno,
+                        l_sid.as_deref(),
+                        &expected,
+                        "ELIF 分支",
+                    ));
+                }
                 let elif_rest = format!("IF{}", &l_rest["ELIF".len()..]);
-                let elif_step = self.parse_if(elif_sid, &elif_rest, l_lineno)?;
+                let elif_step =
+                    self.parse_if_branch(l_sid, &elif_rest, l_lineno, root_id, branch_index + 1)?;
                 false_block = vec![elif_step];
                 return Ok(Step::If {
                     line: lineno,
@@ -297,11 +381,27 @@ impl Parser {
                 });
             }
             if l_rest == "ELSE" {
+                let expected = format!("{root_id}.0");
+                if l_sid.as_deref() != Some(expected.as_str()) {
+                    return Err(numbering_error(
+                        l_lineno,
+                        l_sid.as_deref(),
+                        &expected,
+                        "ELSE 分支",
+                    ));
+                }
                 self.pos += 1;
                 while self.pos < self.lines.len() {
                     let m = self.lines[self.pos].clone();
-                    let (_, m_rest) = split_step_prefix(&m.content);
+                    let (m_sid, m_rest) = split_step_prefix(&m.content);
                     if m_rest == "END" {
+                        if m_sid.is_some() {
+                            return Err(ChainError::of_kind(
+                                m.lineno,
+                                ChainErrorKind::Syntax,
+                                "END 是控制流结束标记，不应添加步骤编号",
+                            ));
+                        }
                         self.pos += 1;
                         return Ok(Step::If {
                             line: lineno,
@@ -364,8 +464,15 @@ impl Parser {
                     ));
                 }
                 let line = self.lines[self.pos].clone();
-                let (_, l_rest) = split_step_prefix(&line.content);
+                let (l_sid, l_rest) = split_step_prefix(&line.content);
                 if l_rest == "END" {
+                    if l_sid.is_some() {
+                        return Err(ChainError::of_kind(
+                            line.lineno,
+                            ChainErrorKind::Syntax,
+                            "END 是控制流结束标记，不应添加步骤编号",
+                        ));
+                    }
                     self.pos += 1;
                     return Ok(body);
                 }
@@ -397,6 +504,135 @@ impl Parser {
     }
 }
 
+fn validate_new_input_names(
+    step: &Step,
+    names: &mut HashSet<String>,
+    lineno: usize,
+) -> ChainResult<()> {
+    match step {
+        Step::Input { param_name, .. } if !param_name.is_empty() => {
+            if !names.insert(param_name.clone()) {
+                return Err(ChainError::of_kind(
+                    lineno,
+                    ChainErrorKind::Syntax,
+                    format!("INPUT 字段 `{param_name}` 重复声明"),
+                ));
+            }
+        }
+        Step::Block(steps) => {
+            for step in steps {
+                validate_new_input_names(step, names, lineno)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_step_numbering(chain: &Chain) -> ChainResult<()> {
+    validate_numbered_sequence(&chain.steps, None, "顶层执行步骤")
+}
+
+fn validate_numbered_sequence(
+    steps: &[Step],
+    prefix: Option<&str>,
+    context: &str,
+) -> ChainResult<()> {
+    let mut ordinal = 1usize;
+    for step in steps {
+        let Some((line, actual)) = numbered_step(step) else {
+            continue;
+        };
+        let expected = match prefix {
+            Some(prefix) => format!("{prefix}.{ordinal}"),
+            None => ordinal.to_string(),
+        };
+        if actual != Some(expected.as_str()) {
+            return Err(numbering_error(line, actual, &expected, context));
+        }
+        validate_nested_numbering(step, &expected)?;
+        ordinal += 1;
+    }
+    Ok(())
+}
+
+fn numbered_step(step: &Step) -> Option<(usize, Option<&str>)> {
+    match step {
+        Step::Node { line, step_id, .. }
+        | Step::Call { line, step_id, .. }
+        | Step::If { line, step_id, .. }
+        | Step::ForEach { line, step_id, .. }
+        | Step::ForLoop { line, step_id, .. }
+        | Step::Break { line, step_id } => Some((*line, step_id.as_deref())),
+        Step::Input { .. } | Step::Return { .. } | Step::VarInit { .. } | Step::Block(_) => None,
+    }
+}
+
+fn validate_nested_numbering(step: &Step, step_id: &str) -> ChainResult<()> {
+    match step {
+        Step::If {
+            true_block,
+            false_block,
+            ..
+        } => {
+            let true_prefix = format!("{step_id}.1");
+            validate_numbered_sequence(true_block, Some(&true_prefix), "IF 真分支")?;
+            validate_if_false_chain(false_block, step_id, 2)
+        }
+        Step::ForEach { body, .. } | Step::ForLoop { body, .. } => {
+            validate_numbered_sequence(body, Some(step_id), "FOR 循环体")
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_if_false_chain(
+    false_block: &[Step],
+    root_id: &str,
+    branch_index: usize,
+) -> ChainResult<()> {
+    if false_block.is_empty() {
+        return Ok(());
+    }
+
+    let expected_elif = format!("{root_id}.{branch_index}");
+    if let [Step::If {
+        line,
+        step_id,
+        true_block,
+        false_block,
+        ..
+    }] = false_block
+    {
+        if step_id.as_deref() == Some(expected_elif.as_str()) {
+            validate_numbered_sequence(true_block, Some(&expected_elif), "ELIF 分支")?;
+            return validate_if_false_chain(false_block, root_id, branch_index + 1);
+        }
+        if step_id.is_none() {
+            return Err(numbering_error(*line, None, &expected_elif, "ELIF 分支"));
+        }
+    }
+
+    let false_prefix = format!("{root_id}.0");
+    validate_numbered_sequence(false_block, Some(&false_prefix), "IF ELSE 分支")
+}
+
+fn numbering_error(
+    lineno: usize,
+    actual: Option<&str>,
+    expected: &str,
+    context: &str,
+) -> ChainError {
+    let actual = actual.unwrap_or("<缺少编号>");
+    ChainError::of_kind(
+        lineno,
+        ChainErrorKind::Syntax,
+        format!(
+            "{context}编号不连续：得到 `{actual}`，期望 `{expected}`。步骤编号不可重复、不可跳号，并且只能由数字和点组成"
+        ),
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 行级解析
 // ─────────────────────────────────────────────────────────────────────────────
@@ -424,15 +660,11 @@ fn parse_input_decl(content: &str, lineno: usize) -> ChainResult<Step> {
         }
         let (name, type_name, default) = if let Some((name, type_part)) = part.split_once(':') {
             if let Some(eq) = type_part.find('=') {
-                let type_name = crate::data_type::public_type_name(&type_part[..eq]);
+                let type_name = parse_workflow_type(&type_part[..eq], lineno)?;
                 let default = parse_value(type_part[eq + 1..].trim(), lineno)?;
                 (name, Some(type_name), Some(default))
             } else {
-                (
-                    name,
-                    Some(crate::data_type::public_type_name(type_part)),
-                    None,
-                )
+                (name, Some(parse_workflow_type(type_part, lineno)?), None)
             }
         } else if let Some((name, default)) = part.split_once('=') {
             (name, None, Some(parse_value(default.trim(), lineno)?))
@@ -461,6 +693,49 @@ fn parse_input_decl(content: &str, lineno: usize) -> ChainResult<Step> {
         return Ok(steps_out.into_iter().next().unwrap());
     }
     Ok(Step::Block(steps_out))
+}
+
+fn parse_workflow_type(type_name: &str, lineno: usize) -> ChainResult<String> {
+    let type_name = type_name.trim();
+    if let Some((container, inner)) = split_container_type(type_name, '<', '>')
+        .or_else(|| split_container_type(type_name, '[', ']'))
+    {
+        if !container.eq_ignore_ascii_case("array") || inner.trim().is_empty() {
+            return Err(unsupported_workflow_type(lineno, type_name));
+        }
+        return Ok(format!(
+            "Array<{}>",
+            parse_workflow_type(inner.trim(), lineno)?
+        ));
+    }
+
+    let public = crate::data_type::public_type_name(type_name);
+    match public.to_ascii_lowercase().as_str() {
+        "num" => Ok("num".to_string()),
+        "string" => Ok("String".to_string()),
+        "bool" | "boolean" => Ok("bool".to_string()),
+        "any" => Ok("Any".to_string()),
+        _ => Err(unsupported_workflow_type(lineno, type_name)),
+    }
+}
+
+fn split_container_type(type_name: &str, open: char, close: char) -> Option<(&str, &str)> {
+    let open_index = type_name.find(open)?;
+    let container = type_name[..open_index].trim();
+    let inner = type_name
+        .get(open_index + open.len_utf8()..)?
+        .strip_suffix(close)?;
+    Some((container, inner))
+}
+
+fn unsupported_workflow_type(lineno: usize, type_name: &str) -> ChainError {
+    ChainError::of_kind(
+        lineno,
+        ChainErrorKind::Syntax,
+        format!(
+            "Workflow 输入类型 `{type_name}` 不受支持。仅支持 num、String、bool、Any，以及递归数组 Array<T>，例如 Array<String>、Array<Array<num>>、Array<Any>"
+        ),
+    )
 }
 
 fn normalize_input_chunks(chunks: Vec<String>, lineno: usize) -> ChainResult<Vec<String>> {
@@ -1010,6 +1285,18 @@ fn split_step_prefix(content: &str) -> (Option<String>, &str) {
     (None, content)
 }
 
+fn malformed_step_prefix(content: &str) -> Option<&str> {
+    let colon_pos = content.find(':')?;
+    let before = content[..colon_pos].trim();
+    if before.is_empty() || !before.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    (!before
+        .split('.')
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())))
+    .then_some(before)
+}
+
 /// 判断字符串顶层是否包含赋值用 `=`
 fn contains_assign_eq(s: &str) -> bool {
     let mut depth: i32 = 0;
@@ -1408,13 +1695,32 @@ RETURN result=add(3.0, 4.0)
     }
 
     #[test]
-    fn repeated_input_reports_the_single_line_rule() {
-        let error =
-            parse_v2("input video_path:String\ninput title:String=\"\"\nreturn").unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("不能再次声明 INPUT"), "{message}");
-        assert!(message.contains("只能有一条 INPUT 逻辑行"), "{message}");
-        assert!(message.contains("title:String=\"\""), "{message}");
+    fn consecutive_input_and_return_declarations_are_merged() {
+        let chain = parse_v2(
+            "input video_path:String\ninput title:String=\"\"\nreturn path=input.video_path\nreturn title=input.title",
+        )
+        .unwrap();
+        assert_eq!(
+            chain
+                .steps
+                .iter()
+                .filter(|step| matches!(step, Step::Input { .. }))
+                .count(),
+            2
+        );
+        let Step::Return { assigns, .. } = chain.steps.last().unwrap() else {
+            panic!("expected merged return");
+        };
+        assert_eq!(assigns.len(), 2);
+    }
+
+    #[test]
+    fn input_after_execution_is_rejected() {
+        let error = parse_v2(
+            "input video_path:String\n1: EXEC DebugPrintNode --Value input.video_path\ninput title:String=\"\"\nreturn",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("执行步骤之后声明 INPUT"));
     }
 
     #[test]
@@ -1777,6 +2083,42 @@ return quotient=div(input.dividend, input.divisor) remainder=mod(input.dividend,
         assert_eq!(types, vec!["num", "num", "num", "num", "Array<num>"]);
     }
 
+    #[test]
+    fn workflow_input_types_are_limited_and_canonicalized() {
+        let blueprint = compile_chain_v2(
+            "input a:num b:string c:Boolean payload:any names:array<string> matrix:Array<Array<num>> values:Array<Any>\nreturn",
+        )
+        .unwrap();
+        let start = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .unwrap();
+        let types = start
+            .pins
+            .iter()
+            .filter(|pin| pin.kind == "DataOutput")
+            .map(|pin| pin.data_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            types,
+            vec![
+                "num",
+                "String",
+                "bool",
+                "Any",
+                "Array<String>",
+                "Array<Array<num>>",
+                "Array<Any>"
+            ]
+        );
+
+        for invalid in ["Path", "Object", "Option<String>", "Array<Object>"] {
+            let error = parse_v2(&format!("input value:{invalid}\nreturn")).unwrap_err();
+            assert!(error.message.contains("仅支持 num、String、bool、Any"));
+        }
+    }
+
     #[tokio::test]
     async fn num_inputs_keep_internal_numeric_transfer_implicit() {
         let mut blueprint = compile_chain_v2(
@@ -1826,7 +2168,7 @@ RETURN last=$num
             r#"
 INPUT
 $num = 0.0
-FOR 1 TO 10
+1: FOR 1 TO 10
     $num = mul($index, 1.0)
 END
 RETURN last=$num
@@ -1854,6 +2196,76 @@ RETURN last=$num
     }
 
     #[test]
+    fn reject_duplicate_skipped_and_malformed_step_numbers() {
+        for (script, expected) in [
+            (
+                "input\n1: EXEC DebugPrintNode --Value \"a\"\n1: EXEC DebugPrintNode --Value \"b\"\nreturn",
+                "期望 `2`",
+            ),
+            (
+                "input\n1: EXEC DebugPrintNode --Value \"a\"\n3: EXEC DebugPrintNode --Value \"b\"\nreturn",
+                "期望 `2`",
+            ),
+            (
+                "input\n1f.1: EXEC DebugPrintNode --Value \"a\"\nreturn",
+                "编号 `1f.1` 非法",
+            ),
+        ] {
+            let error = parse_v2(script).unwrap_err();
+            assert!(error.message.contains(expected), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn validate_if_branch_numbering() {
+        parse_v2(
+            r#"
+input condition:bool fallback:bool
+1: IF input.condition
+    1.1.1: EXEC DebugPrintNode --Value "true"
+1.2: ELIF input.fallback
+    1.2.1: EXEC DebugPrintNode --Value "elif"
+1.0: ELSE
+    1.0.1: EXEC DebugPrintNode --Value "false"
+END
+2: EXEC DebugPrintNode --Value "done"
+return
+"#,
+        )
+        .unwrap();
+
+        let error = parse_v2(
+            r#"
+input condition:bool
+1: IF input.condition
+    1.1: EXEC DebugPrintNode --Value "wrong depth"
+END
+return
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("期望 `1.1.1`"), "{error}");
+    }
+
+    #[test]
+    fn validate_nested_loop_numbering() {
+        parse_v2(
+            r#"
+input groups:Array<Any>
+1: FOR input.groups
+    1.1: FOR $item
+        1.1.1: EXEC DebugPrintNode --Value $item
+    END
+    1.2: EXEC DebugPrintNode --Value "next"
+END
+2: EXEC DebugPrintNode --Value "done"
+return
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn parse_if_else() {
         let chain = parse_v2(
             r#"
@@ -1861,7 +2273,7 @@ INPUT x:Any
 $result = 0.0
 1: IF eq(input.x, 0.0)
     $result = 0.0
-ELSE
+1.0: ELSE
     $result = input.x
 END
 RETURN result=$result
@@ -1979,9 +2391,9 @@ return
 input strings:Array[String]
 $result = ""
 $total = 0
-2: FOR input.strings
-    2.1: setvar result = text_concat($result, $item)
-    2.2: setvar total = add($total, $index)
+1: FOR input.strings
+    1.1: setvar result = text_concat($result, $item)
+    1.2: setvar total = add($total, $index)
 END
 return result=$result total=$total
 "#,
@@ -1997,23 +2409,23 @@ return result=$result total=$total
             .iter()
             .any(|node| node.node_type == "StringAppendNode"));
         assert!(blueprint.connections.iter().any(|connection| {
-            connection.source_node == "2" && connection.source_pin == "Item"
+            connection.source_node == "1" && connection.source_pin == "Item"
         }));
         assert!(blueprint.connections.iter().any(|connection| {
-            connection.source_node == "2" && connection.source_pin == "Index"
+            connection.source_node == "1" && connection.source_pin == "Index"
         }));
 
         let legacy = compile_chain_v2(
             r#"
 input strings:Array[String]
-2: FOR input.strings
+1: FOR input.strings
 END
-return item=2.Element
+return item=1.Element
 "#,
         )
         .unwrap();
         assert!(legacy.connections.iter().any(|connection| {
-            connection.source_node == "2" && connection.source_pin == "Item"
+            connection.source_node == "1" && connection.source_pin == "Item"
         }));
     }
 
@@ -2134,8 +2546,8 @@ input
 $total = 0
 1: setvar total = 0
 2: IF gt(3, 0)
-    2.1: FOR 1 TO 3
-        2.1.1: setvar total = add($total, $index)
+    2.1.1: FOR 1 TO 3
+        2.1.1.1: setvar total = add($total, $index)
     END
 END
 return result=$total

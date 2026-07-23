@@ -298,25 +298,70 @@ impl ChainDecompiler {
 
         // True 分支
         self.indent += 1;
-        self.id_gen.push_scope(&step_id);
+        self.id_gen.push_scope(&format!("{step_id}.1"));
         let mut true_next = self.follow_exec(&node.id, "True");
         self.decompile_exec_chain(&mut true_next, lines)?;
         self.id_gen.pop_scope();
         self.indent -= 1;
 
-        // False 分支
+        // False 链上的连续 BranchNode 平铺为 ELIF，最终普通链为 ELSE。
         let false_next = self.follow_exec(&node.id, "False");
-        if false_next.is_some() {
-            lines.push(format!("{}ELSE", self.indent_str()));
-            self.indent += 1;
-            self.id_gen.push_scope(&step_id);
-            let mut false_chain = false_next;
-            self.decompile_exec_chain(&mut false_chain, lines)?;
-            self.id_gen.pop_scope();
-            self.indent -= 1;
-        }
+        self.decompile_false_branches(&step_id, false_next, 2, lines)?;
 
         lines.push(format!("{}END", self.indent_str()));
+        Ok(())
+    }
+
+    fn decompile_false_branches(
+        &mut self,
+        root_id: &str,
+        next: Option<(String, String)>,
+        branch_index: usize,
+        lines: &mut Vec<String>,
+    ) -> Result<(), DecompileError> {
+        let Some((node_id, pin)) = next else {
+            return Ok(());
+        };
+        let node = self
+            .node_map
+            .get(&node_id)
+            .cloned()
+            .ok_or_else(|| DecompileError::new(format!("未找到节点 {node_id}")))?;
+
+        if node.node_type == "BranchNode" {
+            let branch_id = format!("{root_id}.{branch_index}");
+            self.step_map.insert(node.id.clone(), branch_id.clone());
+            let condition = self.resolve_data_input(&node.id, "Condition")?;
+            lines.push(format!(
+                "{}{}: ELIF {}",
+                self.indent_str(),
+                branch_id,
+                condition
+            ));
+
+            self.indent += 1;
+            self.id_gen.push_scope(&branch_id);
+            let mut true_next = self.follow_exec(&node.id, "True");
+            self.decompile_exec_chain(&mut true_next, lines)?;
+            self.id_gen.pop_scope();
+            self.indent -= 1;
+
+            return self.decompile_false_branches(
+                root_id,
+                self.follow_exec(&node.id, "False"),
+                branch_index + 1,
+                lines,
+            );
+        }
+
+        let else_id = format!("{root_id}.0");
+        lines.push(format!("{}{}: ELSE", self.indent_str(), else_id));
+        self.indent += 1;
+        self.id_gen.push_scope(&else_id);
+        let mut false_chain = Some((node_id, pin));
+        self.decompile_exec_chain(&mut false_chain, lines)?;
+        self.id_gen.pop_scope();
+        self.indent -= 1;
         Ok(())
     }
 
@@ -575,36 +620,9 @@ impl ChainDecompiler {
         if let Some(existing) = self.step_map.get(node_id) {
             return existing.clone();
         }
-        let id = self
-            .source_step(node_id)
-            .filter(|step| Self::is_step_id(step))
-            .or_else(|| {
-                if Self::is_step_id(node_id) {
-                    Some(node_id.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| self.id_gen.next_impure_id());
+        let id = self.id_gen.next_impure_id();
         self.step_map.insert(node_id.to_string(), id.clone());
         id
-    }
-
-    fn source_step(&self, node_id: &str) -> Option<String> {
-        self.node_map
-            .get(node_id)?
-            .properties
-            .get("source_script")?
-            .get("step")?
-            .as_str()
-            .map(str::to_string)
-    }
-
-    fn is_step_id(value: &str) -> bool {
-        !value.is_empty()
-            && value
-                .split('.')
-                .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
     }
 
     /// 判断节点是否为 pure（无 Exec 引脚）
@@ -787,10 +805,10 @@ $first = true
 $result = ""
 1: FOR input.items
     1.1: IF $first
-        1.1.1: setvar result = $item
-        1.1.2: setvar first = false
-    ELSE
-        1.2: setvar result = text_concat($result, text_concat(input.separator, $item))
+        1.1.1.1: setvar result = $item
+        1.1.1.2: setvar first = false
+    1.1.0: ELSE
+        1.1.0.1: setvar result = text_concat($result, text_concat(input.separator, $item))
     END
 END
 return result=$result
@@ -814,7 +832,33 @@ return result=$result
             !text.contains(".Item") && !text.contains(".Element"),
             "foreach binding should not decompile as step pin: {text}"
         );
+        assert!(text.contains("1.1.1.1: setvar"), "{text}");
+        assert!(text.contains("1.1.0: ELSE"), "{text}");
 
         compile_chain_v2(&text).expect("decompiled text should compile");
+    }
+
+    #[test]
+    fn test_roundtrip_flattens_false_branch_chain_as_elif() {
+        let original = r#"
+input first:bool second:bool
+$result = ""
+1: IF input.first
+    1.1.1: setvar result = "first"
+1.2: ELIF input.second
+    1.2.1: setvar result = "second"
+1.0: ELSE
+    1.0.1: setvar result = "fallback"
+END
+return result=$result
+"#;
+        let bp = compile_chain_v2(original).expect("first compile failed");
+        let text = decompile_chain(&bp).expect("decompile failed");
+
+        assert!(text.contains("1.2: ELIF"), "{text}");
+        assert!(text.contains("1.2.1: setvar"), "{text}");
+        assert!(text.contains("1.0: ELSE"), "{text}");
+        assert!(text.contains("1.0.1: setvar"), "{text}");
+        compile_chain_v2(&text).expect("decompiled ELIF text should compile");
     }
 }

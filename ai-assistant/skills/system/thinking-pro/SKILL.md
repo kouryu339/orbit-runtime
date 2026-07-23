@@ -47,148 +47,123 @@ tool_filter: "all"
 - 持久化目录能力只能由宿主通过其他角色或功能配置单独开放。
 - 脚本只能编排当前 Agent 已激活的工具；编译器会拒绝未激活或注册信息不完整的节点。
 
-## 临时脚本的构造顺序
+## 临时 Workflow 脚本语法
 
-先区分四种写法：脚本外直接调用工具是 `EXEC Tool ...`；脚本内调用外部工具是 `N: EXEC Tool ...`；Pure 是不带编号的函数表达式；变量写入是 `N: setvar ...`。`input` 和 `return` 只定义脚本边界，不是工具步骤。
+### 1. 整体结构
 
-### 1. 先给执行步骤编号
-
-- 顶层执行步骤按出现顺序写作 `1:`、`2:`、`3:`，不要省略编号。
-- 嵌套步骤使用父步骤编号继续编号，例如 `2.1:`、`2.2:`、`2.2.1:`。
-- 编号既表示执行顺序，也是引用该步骤输出的标识：`2.page_id` 表示第 2 步的 `page_id` 输出。
-- Pure 表达式本身不占执行步骤，不单独编号。
-
-### 2. 调用外部工具时保留完整 EXEC 语法
-
-Available Tools 中每个工具的说明已经给出工具名、参数和输出。先按照该工具声明组成正常调用：
+脚本按以下顺序组成：
 
 ```text
-EXEC ToolName --param value
+input a:num=1 b:String="a" c:bool
+
+$variable = literal
+
+1: EXEC ToolName --count input.a --label input.b --checked input.c
+2: setvar variable = 1.output_pin
+
+return output=$variable
 ```
 
-把它放进 Workflow 时，不改变工具名和参数语法，只在行首添加步骤编号：
-
-```text
-1: EXEC ToolName --param value
-```
-
-因此，Workflow 中引用任何外部工具都必须同时具有“步骤编号 + `EXEC`”。不得写成 `1: ToolName ...`，也不得把外部工具写成 `ToolName(...)`。工具结果不使用变量承接：不要写 `1: result = EXEC ToolName ...`，应直接调用并通过 `1.output_pin` 引用输出。`ToolName`、参数名和输出字段必须替换为当前 Available Tools 中真实声明的内容。
-
-`executeWorkflowScript` 只在脚本外用于提交整段脚本，不得写进它所执行的 Workflow 内部形成递归调用。
-
-### 3. Pure 表达式只计算数据
-
-Pure 表达式写成 `add(a, b)`、`trim(value)` 这类函数形式，只能出现在工具参数、条件、`setvar` 右侧或 `return` 值中。Pure 不写 `EXEC`，也不能代替外部工具。
-
-```text
-1: EXEC ToolName --title trim(input.title)
-return total=add(1.count, input.extra)
-```
-
-### 4. setvar 是特殊的有序写入步骤
-
-先用 `$name = literal` 声明变量；运行时写入必须带编号并写成：
-
-```text
-$saved = null
-1: setvar saved = input.value
-```
-
-`setvar` 不写 `EXEC`，只执行写入，也不产生 `1.Value` 等步骤输出。后续统一用 `$saved` 读取。
-
-### 5. 确定 input 与 return 边界
-
-- 第一条逻辑行只能有一条 `input ...`；多个输入必须写在同一行。
+- 开头至少有一条 `input`，结尾至少有一条 `return`；两者都允许没有字段。
+- 首选在一条 `input` 中用空格声明全部字段，例如 `input a:num=1 b:String="a" c:bool`，这样可以直接查看完整输入契约。
+- Runtime 兼容开头连续多条 `input` 并将其合并为同一个 Start 输入，但不要主动生成多行写法；字段名不可重复。
+- 多条 `return` 必须连续位于结尾，Runtime 将它们合并为同一个 End 输出；字段名不可重复，之后不能再有其它语句。
+- 一条 `input` 或 `return` 也可以用空格声明多个字段，不使用逗号。
 - 输入写作 `input name:Type` 或 `input name:Type=default`，引用写作 `input.name`。
-- String 默认值必须使用 `name:String="value"`。不得使用旧式括号写法 `name:String(=value)`，也不得写成未加引号的 `name:String=value`。
-- 最后一条逻辑行必须是 `return ...`；宿主需要的每个值都必须在这里显式返回。
-- 返回项写作 `return name=value other=2.pin`，项目之间使用空格，不使用逗号。
-- `input` 和 `return` 都允许没有字段，但不能省略这两条边界行。
+- 输入类型仅支持 `num`、`String`、`bool`、`Any` 和递归数组 `Array<T>`。例如 `Array<String>`、`Array<Array<num>>`、`Array<Any>`；不要声明其它类型。
+- `Any` 表示该输入可以接收任意已有字面量、引用或表达式结果，不代表可以发明新的对象字面量语法。
+- String 默认值写作 `name:String="value"`，不得写成 `name:String(=value)` 或 `name:String=value`。
 
-一个完整骨架是：
+### 2. 语句类型
 
-```text
-input value:String
-1: EXEC ToolName --input_pin input.value
-return output=1.output_pin
-```
+- 脚本外直接调用工具是 `EXEC Tool ...`；脚本内调用外部工具是 `N: EXEC Tool ...`。
+- 外部工具：`N: EXEC ToolName --param value`。必须同时具有编号和 `EXEC`。
+- 变量写入：`N: setvar name = expression`。不写 `EXEC`，不产生可引用的步骤输出。
+- 条件：`N: IF condition`、`N.2: ELIF condition`、`N.0: ELSE`，以无编号的 `END` 结束；更多 ELIF 依次使用 `N.3`、`N.4`。
+- 循环：`N: FOR array` 或 `N: FOR first TO last`，以无编号的 `END` 结束。范围两端都包含在内。
+- 跳出循环：`N: BREAK`，只能位于循环体内。
+- Pure 表达式：`add(a, b)`、`trim(value)` 等，只能嵌入参数、条件、`setvar` 右侧或 `return` 值，不单独成为执行语句。
 
-多行脚本先放入响应级变量，再调用当前开放的执行工具：
+工具名、参数名和输出字段必须来自当前 Available Tools。不得省略 `EXEC`，不得写成 `N: result = EXEC ToolName ...`，也不得把外部工具写成 `ToolName(...)`。调用结果直接通过 `N.output_pin` 引用。
 
-```text
-$script = "
-input value:String
-1: EXEC ToolName --input_pin input.value
-return output=1.output_pin
-"
-EXEC executeWorkflowScript --script $script --input.value "example" --trace true
-```
+### 3. 编号
 
-上例中的 `ToolName`、`input_pin` 和 `output_pin` 只是结构占位，必须替换为 Available Tools 中真实声明的名称。
-
-当前工具接收完整脚本文本时，不得省略工具声明中必需的 `script` 参数。可以直接使用合法的内联 `--script "..."`，也可以先完成 `$script` 多行变量，再把该变量作为一个参数传入。工具执行器负责保留其中的换行和内部双引号。多行变量形式例如：
-
-```text
-$script = "
-input visibility:String="好友可见"
-1: EXEC ExistingTool --selector "button[data-action='publish']" --visibility input.visibility
-return output=1.output_pin
-"
-EXEC ScriptReceivingTool --script $script
-```
-
-调用任何要求脚本的工具时，先检查调用行已经提供 `--script` 参数，再输出 `EXEC`。`ScriptReceivingTool` 只是结构占位，必须替换为当前 Available Tools 中真实存在的工具。
-
-### 6. 其他字面量规则
-
-- 参数值先按写法确定语义：
-  - 加引号的内容一律是固定 `String`，例如 `"hello"`。`"input.title"`、`"$name"`、`"1.page_id"` 都只是文本，不会形成数据连接。
-  - 不加引号的整数或小数是 `num`。
-  - `true`、`false` 是 bool；目标参数是 bool 时也允许用 `1` 表示 true、`0` 表示 false。
-  - `[...]` 是数组；常量数组如 `["a", "b"]`，动态数组如 `[input.video_path, $backup_path, 1.path]`。
-  - `input.name` 引用 Workflow 输入，`$name` 引用变量，`N.pin` 引用前置步骤输出。这三类引用都不能加引号。
-  - `null` 表示空值。
-- 只要意图是引用输入、变量或前置步骤输出，就必须裸写 `input.name`、`$name` 或 `N.pin`。正确：`--page_id 1.page_id`；错误：`--page_id "1.page_id"`，后者只会传入固定字符串 `"1.page_id"`，不会生成数据连接。
-- 数组项使用逗号分隔，可以混合固定值和动态引用；动态项会生成真实数据连接。
-- 工具的长文本参数可以从起始引号换行，直到独占一行的 `"` 结束。
-- 空行和以 `#` 开头的整行注释会被忽略。
-
-控制流使用显式 `END`：
+- 所有执行语句都必须编号；`input`、`return`、`$var = literal`、Pure 表达式和 `END` 不编号。
+- 顶层步骤为 `1`、`2`、`3`，必须唯一、连续，不可跳号，不得包含字母或内部标记。
+- 嵌套编号只在进入分支或循环体时出现。
+- IF 分支内步骤：`当前 IF 编号.分支编码.分支内步骤序号`。首个真分支编码为 `1`，ELIF 依次为 `2`、`3`，ELSE 为 `0`。
+- FOR 循环体步骤：`当前 FOR 编号.循环体步骤序号`。
+- 分支内和循环体内的步骤序号都从 `1` 开始。嵌套控制节点先占用当前层的一个步骤编号，再以该完整编号继续套用相同规则。
+- 编号也是输出引用地址，例如 `2.page_id` 表示第 2 步的 `page_id` 输出。
 
 ```text
 1: IF input.condition
-    1.1: EXEC ToolA --value input.value
-ELIF input.other_condition
-    1.2: EXEC ToolB --value input.value
-ELSE
-    1.3: EXEC ToolC --value input.value
+    1.1.1: EXEC ToolA --value input.value
+1.2: ELIF input.other_condition
+    1.2.1: EXEC ToolB --value input.value
+1.0: ELSE
+    1.0.1: EXEC ToolC --value input.value
 END
 
 2: FOR input.items
     2.1: EXEC ToolD --value $item
+    2.2: FOR input.children
+        2.2.1: EXEC ToolE --value $item
+    END
 END
+
+3: EXEC ToolF
 ```
 
-- foreach 中的 `$item` 和 `$index` 只属于当前最内层循环；进入嵌套循环后，外层同名绑定会被遮蔽，退出后恢复。
-- 内层循环需要外层项时，先在循环外声明变量，再在外层循环中用 `setvar` 提升；不要尝试从内层直接引用外层 `$item`。
-- `BREAK` 只能写在循环体内。
-- 范围循环写作 `N: FOR input.first TO input.last`，起止值都包含在内。
-- `$name = literal` 声明变量及静态初值；数字变量的公开类型是 `num`。
-- `$name` 读取该变量的当前值，编译器会生成特殊的 `GetVarNode`；不要把读取写成普通 Pure 函数。
-- `N: setvar name = expression` 更新已声明变量或 workflow input，编译器会生成带执行顺序的 `SetVarNode`。
-- `setvar` 只执行写入，不产生步骤数据输出；后续值统一通过 `$name` 读取。
+### 4. 值与引用
 
-嵌套循环提升外层项：
+- 脚本值只由受支持类型的字面量、数组、动态引用和 Pure 表达式组成。
+- `"text"`：固定 String。加引号的 `"input.title"`、`"$name"`、`"1.page_id"` 也只是固定文本。
+- `12`、`3.5`：`num`。
+- `true`、`false`：bool；bool 参数也接受 `1` 和 `0`。
+- `null`：空值。
+- `["a", "b"]`：常量数组；`[input.path, $backup, 1.path]`：包含动态引用的数组。
+- `input.name`：Workflow 输入；`$name`：变量当前值；`N.pin`：前置步骤输出。
+- `add(a, b)`：Pure 表达式，可以嵌套。
+
+引用输入、变量或步骤输出时不能加引号。正确：`--page_id 1.page_id`；错误：`--page_id "1.page_id"`。数组项使用逗号分隔，可以混合字面量和动态引用。长字符串可以从起始引号换行，直到独占一行的 `"` 结束。空行和以 `#` 开头的整行注释会被忽略。
+
+### 5. 变量与循环作用域
+
+- `$name = literal` 声明变量和静态初值；数字统一写作 `num`。
+- `$name` 读取变量当前值，编译器生成 `GetVarNode`；`N: setvar name = expression` 更新已声明变量或 Workflow 输入，编译器生成 `SetVarNode`。
+- `setvar` 只写入，不产生步骤数据输出，后续统一使用 `$name` 读取。
+- foreach 的 `$item` 和 `$index` 只属于当前最内层循环；嵌套循环会暂时遮蔽外层同名绑定。
+- 内层循环需要外层项时，先声明变量，再在外层循环中用 `setvar` 提升。
 
 ```text
+input groups:Array<Any>
 $outer_item = null
+
 1: FOR input.groups
     1.1: setvar outer_item = $item
     1.2: FOR $item
         1.2.1: EXEC ExistingTool --outer $outer_item --inner $item
     END
 END
+
+return
 ```
+
+### 6. 提交脚本
+
+`executeWorkflowScript` 位于脚本外，用于提交并立即执行完整临时脚本，不得在被执行的 Workflow 内递归调用。调用时必须提供 `script` 参数。可以直接使用合法的内联 `--script "..."`，也可以先声明多行变量；工具执行器会保留脚本中的换行和内部双引号。
+
+```text
+$script = "
+input value:String label:String=""
+1: EXEC ExistingTool --value input.value
+return output=1.output_pin
+"
+EXEC executeWorkflowScript --script $script --input.value "example" --trace true
+```
+
+示例中的工具名、参数名和输出字段必须替换为当前 Available Tools 中真实声明的内容。
 
 Pure 表达式只用于连接工具数据，不写成 `EXEC`。类型不会自动随意转换；当前固定契约为：
 

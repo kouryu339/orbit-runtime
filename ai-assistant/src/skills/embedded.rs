@@ -117,6 +117,15 @@ mod tests {
         assert!(!thinking_pro.instructions.contains("N.Value"));
         assert!(thinking_pro.instructions.contains("GetVarNode"));
         assert!(thinking_pro.instructions.contains("SetVarNode"));
+        assert!(thinking_pro
+            .instructions
+            .contains("首选在一条 `input` 中用空格声明全部字段"));
+        assert!(thinking_pro
+            .instructions
+            .contains("input a:num=1 b:String=\"a\" c:bool"));
+        assert!(thinking_pro
+            .instructions
+            .contains("输入类型仅支持 `num`、`String`、`bool`、`Any` 和递归数组 `Array<T>`"));
         assert!(thinking_pro.instructions.contains("$outer_item"));
         assert!(thinking_pro.instructions.contains("最内层循环"));
         assert!(thinking_pro
@@ -124,16 +133,16 @@ mod tests {
             .contains("脚本内调用外部工具是 `N: EXEC Tool ...`"));
         assert!(thinking_pro
             .instructions
-            .contains("不要写 `1: result = EXEC ToolName ...`"));
+            .contains("不得写成 `N: result = EXEC ToolName ...`"));
         assert!(thinking_pro
             .instructions
-            .contains("不得写进它所执行的 Workflow 内部形成递归调用"));
+            .contains("不得在被执行的 Workflow 内递归调用"));
         assert!(thinking_pro
             .instructions
-            .contains("`\"input.title\"`、`\"$name\"`、`\"1.page_id\"` 都只是文本"));
+            .contains("加引号的 `\"input.title\"`、`\"$name\"`、`\"1.page_id\"` 也只是固定文本"));
         assert!(thinking_pro
             .instructions
-            .contains("[input.video_path, $backup_path, 1.path]"));
+            .contains("[input.path, $backup, 1.path]"));
         assert!(thinking_pro
             .instructions
             .contains("正确：`--page_id 1.page_id`；错误：`--page_id \"1.page_id\"`"));
@@ -142,7 +151,7 @@ mod tests {
             .contains("可以直接使用合法的内联 `--script \"...\"`"));
         assert!(thinking_pro
             .instructions
-            .contains("不得使用旧式括号写法 `name:String(=value)`"));
+            .contains("不得写成 `name:String(=value)`"));
         assert!(!thinking_pro.instructions.contains(":i64"));
         assert!(!thinking_pro.instructions.contains(":f64"));
         assert!(!thinking_pro.instructions.contains("first(array)"));
