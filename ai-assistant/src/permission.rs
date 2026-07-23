@@ -168,8 +168,10 @@ impl PermissionBroker {
             ToolPermissionDecision::Allow => "allow",
             ToolPermissionDecision::Deny => "deny",
         };
-        self.publish_resolution(&entry.request, resolution).await;
+        // Wake the executing tool before notifying observers. Snapshot and audit
+        // handlers must not be able to stall an already-approved execution.
         let _ = entry.sender.send(decision);
+        self.publish_resolution(&entry.request, resolution).await;
         true
     }
 
@@ -250,7 +252,9 @@ pub fn denied_tool_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use corework::event::InMemoryEventBus;
+    use corework::error::Result as CoreworkResult;
+    use corework::event::{EventHandler, InMemoryEventBus};
+    use tokio::sync::Notify;
 
     fn request(call_id: &str) -> PendingToolPermission {
         PendingToolPermission {
@@ -288,6 +292,70 @@ mod tests {
         assert_eq!(waiting.await.unwrap(), PermissionOutcome::Allowed);
         assert!(broker.pending().await.is_empty());
         assert!(!broker.resolve("call-1", ToolPermissionDecision::Deny).await);
+    }
+
+    struct BlockingResolutionObserver {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl EventHandler for BlockingResolutionObserver {
+        async fn handle(&self, _event: &BaseEvent) -> CoreworkResult<()> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "BlockingResolutionObserver"
+        }
+    }
+
+    #[tokio::test]
+    async fn resolution_observers_cannot_stall_approved_tool_execution() {
+        let bus = Arc::new(InMemoryEventBus::new());
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        bus.subscribe(
+            crate::events::types::TOOL_PERMISSION_RESOLVED.to_string(),
+            Arc::new(BlockingResolutionObserver {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            }),
+        )
+        .await
+        .unwrap();
+        let broker = Arc::new(PermissionBroker::new(
+            "conversation-1",
+            ToolPermissionPolicy::default(),
+            bus,
+        ));
+        let waiting = {
+            let broker = Arc::clone(&broker);
+            tokio::spawn(async move { broker.request(request("call-blocked-observer")).await })
+        };
+        while broker.pending().await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let resolving = {
+            let broker = Arc::clone(&broker);
+            tokio::spawn(async move {
+                broker
+                    .resolve("call-blocked-observer", ToolPermissionDecision::Allow)
+                    .await
+            })
+        };
+
+        entered.notified().await;
+        let outcome = tokio::time::timeout(Duration::from_millis(100), waiting)
+            .await
+            .expect("approved tool stayed blocked behind an event observer")
+            .unwrap();
+        assert_eq!(outcome, PermissionOutcome::Allowed);
+
+        release.notify_one();
+        assert!(resolving.await.unwrap());
     }
 
     #[test]

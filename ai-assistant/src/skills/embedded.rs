@@ -119,6 +119,15 @@ mod tests {
         assert!(thinking_pro.instructions.contains("SetVarNode"));
         assert!(thinking_pro.instructions.contains("$outer_item"));
         assert!(thinking_pro.instructions.contains("最内层循环"));
+        assert!(thinking_pro
+            .instructions
+            .contains("脚本内调用外部工具是 `N: EXEC Tool ...`"));
+        assert!(thinking_pro
+            .instructions
+            .contains("不要写 `1: result = EXEC ToolName ...`"));
+        assert!(thinking_pro
+            .instructions
+            .contains("不得写进它所执行的 Workflow 内部形成递归调用"));
         assert!(!thinking_pro.instructions.contains(":i64"));
         assert!(!thinking_pro.instructions.contains(":f64"));
         assert!(!thinking_pro.instructions.contains("first(array)"));

@@ -179,6 +179,16 @@ impl Parser {
 
         let (step_id, rest) = split_step_prefix(content);
 
+        if starts_with_keyword(rest, "input") {
+            return Err(ChainError::of_kind(
+                lineno,
+                ChainErrorKind::Syntax,
+                format!(
+                    "第 {lineno} 行不能再次声明 INPUT。Workflow 只能有一条 INPUT 逻辑行；多个输入请写在同一行，例如：`input video_path:String title:String=\"\" description:String=\"\"`"
+                ),
+            ));
+        }
+
         // 关键字优先
         if rest == "BREAK" {
             if self.loop_depth == 0 {
@@ -405,8 +415,9 @@ fn parse_input_decl(content: &str, lineno: usize) -> ChainResult<Step> {
         });
     }
 
+    let chunks = normalize_input_chunks(tokenize_chunks(rest), lineno)?;
     let mut steps_out = Vec::new();
-    for raw in tokenize_chunks(rest) {
+    for raw in chunks {
         let part = raw.trim();
         if part.is_empty() {
             continue;
@@ -450,6 +461,54 @@ fn parse_input_decl(content: &str, lineno: usize) -> ChainResult<Step> {
         return Ok(steps_out.into_iter().next().unwrap());
     }
     Ok(Step::Block(steps_out))
+}
+
+fn normalize_input_chunks(chunks: Vec<String>, lineno: usize) -> ChainResult<Vec<String>> {
+    let mut normalized = Vec::new();
+    let mut index = 0;
+    while index < chunks.len() {
+        let mut current = chunks[index].clone();
+        if current == "=" {
+            return Err(ChainError::of_kind(
+                lineno,
+                ChainErrorKind::Syntax,
+                "INPUT 默认值的 `=` 前缺少字段声明",
+            ));
+        }
+
+        if current.ends_with('=') {
+            let value = chunks.get(index + 1).ok_or_else(|| {
+                ChainError::of_kind(
+                    lineno,
+                    ChainErrorKind::Syntax,
+                    "INPUT 默认值的 `=` 后缺少值",
+                )
+            })?;
+            current.push_str(value);
+            index += 2;
+        } else if chunks.get(index + 1).is_some_and(|next| next == "=") {
+            let value = chunks.get(index + 2).ok_or_else(|| {
+                ChainError::of_kind(
+                    lineno,
+                    ChainErrorKind::Syntax,
+                    "INPUT 默认值的 `=` 后缺少值",
+                )
+            })?;
+            current.push('=');
+            current.push_str(value);
+            index += 3;
+        } else if chunks
+            .get(index + 1)
+            .is_some_and(|next| next.starts_with('='))
+        {
+            current.push_str(&chunks[index + 1]);
+            index += 2;
+        } else {
+            index += 1;
+        }
+        normalized.push(current);
+    }
+    Ok(normalized)
 }
 
 /// 解析 RETURN：`RETURN [field=val ...]`（空格分隔）
@@ -517,7 +576,7 @@ fn parse_assignment(step_id: Option<String>, rest: &str, lineno: usize) -> Chain
     })
 }
 
-/// 解析普通节点调用：`[N:] EXEC NodeType --A val --B val ...`
+/// 解析普通节点调用：`N: EXEC NodeType --A val --B val ...`
 fn parse_node_call_line(step_id: Option<String>, rest: &str, lineno: usize) -> ChainResult<Step> {
     if let Some(setvar) = strip_keyword(rest, "setvar") {
         let step_id = step_id.ok_or_else(|| {
@@ -532,11 +591,32 @@ fn parse_node_call_line(step_id: Option<String>, rest: &str, lineno: usize) -> C
         });
     }
 
+    if let Some((alias, expression)) = rest.split_once('=') {
+        if strip_keyword(expression.trim(), "exec").is_some() {
+            let step = step_id.as_deref().unwrap_or("N");
+            return Err(ChainError::of_kind(
+                lineno,
+                ChainErrorKind::Syntax,
+                format!(
+                    "外部工具结果不能赋值给别名 `{}`。请直接写 `{step}: EXEC Tool --param value`，并通过 `{step}.pin` 引用该步骤的输出",
+                    alias.trim()
+                ),
+            ));
+        }
+    }
+
     let call = strip_keyword(rest, "exec").ok_or_else(|| {
         ChainError::of_kind(
             lineno,
             ChainErrorKind::Syntax,
-            "步骤调用必须使用 `N: EXEC Tool --param value`",
+            "外部工具步骤必须使用 `N: EXEC Tool --param value`；请确认该工具已激活，并保持工具声明中的参数名不变",
+        )
+    })?;
+    let step_id = step_id.ok_or_else(|| {
+        ChainError::of_kind(
+            lineno,
+            ChainErrorKind::Syntax,
+            "外部工具步骤缺少编号。请在完整 `EXEC` 调用前添加顺序编号，例如：`1: EXEC Tool --param value`",
         )
     })?;
     let chunks = tokenize_chunks(call);
@@ -560,7 +640,7 @@ fn parse_node_call_line(step_id: Option<String>, rest: &str, lineno: usize) -> C
     let inputs = parse_call_args(&chunks[1..], &node_name, lineno)?;
     Ok(Step::Node {
         line: lineno,
-        step_id,
+        step_id: Some(step_id),
         node_type: node_name,
         inputs,
     })
@@ -614,6 +694,16 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
             lineno,
             ChainErrorKind::Syntax,
             "值为空",
+        ));
+    }
+
+    if s.starts_with('[') {
+        return Err(ChainError::of_kind(
+            lineno,
+            ChainErrorKind::Syntax,
+            format!(
+                "当前 Workflow 脚本不支持内联数组构造 `{s}`。请将输入声明为 `Array[String]` 等数组类型，然后直接引用输入，例如：`input files:Array[String]` 与 `input.files`"
+            ),
         ));
     }
 
@@ -1203,6 +1293,74 @@ RETURN result=add(3.0, 4.0)
         .unwrap();
         // 至少 3 个 step：Input, Return, 中间没有
         assert!(chain.steps.len() >= 2, "{:#?}", chain);
+    }
+
+    #[test]
+    fn repeated_input_reports_the_single_line_rule() {
+        let error =
+            parse_v2("input video_path:String\ninput title:String=\"\"\nreturn").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("不能再次声明 INPUT"), "{message}");
+        assert!(message.contains("只能有一条 INPUT 逻辑行"), "{message}");
+        assert!(message.contains("title:String=\"\""), "{message}");
+    }
+
+    #[test]
+    fn external_tool_requires_a_step_number() {
+        let error = parse_v2("input\nEXEC BrowserOpenPage --url \"https://example.com\"\nreturn")
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("缺少编号"), "{message}");
+        assert!(message.contains("1: EXEC Tool"), "{message}");
+    }
+
+    #[test]
+    fn external_tool_result_cannot_be_assigned_to_an_alias() {
+        let error = parse_v2(
+            "input\n1: upload_page = EXEC BrowserOpenPage --url \"https://example.com\"\nreturn",
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("不能赋值给别名 `upload_page`"),
+            "{message}"
+        );
+        assert!(
+            message.contains("1.page_id") || message.contains("1.pin"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn input_defaults_allow_spaces_around_equals() {
+        let blueprint = compile_chain_v2(
+            "input title:String = \"\" description:String= \"demo\" visibility:String =\"private\"\nreturn",
+        )
+        .unwrap();
+        let start = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .unwrap();
+        let output_names = start
+            .pins
+            .iter()
+            .filter(|pin| pin.kind == "DataOutput")
+            .map(|pin| pin.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(output_names, vec!["title", "description", "visibility"]);
+    }
+
+    #[test]
+    fn inline_array_reports_supported_input_shape() {
+        let error = parse_v2(
+            "input video_path:String\n1: EXEC BrowserSetInputFiles --files [input.video_path]\nreturn",
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("不支持内联数组构造"), "{message}");
+        assert!(message.contains("input files:Array[String]"), "{message}");
+        assert!(message.contains("input.files"), "{message}");
     }
 
     #[test]

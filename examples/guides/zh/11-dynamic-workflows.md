@@ -9,7 +9,7 @@ draft = runtime.create_workflow_draft({
     "schema": "agent-runtime-workflow-resource/v1",
     "id": "open-page",
     "name": "Open page",
-    "script": "input url\n1: BrowserOpenPage --url $url\nreturn page_id=1.page_id url=1.url",
+    "script": "input url:String\n1: EXEC BrowserOpenPage --url input.url\nreturn page_id=1.page_id url=1.url",
 })
 
 runtime.compile_workflow_draft(draft["id"])
@@ -34,7 +34,7 @@ Draft 不可信，不能走生产执行入口；测试草稿使用
 
 ```python
 execution = runtime.execute_workflow_script(
-    script="input url\n1: BrowserOpenPage --url $url\nreturn page_id=1.page_id",
+    script="input url:String\n1: EXEC BrowserOpenPage --url input.url\nreturn page_id=1.page_id",
     inputs={"url": "https://example.com"},
 )
 ```

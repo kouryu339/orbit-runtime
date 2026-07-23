@@ -1169,6 +1169,16 @@ export class AgentRuntimeConversationElement
         toolCallId,
         decision,
       });
+      if (result.accepted) {
+        // Runtime snapshots remain authoritative; this only closes the visual
+        // gap while the resolved snapshot travels over SSE.
+        this.state = {
+          ...this.state,
+          pendingPermissions: this.state.pendingPermissions.filter(
+            (permission) => permission.tool_call_id !== toolCallId,
+          ),
+        };
+      }
       this.emit('agent-conversation-tool-permission', {
         conversationId,
         toolCallId,

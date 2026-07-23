@@ -216,6 +216,9 @@ describe('AgentRuntimeConversationElement', () => {
         decision: 'allow',
       });
     });
+    await element.updateComplete;
+    expect(element.state.pendingPermissions).toEqual([]);
+    expect(element.shadowRoot?.querySelector('[part="permission-shelf"]')).toBeNull();
   });
 
   it('renders multiple permission requests in the composer shelf', async () => {

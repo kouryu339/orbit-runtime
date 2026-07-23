@@ -47,34 +47,86 @@ tool_filter: "all"
 - 持久化目录能力只能由宿主通过其他角色或功能配置单独开放。
 - 脚本只能编排当前 Agent 已激活的工具；编译器会拒绝未激活或注册信息不完整的节点。
 
-## 调用形式
+## 临时脚本的构造顺序
 
-工具调用使用独占一行的裸文本：
+先区分四种写法：脚本外直接调用工具是 `EXEC Tool ...`；脚本内调用外部工具是 `N: EXEC Tool ...`；Pure 是不带编号的函数表达式；变量写入是 `N: setvar ...`。`input` 和 `return` 只定义脚本边界，不是工具步骤。
+
+### 1. 先给执行步骤编号
+
+- 顶层执行步骤按出现顺序写作 `1:`、`2:`、`3:`，不要省略编号。
+- 嵌套步骤使用父步骤编号继续编号，例如 `2.1:`、`2.2:`、`2.2.1:`。
+- 编号既表示执行顺序，也是引用该步骤输出的标识：`2.page_id` 表示第 2 步的 `page_id` 输出。
+- Pure 表达式本身不占执行步骤，不单独编号。
+
+### 2. 调用外部工具时保留完整 EXEC 语法
+
+Available Tools 中每个工具的说明已经给出工具名、参数和输出。先按照该工具声明组成正常调用：
 
 ```text
 EXEC ToolName --param value
 ```
 
-多行脚本先放入响应级变量，再单行调用执行工具：
+把它放进 Workflow 时，不改变工具名和参数语法，只在行首添加步骤编号：
+
+```text
+1: EXEC ToolName --param value
+```
+
+因此，Workflow 中引用任何外部工具都必须同时具有“步骤编号 + `EXEC`”。不得写成 `1: ToolName ...`，也不得把外部工具写成 `ToolName(...)`。工具结果不使用变量承接：不要写 `1: result = EXEC ToolName ...`，应直接调用并通过 `1.output_pin` 引用输出。`ToolName`、参数名和输出字段必须替换为当前 Available Tools 中真实声明的内容。
+
+`executeWorkflowScript` 只在脚本外用于提交整段脚本，不得写进它所执行的 Workflow 内部形成递归调用。
+
+### 3. Pure 表达式只计算数据
+
+Pure 表达式写成 `add(a, b)`、`trim(value)` 这类函数形式，只能出现在工具参数、条件、`setvar` 右侧或 `return` 值中。Pure 不写 `EXEC`，也不能代替外部工具。
+
+```text
+1: EXEC ToolName --title trim(input.title)
+return total=add(1.count, input.extra)
+```
+
+### 4. setvar 是特殊的有序写入步骤
+
+先用 `$name = literal` 声明变量；运行时写入必须带编号并写成：
+
+```text
+$saved = null
+1: setvar saved = input.value
+```
+
+`setvar` 不写 `EXEC`，只执行写入，也不产生 `1.Value` 等步骤输出。后续统一用 `$saved` 读取。
+
+### 5. 确定 input 与 return 边界
+
+- 第一条逻辑行只能有一条 `input ...`；多个输入必须写在同一行。
+- 输入写作 `input name:Type` 或 `input name:Type=default`，引用写作 `input.name`。
+- 最后一条逻辑行必须是 `return ...`；宿主需要的每个值都必须在这里显式返回。
+- 返回项写作 `return name=value other=2.pin`，项目之间使用空格，不使用逗号。
+- `input` 和 `return` 都允许没有字段，但不能省略这两条边界行。
+
+一个完整骨架是：
+
+```text
+input value:String
+1: EXEC ToolName --input_pin input.value
+return output=1.output_pin
+```
+
+多行脚本先放入响应级变量，再调用当前开放的执行工具：
 
 ```text
 $script = "
 input value:String
-1: EXEC ExistingTool --input_pin input.value
+1: EXEC ToolName --input_pin input.value
 return output=1.output_pin
 "
 EXEC executeWorkflowScript --script $script --input.value "example" --trace true
 ```
 
-`ExistingTool`、`input_pin` 和 `output_pin` 只是结构占位，必须替换为 Available Tools 中真实声明的名称。
+上例中的 `ToolName`、`input_pin` 和 `output_pin` 只是结构占位，必须替换为 Available Tools 中真实声明的名称。
 
-## 最小脚本语法
+### 6. 其他字面量规则
 
-- 第一条逻辑行必须是 `input ...`，最后一条逻辑行必须是 `return ...`；二者都允许为空。
-- 输入写作 `input name:Type` 或 `input name:Type=default`，引用写作 `input.name`。
-- 工具步骤写作 `N: EXEC ToolName --pin value`；动态工具优先使用具名引脚。
-- 前序输出写作 `N.pin`，嵌套步骤输出写作 `N.M.pin`。
-- 返回值写作 `return name=value other=2.pin`，项目之间使用空格，不使用逗号。
 - 字符串使用引号；数字、`true`、`false`、`null` 直接书写。
 - 工具的长文本参数可以从起始引号换行，直到独占一行的 `"` 结束。
 - 空行和以 `#` 开头的整行注释会被忽略。
