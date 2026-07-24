@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use corework::event::{BaseEvent, EventHandler};
 use corework::rpc_tool::RuntimeToolMetadata;
 use corework::workflow::registry::NodeRegistry;
+use corework::workflow::workflows::WorkflowExecutionContext;
 use corework::workflow::WorkflowsModule;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1990,6 +1991,10 @@ fn studio_run_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
     };
     let workflows = Arc::clone(&state.workflows);
     let workflow_id = selection.workflow_id.clone();
+    let execution_context = WorkflowExecutionContext::new(
+        state.editor_conversation_id.clone(),
+        state.editor_agent_id.clone(),
+    );
     let started = std::time::Instant::now();
     let result = run_short_tokio(async move {
         let resource = workflows.read_workflow_resource(&workflow_id)?;
@@ -1997,12 +2002,20 @@ fn studio_run_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
             corework::workflow::workflows::WorkflowResourceKind::Draft => {
                 let blueprint = workflows.draft_blueprint(&workflow_id)?;
                 workflows
-                    .execute_from_blueprint_outcome(blueprint, inputs)
+                    .execute_from_blueprint_outcome_with_context(
+                        blueprint,
+                        inputs,
+                        &execution_context,
+                    )
                     .await?
             }
             corework::workflow::workflows::WorkflowResourceKind::Registered => {
                 workflows
-                    .execute_registered_outcome(&workflow_id, inputs)
+                    .execute_registered_outcome_with_context(
+                        &workflow_id,
+                        inputs,
+                        &execution_context,
+                    )
                     .await?
             }
         };

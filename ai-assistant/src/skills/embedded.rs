@@ -148,7 +148,13 @@ mod tests {
             .contains("正确：`--page_id 1.page_id`；错误：`--page_id \"1.page_id\"`"));
         assert!(thinking_pro
             .instructions
-            .contains("可以直接使用合法的内联 `--script \"...\"`"));
+            .contains("优先把完整脚本声明为多行 `$script` 变量"));
+        assert!(thinking_pro
+            .instructions
+            .contains("不要额外添加 JSON 或工具参数转义层"));
+        assert!(thinking_pro
+            .instructions
+            .contains("才需要为该最外层双引号字符串转义一次内部 `\\\"` 和换行"));
         assert!(thinking_pro
             .instructions
             .contains("不得写成 `name:String(=value)`"));

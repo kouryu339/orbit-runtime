@@ -890,6 +890,21 @@ async fn resolve_rpc_tool_host_context(ctx: &Context) -> Result<Value> {
 }
 
 async fn resolve_rpc_tool_conversation_id(ctx: &Context) -> Result<String> {
+    if let Some(conversation_id) = ctx
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(conversation_id.to_string());
+    }
+    if let Some(conversation_id) = ctx
+        .get::<String>("conversation_id")?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(conversation_id);
+    }
     for key in [
         "conversation_id",
         "parent_conversation_id",
@@ -920,6 +935,13 @@ async fn resolve_rpc_tool_conversation_id(ctx: &Context) -> Result<String> {
 }
 
 async fn resolve_rpc_tool_agent_id(ctx: &Context) -> Result<String> {
+    if let Some(agent_id) = ctx
+        .get::<String>("agent_id")?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(agent_id);
+    }
     for key in ["agent_id", "runtime:agent_id", "scope:agent_id", "agent:id"] {
         if let Some(value) = ctx.cache.get_raw(key).await? {
             if let Some(agent_id) = value.as_str().map(str::trim) {
@@ -1505,7 +1527,7 @@ fn required_string(args: &Value, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::InMemoryCache;
+    use crate::cache::{Cache, InMemoryCache};
     use crate::event::InMemoryEventBus;
     use crate::monitoring::NoopTelemetry;
     use crate::rpc_proto::v1::{ToolOutputField, ToolParameter};
@@ -1546,6 +1568,39 @@ mod tests {
             service: "corework-agent-tool/v1".to_string(),
             method: "Execute".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn rpc_identity_prefers_per_execution_context_over_shared_cache() {
+        let cache = Arc::new(InMemoryCache::new());
+        cache
+            .set_raw(
+                "conversation_id",
+                serde_json::json!("shared-conversation"),
+                None,
+            )
+            .await
+            .unwrap();
+        cache
+            .set_raw("agent_id", serde_json::json!("shared-agent"), None)
+            .await
+            .unwrap();
+        let ctx = Context::new(
+            cache,
+            Arc::new(InMemoryEventBus::new()),
+            Arc::new(NoopTelemetry),
+        )
+        .with_conversation_id("workflow-conversation");
+        ctx.set("agent_id", "workflow-agent").unwrap();
+
+        assert_eq!(
+            resolve_rpc_tool_conversation_id(&ctx).await.unwrap(),
+            "workflow-conversation"
+        );
+        assert_eq!(
+            resolve_rpc_tool_agent_id(&ctx).await.unwrap(),
+            "workflow-agent"
+        );
     }
 
     #[tokio::test]

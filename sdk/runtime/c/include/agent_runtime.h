@@ -114,8 +114,9 @@ AGENT_RUNTIME_EXPORT int agent_runtime_start_v1(AgentRuntimeHandle handle);
  * ABI 1.3 workflow commands:
  * - workflow.create / workflow.read / workflow.update / workflow.delete / workflow.list
  * - workflow.compile for a draft and workflow.register to promote a draft
- * - workflow.execute for registered production or explicit draft test execution
- * - workflow.execute_script for temporary script text
+ * - workflow.execute for registered production or explicit draft test execution;
+ *   conversation_id and agent_id may be supplied together as execution identity
+ * - workflow.execute_script for temporary script text with the same optional identity pair
  * - runtime.get_workflow_node_definitions for the registered graph-node catalog
  * Command availability must still be checked through capabilities JSON.
  */

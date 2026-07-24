@@ -11,7 +11,7 @@ pub use catalog::{
     WorkflowResourceKind, WorkflowResourceSummary, WorkflowResourceView, WorkflowValidation,
     WORKFLOW_EXECUTION_COMPLETED_EVENT, WORKFLOW_RESOURCE_CHANGED_EVENT,
 };
-pub use executor::WorkflowsModule;
+pub use executor::{WorkflowExecutionContext, WorkflowsModule};
 
 use std::sync::OnceLock;
 

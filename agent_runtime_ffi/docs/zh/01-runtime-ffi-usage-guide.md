@@ -173,8 +173,8 @@ LLM 和 Agent Cluster 三类注册配置表达。
 | `workflow.compile` | `id` | Draft 校验与 blueprint |
 | `workflow.delete` | `id`, `expected_revision?` | 删除的 workflow |
 | `workflow.list` | `kind?` | workflow 目录 |
-| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?` | code + trace + 可选 result |
-| `workflow.execute_script` | `script`, `inputs?`, `trace?` | code + trace + 可选 result |
+| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | code + trace + 可选 result |
+| `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | code + trace + 可选 result |
 | `conversation.spawn` | `spawn` 对象或直接展开 spawn 字段 | conversation info |
 | `conversation.spawn_from_snapshot` | `spawn` + `snapshot` | conversation info + `restored:true` |
 | `conversation.send_message` | `conversation_id`, `content` | admission decision |

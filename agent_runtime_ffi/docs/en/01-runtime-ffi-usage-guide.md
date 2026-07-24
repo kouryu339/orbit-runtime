@@ -174,8 +174,8 @@ through Resources, LLM, and Agent Cluster registrations.
 | `workflow.compile` | `id` | Draft validation and blueprint |
 | `workflow.delete` | `id`, `expected_revision?` | deleted workflow |
 | `workflow.list` | `kind?` | workflow catalog |
-| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?` | code + trace + optional result |
-| `workflow.execute_script` | `script`, `inputs?`, `trace?` | code + trace + optional result |
+| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | code + trace + optional result |
+| `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | code + trace + optional result |
 | `conversation.spawn` | `spawn` or expanded spawn fields | conversation info |
 | `conversation.spawn_from_snapshot` | `spawn`, `snapshot` | info + restored |
 | `conversation.send_message` | `conversation_id`, `content` | admission |

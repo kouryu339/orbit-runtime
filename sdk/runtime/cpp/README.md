@@ -93,6 +93,9 @@ Typed helpers cover the ABI 1 command set exposed by the native Runtime:
 
 Workflow payloads follow the shared
 [Dynamic Workflow ABI](../README.md#dynamic-workflow-abi).
+Conversation-initiated runs use `execute_workflow_in_context`,
+`test_workflow_draft_in_context`, or `execute_workflow_script_in_context` to
+forward `conversation_id` and `agent_id` together.
 After startup, `tool_definitions()` returns the unified registered local/RPC
 tool catalog; it does not grant or activate those tools for a conversation.
 `workflow_node_definitions()` returns the shared Corework/local/RPC graph-node

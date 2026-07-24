@@ -17,8 +17,8 @@ after `start`; workflow resources are the intentional mutable exception.
 | `workflow.list` | `kind?` | `{ "workflows": [...] }`; kind is `draft` or `registered`. |
 | `workflow.convert.script_to_blueprint` | `script` | Compile to Blueprint JSON without changing the catalog. |
 | `workflow.convert.blueprint_to_script` | `blueprint` | Validate and decompile without changing the catalog. |
-| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?` | Execute Registered, or Draft with `mode=test`. |
-| `workflow.execute_script` | `script`, `inputs?`, `trace?` | Compile and execute temporary text without registration. |
+| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Execute Registered, or Draft with `mode=test`. |
+| `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Compile and execute temporary text without registration. |
 
 Catalog commands require a started Runtime. Only Draft can be created. A Draft
 may preserve invalid script for editing, but it cannot be promoted until
@@ -137,6 +137,16 @@ previews, AI-facing node message, and error details.
 
 ## 11.4 Audit and Host Ownership
 
+When a Conversation or Agent initiates execution, the host must provide both
+`conversation_id` and `agent_id`. Runtime binds that identity pair to the
+individual Workflow execution context and forwards it to local tools and RPC
+`ToolContext`. Supplying only one field is an argument error. Non-conversation
+background jobs may omit both. The identity is never written to the shared
+Workflow module cache, so concurrent executions cannot overwrite each other.
+Providing execution identity does not start Conversation permission handling;
+approval belongs to the AI Executor, while direct host `workflow.execute` calls
+remain direct execution.
+
 The AI tool entry points `executeWorkflow` and `executeWorkflowScript` are both
 declared `destructive`. The host's `destructive = ask/deny/full` policy therefore
 applies before Workflow execution begins. Development Studio sessions that need
@@ -145,7 +155,9 @@ unconfirmed execution must have the host explicitly select `open_all`.
 Catalog mutation emits `workflow.resource_changed`; every attempted execution
 emits `workflow.execution_completed`. Both use the global
 `event_line: "workflow"`, carry `workflow_id` when a catalog resource is
-involved, and never carry `conversation_id`. They form a Workflow projector
+involved, and the event envelope still does not carry `conversation_id`. The
+execution identity applies only to tool calls within that run and does not
+change the Workflow event line aggregate. They form a Workflow projector
 event line parallel to, not inside, Conversation state. A host may subscribe,
 read the changed resource, and explicitly project it into a conversation's
 dynamic snapshot when needed. These are public audit events, not a distributed

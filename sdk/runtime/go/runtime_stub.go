@@ -188,11 +188,23 @@ func (*Runtime) ExecuteWorkflow(context.Context, string, map[string]any, bool) (
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+func (*Runtime) ExecuteWorkflowInContext(context.Context, string, map[string]any, bool, string, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
 func (*Runtime) TestWorkflowDraft(context.Context, string, map[string]any, bool) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+func (*Runtime) TestWorkflowDraftInContext(context.Context, string, map[string]any, bool, string, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
 func (*Runtime) ExecuteWorkflowScript(context.Context, string, map[string]any, bool) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) ExecuteWorkflowScriptInContext(context.Context, string, map[string]any, bool, string, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 

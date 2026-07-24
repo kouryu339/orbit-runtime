@@ -337,6 +337,36 @@ fn optional_inputs(payload: &Map<String, Value>) -> Result<HashMap<String, Value
     }
 }
 
+fn optional_workflow_execution_context(
+    payload: &Map<String, Value>,
+) -> Result<corework::workflow::workflows::WorkflowExecutionContext, FfiError> {
+    let optional_string = |name: &str, alias: &str| -> Result<Option<String>, FfiError> {
+        match payload.get(name).or_else(|| payload.get(alias)) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) if !value.trim().is_empty() => {
+                Ok(Some(value.trim().to_string()))
+            }
+            Some(Value::String(_)) => Err(FfiError::invalid_argument(format!(
+                "payload.{name} must not be empty when provided"
+            ))),
+            Some(_) => Err(FfiError::invalid_argument(format!(
+                "payload.{name} must be a string"
+            ))),
+        }
+    };
+    let conversation_id = optional_string("conversation_id", "conversationId")?;
+    let agent_id = optional_string("agent_id", "agentId")?;
+    if conversation_id.is_some() != agent_id.is_some() {
+        return Err(FfiError::invalid_argument(
+            "payload.conversation_id and payload.agent_id must be provided together",
+        ));
+    }
+    Ok(corework::workflow::workflows::WorkflowExecutionContext {
+        conversation_id,
+        agent_id,
+    })
+}
+
 fn optional_bool(payload: &Map<String, Value>, name: &str) -> Result<bool, FfiError> {
     match payload.get(name) {
         None | Some(Value::Null) => Ok(false),
@@ -514,17 +544,25 @@ fn invoke_command(
             }
             facade.workflow_blueprint_to_script(blueprint)?
         }
-        "workflow.execute" => facade.execute_workflow_resource(
-            &required_string(payload, "id")?,
-            payload.get("mode").and_then(Value::as_str),
-            optional_inputs(payload)?,
-            optional_bool(payload, "trace")?,
-        )?,
-        "workflow.execute_script" => facade.execute_workflow_script(
-            &required_string(payload, "script")?,
-            optional_inputs(payload)?,
-            optional_bool(payload, "trace")?,
-        )?,
+        "workflow.execute" => {
+            let execution_context = optional_workflow_execution_context(payload)?;
+            facade.execute_workflow_resource(
+                &required_string(payload, "id")?,
+                payload.get("mode").and_then(Value::as_str),
+                optional_inputs(payload)?,
+                optional_bool(payload, "trace")?,
+                &execution_context,
+            )?
+        }
+        "workflow.execute_script" => {
+            let execution_context = optional_workflow_execution_context(payload)?;
+            facade.execute_workflow_script(
+                &required_string(payload, "script")?,
+                optional_inputs(payload)?,
+                optional_bool(payload, "trace")?,
+                &execution_context,
+            )?
+        }
         "conversation.spawn" => {
             let spawn = payload
                 .get("spawn")
@@ -1098,6 +1136,37 @@ mod abi_tests {
                 tool_call_id
             );
         }
+    }
+
+    #[test]
+    fn workflow_execution_context_requires_a_complete_identity_pair() {
+        let canonical = json!({
+            "conversation_id": "conversation-1",
+            "agent_id": "agent-1"
+        });
+        let legacy = json!({
+            "conversationId": "conversation-2",
+            "agentId": "agent-2"
+        });
+        for payload in [canonical, legacy] {
+            let context =
+                optional_workflow_execution_context(payload.as_object().unwrap()).unwrap();
+            assert!(context.conversation_id.is_some());
+            assert!(context.agent_id.is_some());
+        }
+
+        let incomplete = json!({"conversation_id": "conversation-1"});
+        let error =
+            optional_workflow_execution_context(incomplete.as_object().unwrap()).unwrap_err();
+        assert!(error
+            .message
+            .contains("conversation_id and payload.agent_id must be provided together"));
+
+        let invalid = json!({"conversation_id": 7, "agent_id": "agent-1"});
+        let error = optional_workflow_execution_context(invalid.as_object().unwrap()).unwrap_err();
+        assert!(error
+            .message
+            .contains("payload.conversation_id must be a string"));
     }
 
     #[test]

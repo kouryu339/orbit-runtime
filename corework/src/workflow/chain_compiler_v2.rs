@@ -991,7 +991,9 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
         || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
     {
         let inner = &s[1..s.len() - 1];
-        return Ok(Value::Literal(JsonValue::String(inner.to_string())));
+        return Ok(Value::Literal(JsonValue::String(unescape_workflow_string(
+            inner,
+        ))));
     }
 
     // bool
@@ -1066,6 +1068,28 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
             s
         ),
     ))
+}
+
+fn unescape_workflow_string(inner: &str) -> String {
+    let mut output = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('"') => output.push('"'),
+            Some('\'') => output.push('\''),
+            Some('\\') => output.push('\\'),
+            Some(other) => {
+                output.push('\\');
+                output.push(other);
+            }
+            None => output.push('\\'),
+        }
+    }
+    output
 }
 
 fn parse_array_expression(s: &str, lineno: usize) -> ChainResult<Value> {
@@ -1782,8 +1806,38 @@ return selector=input.selector visibility=input.visibility"#,
             .iter()
             .find(|node| node.node_type == "StartNode")
             .unwrap();
-        assert!(start.pins.iter().any(|pin| pin.name == "selector"));
+        let selector = start
+            .pins
+            .iter()
+            .find(|pin| pin.name == "selector" && pin.kind == "DataInput")
+            .and_then(|pin| pin.default_value.as_ref());
+        assert_eq!(
+            selector,
+            Some(&serde_json::json!(r#"button[aria-label="发布"]"#))
+        );
         assert!(start.pins.iter().any(|pin| pin.name == "visibility"));
+    }
+
+    #[test]
+    fn workflow_string_literals_decode_exactly_one_escape_layer() {
+        let Value::Literal(decoded) = parse_value(r#""input[type=\"file\"]""#, 1).unwrap() else {
+            panic!("expected a string literal");
+        };
+        assert_eq!(decoded, serde_json::json!(r#"input[type="file"]"#));
+
+        let Value::Literal(overescaped) = parse_value(r#""input[type=\\\"file\\\"]""#, 1).unwrap()
+        else {
+            panic!("expected a string literal");
+        };
+        assert_eq!(overescaped, serde_json::json!(r#"input[type=\"file\"]"#));
+    }
+
+    #[test]
+    fn workflow_string_literals_preserve_unknown_escapes() {
+        let Value::Literal(path) = parse_value(r#""C:\temp\video.mp4""#, 1).unwrap() else {
+            panic!("expected a string literal");
+        };
+        assert_eq!(path, serde_json::json!(r#"C:\temp\video.mp4"#));
     }
 
     #[test]

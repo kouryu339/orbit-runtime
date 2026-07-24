@@ -474,6 +474,48 @@ impl Runtime {
         )
     }
 
+    pub fn execute_workflow_in_context(
+        &mut self,
+        id: &str,
+        inputs: Value,
+        trace: bool,
+        conversation_id: &str,
+        agent_id: &str,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.execute",
+            json!({ "id": id, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
+        )
+    }
+
+    pub fn test_workflow_draft_in_context(
+        &mut self,
+        id: &str,
+        inputs: Value,
+        trace: bool,
+        conversation_id: &str,
+        agent_id: &str,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.execute",
+            json!({ "id": id, "mode": "test", "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
+        )
+    }
+
+    pub fn execute_workflow_script_in_context(
+        &mut self,
+        script: &str,
+        inputs: Value,
+        trace: bool,
+        conversation_id: &str,
+        agent_id: &str,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.execute_script",
+            json!({ "script": script, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
+        )
+    }
+
     pub fn register_llm(&mut self, registration: Value) -> Result<Value> {
         self.invoke(
             "runtime.register_llm",

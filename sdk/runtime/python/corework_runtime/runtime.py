@@ -689,6 +689,8 @@ class Runtime:
         inputs: Mapping[str, Any] | None = None,
         *,
         trace: bool = False,
+        conversation_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Any:
         return self.invoke(
             "workflow.execute",
@@ -696,6 +698,8 @@ class Runtime:
                 "id": workflow_id,
                 "inputs": dict(inputs or {}),
                 "trace": trace,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
             },
         )
 
@@ -705,6 +709,8 @@ class Runtime:
         inputs: Mapping[str, Any] | None = None,
         *,
         trace: bool = False,
+        conversation_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Any:
         return self.invoke(
             "workflow.execute",
@@ -713,6 +719,8 @@ class Runtime:
                 "mode": "test",
                 "inputs": dict(inputs or {}),
                 "trace": trace,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
             },
         )
 
@@ -722,10 +730,18 @@ class Runtime:
         inputs: Mapping[str, Any] | None = None,
         *,
         trace: bool = False,
+        conversation_id: str | None = None,
+        agent_id: str | None = None,
     ) -> Any:
         return self.invoke(
             "workflow.execute_script",
-            {"script": script, "inputs": dict(inputs or {}), "trace": trace},
+            {
+                "script": script,
+                "inputs": dict(inputs or {}),
+                "trace": trace,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+            },
         )
 
     def register_llm_file(self, path: str | Path) -> Any:

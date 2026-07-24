@@ -73,7 +73,9 @@ After `start`, hosts manage the Draft/Registered lifecycle through
 `workflow_blueprint_to_script` for stateless conversion without changing the
 catalog. Use `execute_workflow` only for Registered resources,
 `test_workflow_draft` for explicit untrusted tests, and
-`execute_workflow_script` for temporary text. `subscribe_workflow(id)` filters
+`execute_workflow_script` for temporary text. Use the corresponding
+`*_in_context` methods for Conversation-initiated runs; they pass
+`conversation_id` and `agent_id` together. `subscribe_workflow(id)` filters
 the global Workflow event line. See the shared
 [Dynamic Workflow ABI](../README.md#dynamic-workflow-abi).
 

@@ -86,6 +86,46 @@ pub struct WorkflowExecutionOutcome {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkflowExecutionContext {
+    pub conversation_id: Option<String>,
+    pub agent_id: Option<String>,
+}
+
+impl WorkflowExecutionContext {
+    pub fn new(conversation_id: impl Into<String>, agent_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: Some(conversation_id.into()),
+            agent_id: Some(agent_id.into()),
+        }
+    }
+
+    fn apply_to(
+        &self,
+        mut ctx: corework::orchestration::Context,
+    ) -> Result<corework::orchestration::Context> {
+        match (&self.conversation_id, &self.agent_id) {
+            (None, None) => {}
+            (Some(conversation_id), Some(agent_id))
+                if !conversation_id.trim().is_empty() && !agent_id.trim().is_empty() =>
+            {
+                let conversation_id = conversation_id.trim().to_string();
+                let agent_id = agent_id.trim().to_string();
+                ctx = ctx.with_conversation_id(conversation_id.clone());
+                ctx.set("conversation_id", conversation_id)?;
+                ctx.set("agent_id", agent_id)?;
+            }
+            _ => {
+                return Err(FrameworkError::InvalidOperation(
+                    "workflow execution conversation_id and agent_id must be provided together"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(ctx)
+    }
+}
+
 // ============================================================================
 // WorkflowsModule
 // ============================================================================
@@ -510,6 +550,20 @@ impl WorkflowsModule {
         selector: &str,
         inputs: HashMap<String, JsonValue>,
     ) -> Result<WorkflowExecutionOutcome> {
+        self.execute_registered_outcome_with_context(
+            selector,
+            inputs,
+            &WorkflowExecutionContext::default(),
+        )
+        .await
+    }
+
+    pub async fn execute_registered_outcome_with_context(
+        &self,
+        selector: &str,
+        inputs: HashMap<String, JsonValue>,
+        execution_context: &WorkflowExecutionContext,
+    ) -> Result<WorkflowExecutionOutcome> {
         let selector = selector.trim();
         if selector.is_empty() {
             return Err(FrameworkError::InvalidOperation(
@@ -532,7 +586,8 @@ impl WorkflowsModule {
             })?;
         let blueprint = BlueprintJson::from_workflow_file(&entry.file_path)
             .map_err(FrameworkError::SystemError)?;
-        self.execute_from_blueprint_outcome(blueprint, inputs).await
+        self.execute_from_blueprint_outcome_with_context(blueprint, inputs, execution_context)
+            .await
     }
 
     /// 从文件加载并执行工作流（即用即弃）。
@@ -634,12 +689,26 @@ impl WorkflowsModule {
         blueprint: BlueprintJson,
         inputs: HashMap<String, JsonValue>,
     ) -> Result<WorkflowExecutionOutcome> {
+        self.execute_from_blueprint_outcome_with_context(
+            blueprint,
+            inputs,
+            &WorkflowExecutionContext::default(),
+        )
+        .await
+    }
+
+    pub async fn execute_from_blueprint_outcome_with_context(
+        &self,
+        blueprint: BlueprintJson,
+        inputs: HashMap<String, JsonValue>,
+        execution_context: &WorkflowExecutionContext,
+    ) -> Result<WorkflowExecutionOutcome> {
         let workflow_inputs = inputs
             .into_iter()
             .map(|(key, value)| (key, DataValue::new("JsonValue", value)))
             .collect();
         let workflow_name = blueprint.metadata.name.clone();
-        let ctx = self.create_context();
+        let ctx = execution_context.apply_to(self.create_context())?;
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         exec_ctx.enable_trace(workflow_name, loaded.compiled.source_map.clone());
@@ -930,5 +999,51 @@ impl WorkflowsModule {
         meta.name.hash(&mut h);
         meta.created.hash(&mut h);
         format!("{}:{:x}", meta.name, h.finish() as u32)
+    }
+}
+
+#[cfg(test)]
+mod execution_context_tests {
+    use super::*;
+    use corework::cache::InMemoryCache;
+    use corework::event::InMemoryEventBus;
+    use corework::monitoring::NoopTelemetry;
+
+    fn base_context(cache: Arc<InMemoryCache>) -> corework::orchestration::Context {
+        corework::orchestration::Context::new(
+            cache,
+            Arc::new(InMemoryEventBus::new()),
+            Arc::new(NoopTelemetry),
+        )
+    }
+
+    #[test]
+    fn execution_identity_is_local_to_each_workflow_context() {
+        let shared_cache = Arc::new(InMemoryCache::new());
+        let first = WorkflowExecutionContext::new("conversation-a", "agent-a")
+            .apply_to(base_context(Arc::clone(&shared_cache)))
+            .unwrap();
+        let second = WorkflowExecutionContext::new("conversation-b", "agent-b")
+            .apply_to(base_context(shared_cache))
+            .unwrap();
+
+        assert_eq!(first.conversation_id.as_deref(), Some("conversation-a"));
+        assert_eq!(
+            first.get::<String>("agent_id").unwrap().as_deref(),
+            Some("agent-a")
+        );
+        assert_eq!(second.conversation_id.as_deref(), Some("conversation-b"));
+        assert_eq!(
+            second.get::<String>("agent_id").unwrap().as_deref(),
+            Some("agent-b")
+        );
+
+        let incomplete = WorkflowExecutionContext {
+            conversation_id: Some("conversation-only".to_string()),
+            agent_id: None,
+        };
+        assert!(incomplete
+            .apply_to(base_context(Arc::new(InMemoryCache::new())))
+            .is_err());
     }
 }

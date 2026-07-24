@@ -232,6 +232,7 @@ impl RuntimeFacade {
         mode: Option<&str>,
         inputs: HashMap<String, Value>,
         trace_enabled: bool,
+        execution_context: &corework::workflow::workflows::WorkflowExecutionContext,
     ) -> Result<Value, RuntimeError> {
         let workflow = match self.workflow_module()?.read_workflow_resource(id) {
             Ok(workflow) => workflow,
@@ -258,7 +259,7 @@ impl RuntimeFacade {
                         "registered workflow mode must be 'production' when provided".to_string(),
                     ));
                 }
-                self.execute_registered_workflow(id, inputs, trace_enabled)
+                self.execute_registered_workflow(id, inputs, trace_enabled, execution_context)
             }
             corework::workflow::workflows::WorkflowResourceKind::Draft => {
                 if mode != Some("test") {
@@ -277,6 +278,7 @@ impl RuntimeFacade {
                     blueprint,
                     inputs,
                     trace_enabled,
+                    execution_context,
                 )
             }
         }
@@ -287,12 +289,17 @@ impl RuntimeFacade {
         selector: &str,
         inputs: HashMap<String, Value>,
         trace_enabled: bool,
+        execution_context: &corework::workflow::workflows::WorkflowExecutionContext,
     ) -> Result<Value, RuntimeError> {
         let module = self.workflow_module()?;
         let started = Instant::now();
         let execution = self
             .rt
-            .block_on(module.execute_registered_outcome(selector, inputs));
+            .block_on(module.execute_registered_outcome_with_context(
+                selector,
+                inputs,
+                execution_context,
+            ));
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -343,11 +350,12 @@ impl RuntimeFacade {
         blueprint: BlueprintJson,
         inputs: HashMap<String, Value>,
         trace_enabled: bool,
+        execution_context: &corework::workflow::workflows::WorkflowExecutionContext,
     ) -> Result<Value, RuntimeError> {
         let started = Instant::now();
         let execution = self.rt.block_on(
             self.workflow_module()?
-                .execute_from_blueprint_outcome(blueprint, inputs),
+                .execute_from_blueprint_outcome_with_context(blueprint, inputs, execution_context),
         );
         let duration_ms = started.elapsed().as_millis();
         let outcome = match execution {
@@ -399,6 +407,7 @@ impl RuntimeFacade {
         script: &str,
         inputs: HashMap<String, Value>,
         trace_enabled: bool,
+        execution_context: &corework::workflow::workflows::WorkflowExecutionContext,
     ) -> Result<Value, RuntimeError> {
         let script = script.trim();
         if script.is_empty() {
@@ -435,7 +444,11 @@ impl RuntimeFacade {
         let started = Instant::now();
         let execution = self
             .rt
-            .block_on(module.execute_from_blueprint_outcome(blueprint, inputs));
+            .block_on(module.execute_from_blueprint_outcome_with_context(
+                blueprint,
+                inputs,
+                execution_context,
+            ));
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(error) => {

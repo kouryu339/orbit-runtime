@@ -2,13 +2,14 @@
 
 use async_trait::async_trait;
 use corework::ai_system::{AIInput, AIOutput, SimpleArgs};
+use corework::cache::CacheExt;
 use corework::define_operation;
 use corework::error::FrameworkError;
 use corework::orchestration::Context;
 use corework::rpc_tool::RuntimeToolMetadata;
 use corework::system::SystemOperation;
 use corework::workflow::execution::WorkflowToAiMode;
-use corework::workflow::workflows::executor::WorkflowExecutionOutcome;
+use corework::workflow::workflows::executor::{WorkflowExecutionContext, WorkflowExecutionOutcome};
 use corework::workflow::workflows::{
     preserve_workflow_blueprint_layout, WorkflowEditorSession, WorkflowResourceKind,
     WorkflowValidation, WorkflowsModule,
@@ -69,6 +70,31 @@ fn runtime_tools(ctx: &Context) -> Vec<RuntimeToolMetadata> {
     ctx.resolve_shared_component::<WorkflowRuntimeToolCatalog>()
         .map(|catalog| catalog.tools().to_vec())
         .unwrap_or_default()
+}
+
+async fn workflow_execution_context(
+    ctx: &Context,
+) -> Result<WorkflowExecutionContext, FrameworkError> {
+    let conversation_id = match ctx.conversation_id.clone() {
+        Some(value) if !value.trim().is_empty() => Some(value),
+        _ => ctx
+            .cache
+            .get::<String>(crate::state_machine::agent_keys::CONVERSATION_ID)
+            .await?
+            .filter(|value| !value.trim().is_empty()),
+    };
+    let agent_id = match ctx.get::<String>("agent_id")? {
+        Some(value) if !value.trim().is_empty() => Some(value),
+        _ => ctx
+            .cache
+            .get::<String>(crate::state_machine::agent_keys::AGENT_ID)
+            .await?
+            .filter(|value| !value.trim().is_empty()),
+    };
+    Ok(WorkflowExecutionContext {
+        conversation_id,
+        agent_id,
+    })
 }
 
 async fn active_runtime_tools(ctx: &Context) -> Result<Vec<RuntimeToolMetadata>, AIOutput> {
@@ -697,6 +723,7 @@ async fn execute_resource(
         Err(error) => return Ok(AIOutput::error(404, error.to_string())),
     };
     let started = Instant::now();
+    let execution_context = workflow_execution_context(ctx).await?;
     let execution = match resource.summary.kind {
         WorkflowResourceKind::Draft => {
             let blueprint = match resource.blueprint {
@@ -704,10 +731,14 @@ async fn execute_resource(
                 None => return Ok(AIOutput::error(400, "Draft has no compiled blueprint")),
             };
             module
-                .execute_from_blueprint_outcome(blueprint, inputs)
+                .execute_from_blueprint_outcome_with_context(blueprint, inputs, &execution_context)
                 .await
         }
-        WorkflowResourceKind::Registered => module.execute_registered_outcome(id, inputs).await,
+        WorkflowResourceKind::Registered => {
+            module
+                .execute_registered_outcome_with_context(id, inputs, &execution_context)
+                .await
+        }
     };
     match execution {
         Ok(outcome) => Ok(execution_output(
@@ -861,8 +892,9 @@ impl SystemOperation for ExecuteWorkflowScript {
             Err(error) => return Ok(error),
         };
         let started = Instant::now();
+        let execution_context = workflow_execution_context(ctx).await?;
         match workflows(ctx)?
-            .execute_from_blueprint_outcome(blueprint, inputs)
+            .execute_from_blueprint_outcome_with_context(blueprint, inputs, &execution_context)
             .await
         {
             Ok(outcome) => Ok(execution_output(

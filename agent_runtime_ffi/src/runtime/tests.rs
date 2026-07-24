@@ -1469,26 +1469,21 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     );
     assert_eq!(converted["validation"]["valid"], true);
     assert!(converted["blueprint"]["nodes"].is_array());
-    let invalid_inputs = invoke(
+    let multiline_inputs = invoke(
         &mut facade,
         "workflow.convert.script_to_blueprint",
         json!({
             "script": "input video_path:String\ninput title:String=\"\"\nreturn"
         }),
     );
-    assert_eq!(invalid_inputs["validation"]["valid"], false);
-    let validation_message = invalid_inputs["validation"]["error"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(
-        validation_message.contains("line 2"),
-        "{validation_message}"
-    );
-    assert!(
-        validation_message.contains("不能再次声明 INPUT"),
-        "{validation_message}"
-    );
-    assert!(invalid_inputs["blueprint"].is_null());
+    assert_eq!(multiline_inputs["validation"]["valid"], true);
+    let start_nodes = multiline_inputs["blueprint"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|node| node["node_type"] == "StartNode")
+        .count();
+    assert_eq!(start_nodes, 1);
     let round_trip = invoke(
         &mut facade,
         "workflow.convert.blueprint_to_script",

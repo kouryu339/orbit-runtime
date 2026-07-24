@@ -152,7 +152,7 @@ return
 
 ### 6. 提交脚本
 
-`executeWorkflowScript` 位于脚本外，用于提交并立即执行完整临时脚本，不得在被执行的 Workflow 内递归调用。调用时必须提供 `script` 参数。可以直接使用合法的内联 `--script "..."`，也可以先声明多行变量；工具执行器会保留脚本中的换行和内部双引号。
+`executeWorkflowScript` 位于脚本外，用于提交并立即执行完整临时脚本，不得在被执行的 Workflow 内递归调用。调用时必须提供 `script` 参数。优先把完整脚本声明为多行 `$script` 变量，再通过 `--script $script` 提交；多行变量中的 Workflow 内容按独立脚本原样书写，不要额外添加 JSON 或工具参数转义层。只有直接写内联 `--script "..."` 时，才需要为该最外层双引号字符串转义一次内部 `\"` 和换行。
 
 ```text
 $script = "

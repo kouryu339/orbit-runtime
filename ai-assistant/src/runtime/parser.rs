@@ -738,6 +738,31 @@ mod tests {
     }
 
     #[test]
+    fn inline_script_decodes_outer_exec_and_workflow_string_layers() {
+        let text = r#"EXEC WorkflowOpen --script "input selector:String=\"input[type=\\\"file\\\"]\"\nreturn selector=input.selector""#;
+        let calls = parse_tool_calls(text).unwrap();
+        let script = calls[0]
+            .params
+            .iter()
+            .find(|(name, _)| name == "script")
+            .map(|(_, value)| value.as_str())
+            .unwrap();
+
+        let blueprint = corework::workflow::chain_compiler_v2::compile_chain_v2(script).unwrap();
+        let selector = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.node_type == "StartNode")
+            .and_then(|node| {
+                node.pins
+                    .iter()
+                    .find(|pin| pin.name == "selector" && pin.kind == "DataInput")
+            })
+            .and_then(|pin| pin.default_value.as_ref());
+        assert_eq!(selector, Some(&serde_json::json!(r#"input[type="file"]"#)));
+    }
+
+    #[test]
     fn reject_legacy_block_style() {
         let text = "EXEC FooTool\n--script\nline a\nline b";
         let err = parse_tool_calls(text).unwrap_err();

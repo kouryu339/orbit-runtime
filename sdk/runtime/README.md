@@ -213,7 +213,9 @@ language equivalent.
 
 SDKs expose Registered execution as
 `execute_workflow` and explicit Draft testing as `test_workflow_draft`; hosts do
-not need to construct the low-level mode field. Create and update accept script
+not need to construct the low-level mode field. Conversation-initiated runs
+must pass `conversation_id` and `agent_id` together so local/RPC tools receive
+the correct per-execution caller context. Create and update accept script
 or blueprint content:
 
 ```json

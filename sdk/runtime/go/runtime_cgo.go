@@ -250,8 +250,16 @@ func (r *Runtime) ExecuteWorkflow(ctx context.Context, id string, inputs map[str
 	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "inputs": inputs, "trace": trace})
 }
 
+func (r *Runtime) ExecuteWorkflowInContext(ctx context.Context, id string, inputs map[string]any, trace bool, conversationID string, agentID string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "inputs": inputs, "trace": trace, "conversation_id": conversationID, "agent_id": agentID})
+}
+
 func (r *Runtime) TestWorkflowDraft(ctx context.Context, id string, inputs map[string]any, trace bool) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "mode": "test", "inputs": inputs, "trace": trace})
+}
+
+func (r *Runtime) TestWorkflowDraftInContext(ctx context.Context, id string, inputs map[string]any, trace bool, conversationID string, agentID string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "mode": "test", "inputs": inputs, "trace": trace, "conversation_id": conversationID, "agent_id": agentID})
 }
 
 func (r *Runtime) ExecuteWorkflowScript(ctx context.Context, script string, inputs map[string]any, trace bool) (json.RawMessage, error) {
@@ -259,6 +267,16 @@ func (r *Runtime) ExecuteWorkflowScript(ctx context.Context, script string, inpu
 		"script": script,
 		"inputs": inputs,
 		"trace":  trace,
+	})
+}
+
+func (r *Runtime) ExecuteWorkflowScriptInContext(ctx context.Context, script string, inputs map[string]any, trace bool, conversationID string, agentID string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.execute_script", map[string]any{
+		"script":          script,
+		"inputs":          inputs,
+		"trace":           trace,
+		"conversation_id": conversationID,
+		"agent_id":        agentID,
 	})
 }
 

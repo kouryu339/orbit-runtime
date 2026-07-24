@@ -694,6 +694,22 @@ public:
                 + ",\"trace\":" + (trace ? "true" : "false") + "}");
     }
 
+    std::string execute_workflow_in_context(
+        const std::string& id,
+        const std::string& conversation_id,
+        const std::string& agent_id,
+        const std::string& inputs_json = "{}",
+        bool trace = false)
+    {
+        return invoke(
+            "workflow.execute",
+            std::string("{\"id\":") + detail::quote(id)
+                + ",\"inputs\":" + object_or_empty(inputs_json)
+                + ",\"trace\":" + (trace ? "true" : "false")
+                + ",\"conversation_id\":" + detail::quote(conversation_id)
+                + ",\"agent_id\":" + detail::quote(agent_id) + "}");
+    }
+
     std::string test_workflow_draft(
         const std::string& id,
         const std::string& inputs_json = "{}",
@@ -706,6 +722,22 @@ public:
                 + ",\"trace\":" + (trace ? "true" : "false") + "}");
     }
 
+    std::string test_workflow_draft_in_context(
+        const std::string& id,
+        const std::string& conversation_id,
+        const std::string& agent_id,
+        const std::string& inputs_json = "{}",
+        bool trace = false)
+    {
+        return invoke(
+            "workflow.execute",
+            std::string("{\"id\":") + detail::quote(id)
+                + ",\"mode\":\"test\",\"inputs\":" + object_or_empty(inputs_json)
+                + ",\"trace\":" + (trace ? "true" : "false")
+                + ",\"conversation_id\":" + detail::quote(conversation_id)
+                + ",\"agent_id\":" + detail::quote(agent_id) + "}");
+    }
+
     std::string execute_workflow_script(
         const std::string& script,
         const std::string& inputs_json = "{}",
@@ -716,6 +748,22 @@ public:
             std::string("{\"script\":") + detail::quote(script)
                 + ",\"inputs\":" + object_or_empty(inputs_json)
                 + ",\"trace\":" + (trace ? "true" : "false") + "}");
+    }
+
+    std::string execute_workflow_script_in_context(
+        const std::string& script,
+        const std::string& conversation_id,
+        const std::string& agent_id,
+        const std::string& inputs_json = "{}",
+        bool trace = false)
+    {
+        return invoke(
+            "workflow.execute_script",
+            std::string("{\"script\":") + detail::quote(script)
+                + ",\"inputs\":" + object_or_empty(inputs_json)
+                + ",\"trace\":" + (trace ? "true" : "false")
+                + ",\"conversation_id\":" + detail::quote(conversation_id)
+                + ",\"agent_id\":" + detail::quote(agent_id) + "}");
     }
 
     void register_llm_path(const std::string& path)

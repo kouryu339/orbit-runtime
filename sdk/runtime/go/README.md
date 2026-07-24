@@ -86,6 +86,8 @@ After startup, use `CreateWorkflowDraft`, `ReadWorkflow`,
 `DeleteWorkflow`, `ListWorkflows`, `ExecuteWorkflow`, `TestWorkflowDraft`, or
 `ExecuteWorkflowScript`. `WorkflowScriptToBlueprint` and
 `WorkflowBlueprintToScript` convert representations without catalog mutation.
+Use the corresponding `InContext` methods for Conversation-initiated runs so
+`conversationID` and `agentID` are forwarded together.
 `ParseWorkflowEvent` identifies the independent global
 Workflow event line. See the shared
 [Dynamic Workflow ABI](../README.md#dynamic-workflow-abi).

@@ -17,8 +17,8 @@ Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resourc
 | `workflow.list` | `kind?` | 返回全部资源，或按 `draft`/`registered` 过滤。 |
 | `workflow.convert.script_to_blueprint` | `script` | 编译为 Blueprint JSON，不修改目录。 |
 | `workflow.convert.blueprint_to_script` | `blueprint` | 校验并反编译，不修改目录。 |
-| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?` | 执行 Registered；Draft 仅允许 `mode=test`。 |
-| `workflow.execute_script` | `script`, `inputs?`, `trace?` | 不注册，直接编译并执行临时脚本文本。 |
+| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 执行 Registered；Draft 仅允许 `mode=test`。 |
+| `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 不注册，直接编译并执行临时脚本文本。 |
 
 目录命令要求 Runtime 已经 `start`。只有 Draft 可以创建；无效脚本可以作为草稿保存，
 但编译成功前不能提升为 Registered。提升时保持稳定 id。Draft 与 Registered 的 name
@@ -117,13 +117,20 @@ Agent 的 active tools 中，且注册元数据具有明确的描述、输入引
 
 ## 11.4 审计与宿主职责
 
+由 Conversation 或 Agent 发起执行时，宿主必须同时传入 `conversation_id` 与 `agent_id`。
+Runtime 将这对身份绑定到本次独立 Workflow 执行上下文，并透传给本地工具与 RPC
+`ToolContext`；只传其中一个会返回参数错误。非会话型后台任务可以同时省略二者。该上下文
+不得写入 Workflow 模块共享缓存，以免并发执行串用调用者身份。传入执行身份不会启动
+Conversation 审批；审批只属于 AI Executor，宿主直接调用 `workflow.execute` 仍是直接执行。
+
 AI 工具入口 `executeWorkflow` 和 `executeWorkflowScript` 都声明为 `destructive`。因此宿主
 配置的 `destructive = ask/deny/full` 会在进入工作流执行前生效；开发期 Studio 若需要
 无确认执行，必须由宿主显式选择 `open_all`。
 
 目录变更产生 `workflow.resource_changed`；每次执行尝试产生
 `workflow.execution_completed`。二者位于全局 `event_line: "workflow"`，涉及目录资源时
-携带 `workflow_id`，不携带 `conversation_id`，也不进入 Conversation ledger/state。
+携带 `workflow_id`，事件信封仍不携带 `conversation_id`，也不进入 Conversation
+ledger/state。执行身份只用于本次工具调用上下文，不改变 Workflow 全局事件线的聚合根。
 宿主如需把 workflow 注入 Agent 尾部快照，应订阅该事件线、读取资源，再显式更新对应
 Conversation 的动态快照。它们是公共审计事件，不是分布式协调协议。
 Runtime 只串行化同一个 ABI handle 上的调用；跨进程鉴权、持久化、幂等、锁和多 Pod

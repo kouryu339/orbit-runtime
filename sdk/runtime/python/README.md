@@ -55,7 +55,9 @@ The started runtime supports Draft/Registered workflow methods on `Runtime` and
 `delete_workflow`, `list_workflows`, `execute_workflow`,
 `test_workflow_draft`, `execute_workflow_script`,
 `workflow_script_to_blueprint`, and `workflow_blueprint_to_script`. Conversion
-is stateless and does not emit catalog events. `subscribe_workflow(id)`
+is stateless and does not emit catalog events. Conversation-initiated execution
+passes both `conversation_id=` and `agent_id=` keyword arguments.
+`subscribe_workflow(id)`
 filters the global Workflow event line. See the shared
 [Dynamic Workflow ABI](../README.md#dynamic-workflow-abi).
 

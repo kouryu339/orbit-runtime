@@ -313,6 +313,48 @@ impl RuntimeApp {
         )
     }
 
+    pub fn execute_workflow_in_context(
+        &self,
+        id: &str,
+        inputs: Value,
+        trace: bool,
+        conversation_id: &str,
+        agent_id: &str,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.execute",
+            json!({ "id": id, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
+        )
+    }
+
+    pub fn test_workflow_draft_in_context(
+        &self,
+        id: &str,
+        inputs: Value,
+        trace: bool,
+        conversation_id: &str,
+        agent_id: &str,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.execute",
+            json!({ "id": id, "mode": "test", "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
+        )
+    }
+
+    pub fn execute_workflow_script_in_context(
+        &self,
+        script: &str,
+        inputs: Value,
+        trace: bool,
+        conversation_id: &str,
+        agent_id: &str,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.execute_script",
+            json!({ "script": script, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
+        )
+    }
+
     pub fn invoke(&self, command_type: &str, payload: Value) -> Result<Value> {
         let started = Instant::now();
         let result = self.lock_runtime()?.invoke(command_type, payload);
