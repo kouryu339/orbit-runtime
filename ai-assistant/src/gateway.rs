@@ -9,8 +9,10 @@ use crate::context::Message;
 use crate::conversation_state::{ConversationState, LedgerReadOptions};
 use crate::events::{
     AgentAppointRequestedPayload, AgentMessageProducedPayload, AgentPauseRequestedPayload,
-    AgentReportSubmittedPayload, AgentTaskAssignedPayload, AgentTaskCreatedPayload,
-    AgentTaskReportedPayload, LedgerRecordAppendedPayload,
+    AgentReportSubmittedPayload, AgentTaskAssignedPayload, AgentTaskCanceledPayload,
+    AgentTaskCompletedPayload, AgentTaskCreatedPayload, AgentTaskInputRequestedPayload,
+    AgentTaskInputRespondedPayload, AgentTaskProgressReportedPayload, AgentTaskReportedPayload,
+    AgentTaskUpdatedPayload, LedgerRecordAppendedPayload,
 };
 use crate::ledger::{self, LedgerMessageMeta, LedgerRecord};
 use crate::persistence::DisplayMeta;
@@ -175,6 +177,42 @@ impl EventHandler for AgentGateway {
                         .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
                 self.route_agent_task_reported(payload).await;
             }
+            crate::events::types::AGENT_TASK_PROGRESS_REPORTED => {
+                let payload: AgentTaskProgressReportedPayload =
+                    serde_json::from_value(event.payload.clone())
+                        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+                self.route_agent_task_progress_reported(payload).await;
+            }
+            crate::events::types::AGENT_TASK_COMPLETED => {
+                let payload: AgentTaskCompletedPayload =
+                    serde_json::from_value(event.payload.clone())
+                        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+                self.route_agent_task_completed(payload).await;
+            }
+            crate::events::types::AGENT_TASK_CANCELED => {
+                let payload: AgentTaskCanceledPayload =
+                    serde_json::from_value(event.payload.clone())
+                        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+                self.route_agent_task_canceled(payload).await;
+            }
+            crate::events::types::AGENT_TASK_INPUT_REQUESTED => {
+                let payload: AgentTaskInputRequestedPayload =
+                    serde_json::from_value(event.payload.clone())
+                        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+                self.route_agent_task_input_requested(payload).await;
+            }
+            crate::events::types::AGENT_TASK_INPUT_RESPONDED => {
+                let payload: AgentTaskInputRespondedPayload =
+                    serde_json::from_value(event.payload.clone())
+                        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+                self.route_agent_task_input_responded(payload).await;
+            }
+            crate::events::types::AGENT_TASK_UPDATED => {
+                let payload: AgentTaskUpdatedPayload =
+                    serde_json::from_value(event.payload.clone())
+                        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+                self.route_agent_task_updated(payload).await;
+            }
             crate::events::types::AGENT_DYNAMIC_SNAPSHOT_SET => {
                 self.publish_dynamic_snapshot_state_delta(event.payload.clone())
                     .await;
@@ -204,6 +242,14 @@ impl EventHandler for AgentGateway {
                     event.payload.clone(),
                 )
                 .await;
+                if let Some(agent_id) = event
+                    .payload
+                    .get("agent_id")
+                    .and_then(|value| value.as_str())
+                {
+                    self.refresh_delegated_tasks_snapshot_for_assignee(agent_id)
+                        .await;
+                }
                 self.publish_frontend_snapshot(None).await;
             }
             crate::events::types::AGENT_CANCELED => {
@@ -348,6 +394,12 @@ impl AgentGateway {
             crate::events::types::AGENT_TASK_CREATED,
             crate::events::types::AGENT_TASK_ASSIGNED,
             crate::events::types::AGENT_TASK_REPORTED,
+            crate::events::types::AGENT_TASK_PROGRESS_REPORTED,
+            crate::events::types::AGENT_TASK_COMPLETED,
+            crate::events::types::AGENT_TASK_CANCELED,
+            crate::events::types::AGENT_TASK_INPUT_REQUESTED,
+            crate::events::types::AGENT_TASK_INPUT_RESPONDED,
+            crate::events::types::AGENT_TASK_UPDATED,
             crate::events::types::AGENT_DYNAMIC_SNAPSHOT_SET,
             crate::events::types::AGENT_SKILLS_CHANGED,
         ] {
@@ -435,13 +487,16 @@ impl AgentGateway {
     }
 
     pub async fn request_pause(&self) -> crate::Result<()> {
-        let _ = self.request_pause_with_admission(None).await?;
+        let _ = self
+            .request_pause_with_admission(None, crate::agent::AgentPauseMode::WaitForTool)
+            .await?;
         Ok(())
     }
 
     pub async fn request_pause_with_admission(
         &self,
         command_id: Option<String>,
+        mode: crate::agent::AgentPauseMode,
     ) -> crate::Result<AdmissionResult> {
         let command = crate::admission::Command::Pause;
         let admission = self.admit_with_command_id(&command, command_id).await;
@@ -465,6 +520,7 @@ impl AgentGateway {
                 serde_json::to_value(AgentPauseRequestedPayload {
                     agent_id,
                     agent_name,
+                    mode,
                 })?,
             ))
             .await?;
@@ -934,7 +990,11 @@ impl AgentGateway {
             LedgerMessageMeta::default(),
         )
         .await;
-        if let Err(e) = self.cluster.pause_agent(&agent_id).await {
+        if let Err(e) = self
+            .cluster
+            .pause_agent_with_mode(&agent_id, payload.mode)
+            .await
+        {
             tracing::warn!(
                 conversation_id = %self.conversation_id,
                 agent_id = %agent_id,
@@ -942,6 +1002,8 @@ impl AgentGateway {
                 "pause agent failed"
             );
         }
+        self.refresh_delegated_tasks_snapshot_for_assignee(&agent_id)
+            .await;
     }
 
     async fn route_message_produced(&self, payload: AgentMessageProducedPayload) {
@@ -991,6 +1053,8 @@ impl AgentGateway {
                 )
                 .await;
                 self.publish_task_state_delta(&task).await;
+                self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+                    .await;
                 self.publish_frontend_snapshot(None).await;
             }
             Err(e) => tracing::warn!(
@@ -1035,6 +1099,8 @@ impl AgentGateway {
                 )
                 .await;
                 self.publish_task_state_delta(&task).await;
+                self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+                    .await;
                 self.publish_frontend_snapshot(None).await;
             }
             Err(e) => tracing::warn!(
@@ -1045,6 +1111,337 @@ impl AgentGateway {
                 "assign agent task route failed"
             ),
         }
+    }
+
+    async fn route_agent_task_input_requested(&self, payload: AgentTaskInputRequestedPayload) {
+        let (task, request) = match self
+            .state
+            .request_agent_task_input(
+                &payload.task_id,
+                &payload.requester_agent_id,
+                payload.request_id.clone(),
+                payload.question.clone(),
+                payload.required_fields.clone(),
+                payload.blocking,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    request_id = %payload.request_id,
+                    agent_id = %payload.requester_agent_id,
+                    error = %e,
+                    "request delegated task input route failed"
+                );
+                return;
+            }
+        };
+
+        let mut metadata = LedgerMessageMeta {
+            subtype: Some(ledger::GATEWAY_SUBTYPE_AGENT_TASK_INPUT_REQUESTED.to_string()),
+            from_agent_id: Some(payload.requester_agent_id.clone()),
+            to_agent_id: Some(task.delegator_agent_id.clone()),
+            reason: Some("input_requested".to_string()),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("task_id".to_string(), serde_json::json!(payload.task_id));
+        metadata.extra.insert(
+            "request_id".to_string(),
+            serde_json::json!(payload.request_id),
+        );
+        metadata.extra.insert(
+            "required_fields".to_string(),
+            serde_json::json!(payload.required_fields),
+        );
+        metadata
+            .extra
+            .insert("blocking".to_string(), serde_json::json!(payload.blocking));
+        self.record_gateway_fact(
+            task.delegator_agent_id.clone(),
+            task.delegator_agent_name.clone(),
+            ledger::GATEWAY_SUBTYPE_AGENT_TASK_INPUT_REQUESTED,
+            &format!(
+                "[Background task input requested]\nTask: {}\nRequest: {}\nQuestion: {}",
+                task.task_id, request.request_id, request.question
+            ),
+            metadata,
+        )
+        .await;
+        self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
+        self.publish_frontend_snapshot(None).await;
+    }
+
+    async fn route_agent_task_input_responded(&self, payload: AgentTaskInputRespondedPayload) {
+        let Some(current_task) = self.state.agent_task(&payload.task_id).await else {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                request_id = %payload.request_id,
+                "responded delegated task does not exist"
+            );
+            return;
+        };
+        let Some(assignee_agent_id) = current_task.assignee_agent_id.as_deref() else {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                request_id = %payload.request_id,
+                "responded delegated task has no assignee"
+            );
+            return;
+        };
+        if self.cluster.get(assignee_agent_id).await.is_none() {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                request_id = %payload.request_id,
+                assignee_agent_id = %assignee_agent_id,
+                "responded delegated task assignee runtime is unavailable"
+            );
+            return;
+        }
+
+        let (mut task, request) = match self
+            .state
+            .respond_agent_task_input(
+                &payload.task_id,
+                &payload.request_id,
+                &payload.responder_agent_id,
+                payload.answer.clone(),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    request_id = %payload.request_id,
+                    agent_id = %payload.responder_agent_id,
+                    error = %e,
+                    "respond delegated task input route failed"
+                );
+                return;
+            }
+        };
+        let assignee_agent_id = request.requester_agent_id.clone();
+        let delivery = match self
+            .cluster
+            .deliver_delegated_task_input(
+                &assignee_agent_id,
+                &task.task_id,
+                &request.request_id,
+                task.revision,
+                &request.question,
+                request.answer.as_deref().unwrap_or_default(),
+                &task.delegator_agent_id,
+                &task.delegator_agent_name,
+            )
+            .await
+        {
+            Ok(delivery) => delivery,
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    request_id = %payload.request_id,
+                    assignee_agent_id = %assignee_agent_id,
+                    error = %e,
+                    "inject delegated task input failed"
+                );
+                "delivery_failed"
+            }
+        };
+        match self
+            .state
+            .set_agent_task_input_delivery(&task.task_id, &request.request_id, delivery)
+            .await
+        {
+            Ok(updated_task) => task = updated_task,
+            Err(e) => tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                request_id = %payload.request_id,
+                error = %e,
+                "record delegated task input delivery failed"
+            ),
+        }
+
+        let mut metadata = LedgerMessageMeta {
+            subtype: Some(ledger::GATEWAY_SUBTYPE_AGENT_TASK_INPUT_RESPONDED.to_string()),
+            from_agent_id: Some(task.delegator_agent_id.clone()),
+            to_agent_id: Some(assignee_agent_id),
+            reason: Some("input_responded".to_string()),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("task_id".to_string(), serde_json::json!(task.task_id));
+        metadata.extra.insert(
+            "request_id".to_string(),
+            serde_json::json!(request.request_id),
+        );
+        metadata
+            .extra
+            .insert("delivery".to_string(), serde_json::json!(delivery));
+        self.record_gateway_fact(
+            task.delegator_agent_id.clone(),
+            task.delegator_agent_name.clone(),
+            ledger::GATEWAY_SUBTYPE_AGENT_TASK_INPUT_RESPONDED,
+            "delegated task input responded",
+            metadata,
+        )
+        .await;
+        self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
+        self.publish_frontend_snapshot(None).await;
+    }
+
+    async fn route_agent_task_updated(&self, payload: AgentTaskUpdatedPayload) {
+        let Some(current_task) = self.state.agent_task(&payload.task_id).await else {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                update_id = %payload.update_id,
+                "updated delegated task does not exist"
+            );
+            return;
+        };
+        let Some(assignee_agent_id) = current_task.assignee_agent_id.as_deref() else {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                update_id = %payload.update_id,
+                "updated delegated task has no assignee"
+            );
+            return;
+        };
+        if self.cluster.get(assignee_agent_id).await.is_none() {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                update_id = %payload.update_id,
+                assignee_agent_id = %assignee_agent_id,
+                "updated delegated task assignee runtime is unavailable"
+            );
+            return;
+        }
+        let (mut task, update) = match self
+            .state
+            .update_agent_task(
+                &payload.task_id,
+                &payload.updater_agent_id,
+                payload.update_id.clone(),
+                payload.instruction.clone(),
+                payload.objective.clone(),
+                payload.acceptance.clone(),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    update_id = %payload.update_id,
+                    agent_id = %payload.updater_agent_id,
+                    error = %e,
+                    "update delegated task route failed"
+                );
+                return;
+            }
+        };
+        let Some(assignee_agent_id) = task.assignee_agent_id.clone() else {
+            tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                update_id = %payload.update_id,
+                "updated delegated task lost its assignee before delivery"
+            );
+            return;
+        };
+        let delivery = match self
+            .cluster
+            .deliver_delegated_task_update(
+                &assignee_agent_id,
+                &task.task_id,
+                &update.update_id,
+                update.task_revision,
+                &update.instruction,
+                update.objective.as_deref(),
+                update.acceptance.as_deref(),
+                &task.delegator_agent_id,
+                &task.delegator_agent_name,
+            )
+            .await
+        {
+            Ok(delivery) => delivery,
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    update_id = %payload.update_id,
+                    assignee_agent_id = %assignee_agent_id,
+                    error = %e,
+                    "inject delegated task update failed"
+                );
+                "delivery_failed"
+            }
+        };
+        match self
+            .state
+            .set_agent_task_update_delivery(&task.task_id, &update.update_id, delivery)
+            .await
+        {
+            Ok(updated_task) => task = updated_task,
+            Err(e) => tracing::warn!(
+                conversation_id = %self.conversation_id,
+                task_id = %payload.task_id,
+                update_id = %payload.update_id,
+                error = %e,
+                "record delegated task update delivery failed"
+            ),
+        }
+        let mut metadata = LedgerMessageMeta {
+            subtype: Some(ledger::GATEWAY_SUBTYPE_AGENT_TASK_UPDATED.to_string()),
+            from_agent_id: Some(task.delegator_agent_id.clone()),
+            to_agent_id: Some(assignee_agent_id),
+            reason: Some("task_updated".to_string()),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("task_id".to_string(), serde_json::json!(task.task_id));
+        metadata
+            .extra
+            .insert("update_id".to_string(), serde_json::json!(update.update_id));
+        metadata.extra.insert(
+            "task_revision".to_string(),
+            serde_json::json!(update.task_revision),
+        );
+        metadata
+            .extra
+            .insert("delivery".to_string(), serde_json::json!(delivery));
+        self.record_gateway_fact(
+            task.delegator_agent_id.clone(),
+            task.delegator_agent_name.clone(),
+            ledger::GATEWAY_SUBTYPE_AGENT_TASK_UPDATED,
+            "delegated task updated",
+            metadata,
+        )
+        .await;
+        self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
+        self.publish_frontend_snapshot(None).await;
     }
 
     async fn route_agent_task_reported(&self, payload: AgentTaskReportedPayload) {
@@ -1136,7 +1533,295 @@ impl AgentGateway {
         }
 
         self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
         self.publish_frontend_snapshot(None).await;
+    }
+
+    async fn route_agent_task_progress_reported(&self, payload: AgentTaskProgressReportedPayload) {
+        let (task, progress) = match self
+            .state
+            .report_agent_task_progress(
+                &payload.task_id,
+                &payload.reporter_agent_id,
+                payload.progress_id.clone(),
+                payload.stage_id.clone(),
+                payload.summary.clone(),
+                payload.result.clone(),
+                payload.artifacts.clone(),
+                payload.next_stage.clone(),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    progress_id = %payload.progress_id,
+                    agent_id = %payload.reporter_agent_id,
+                    error = %error,
+                    "report delegated task progress route failed"
+                );
+                return;
+            }
+        };
+        let mut metadata = LedgerMessageMeta {
+            subtype: Some(ledger::GATEWAY_SUBTYPE_AGENT_TASK_PROGRESS.to_string()),
+            from_agent_id: Some(payload.reporter_agent_id.clone()),
+            to_agent_id: Some(task.delegator_agent_id.clone()),
+            reason: Some("task_progress".to_string()),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("task_id".to_string(), serde_json::json!(task.task_id));
+        metadata.extra.insert(
+            "progress_id".to_string(),
+            serde_json::json!(progress.progress_id),
+        );
+        metadata
+            .extra
+            .insert("stage_id".to_string(), serde_json::json!(progress.stage_id));
+        metadata.extra.insert(
+            "task_revision".to_string(),
+            serde_json::json!(progress.task_revision),
+        );
+        if let Some(next_stage) = progress.next_stage.as_ref() {
+            metadata
+                .extra
+                .insert("next_stage".to_string(), serde_json::json!(next_stage));
+        }
+        self.record_gateway_fact(
+            task.delegator_agent_id.clone(),
+            task.delegator_agent_name.clone(),
+            ledger::GATEWAY_SUBTYPE_AGENT_TASK_PROGRESS,
+            &format!(
+                "[Background task progress]\nTask: {}\nStage: {}\n{}",
+                task.task_id, progress.stage_id, progress.summary
+            ),
+            metadata,
+        )
+        .await;
+        self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
+        self.publish_frontend_snapshot(None).await;
+    }
+
+    async fn route_agent_task_completed(&self, payload: AgentTaskCompletedPayload) {
+        let task = match self
+            .state
+            .complete_agent_task(&payload.task_id, &payload.completed_by_agent_id)
+            .await
+        {
+            Ok(task) => task,
+            Err(error) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    agent_id = %payload.completed_by_agent_id,
+                    error = %error,
+                    "complete delegated task route failed"
+                );
+                return;
+            }
+        };
+        let retirement = match task.assignee_agent_id.as_deref() {
+            Some(agent_id) => self
+                .cluster
+                .retire_task_agent(agent_id, crate::agent::AgentPauseMode::WaitForTool)
+                .await
+                .unwrap_or("retirement_failed"),
+            None => "no_assignee",
+        };
+        let mut metadata = LedgerMessageMeta {
+            subtype: Some(ledger::GATEWAY_SUBTYPE_AGENT_TASK_COMPLETED.to_string()),
+            from_agent_id: Some(payload.completed_by_agent_id),
+            to_agent_id: task.assignee_agent_id.clone(),
+            reason: Some(task.status.as_str().to_string()),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("task_id".to_string(), serde_json::json!(task.task_id));
+        metadata.extra.insert(
+            "status".to_string(),
+            serde_json::json!(task.status.as_str()),
+        );
+        metadata
+            .extra
+            .insert("retirement".to_string(), serde_json::json!(retirement));
+        self.record_gateway_fact(
+            task.delegator_agent_id.clone(),
+            task.delegator_agent_name.clone(),
+            ledger::GATEWAY_SUBTYPE_AGENT_TASK_COMPLETED,
+            "delegated task report accepted",
+            metadata,
+        )
+        .await;
+        self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
+        self.publish_frontend_snapshot(None).await;
+    }
+
+    async fn route_agent_task_canceled(&self, payload: AgentTaskCanceledPayload) {
+        let task = match self
+            .state
+            .cancel_agent_task(&payload.task_id, &payload.canceled_by_agent_id)
+            .await
+        {
+            Ok(task) => task,
+            Err(error) => {
+                tracing::warn!(
+                    conversation_id = %self.conversation_id,
+                    task_id = %payload.task_id,
+                    agent_id = %payload.canceled_by_agent_id,
+                    error = %error,
+                    "cancel delegated task route failed"
+                );
+                return;
+            }
+        };
+        let retirement = match task.assignee_agent_id.as_deref() {
+            Some(agent_id) => self
+                .cluster
+                .retire_task_agent(agent_id, payload.mode)
+                .await
+                .unwrap_or("retirement_failed"),
+            None => "no_assignee",
+        };
+        let mut metadata = LedgerMessageMeta {
+            subtype: Some(ledger::GATEWAY_SUBTYPE_AGENT_TASK_CANCELED.to_string()),
+            from_agent_id: Some(payload.canceled_by_agent_id),
+            to_agent_id: task.assignee_agent_id.clone(),
+            reason: Some(payload.reason.clone()),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("task_id".to_string(), serde_json::json!(task.task_id));
+        metadata.extra.insert(
+            "status".to_string(),
+            serde_json::json!(task.status.as_str()),
+        );
+        metadata.extra.insert(
+            "pause_mode".to_string(),
+            serde_json::json!(payload.mode.as_str()),
+        );
+        metadata
+            .extra
+            .insert("retirement".to_string(), serde_json::json!(retirement));
+        self.record_gateway_fact(
+            task.delegator_agent_id.clone(),
+            task.delegator_agent_name.clone(),
+            ledger::GATEWAY_SUBTYPE_AGENT_TASK_CANCELED,
+            "delegated task canceled",
+            metadata,
+        )
+        .await;
+        self.publish_task_state_delta(&task).await;
+        self.refresh_delegated_tasks_snapshot(&task.delegator_agent_id)
+            .await;
+        self.publish_frontend_snapshot(None).await;
+    }
+
+    async fn refresh_delegated_tasks_snapshot_for_assignee(&self, assignee_agent_id: &str) {
+        let delegators = self
+            .state
+            .agent_tasks()
+            .await
+            .into_iter()
+            .filter(|task| task.assignee_agent_id.as_deref() == Some(assignee_agent_id))
+            .map(|task| task.delegator_agent_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        for delegator in delegators {
+            self.refresh_delegated_tasks_snapshot(&delegator).await;
+        }
+    }
+
+    async fn refresh_delegated_tasks_snapshot(&self, delegator_agent_id: &str) {
+        let tasks = self
+            .state
+            .agent_tasks()
+            .await
+            .into_iter()
+            .filter(|task| {
+                task.delegator_agent_id == delegator_agent_id && !task.status.is_terminal()
+            })
+            .collect::<Vec<_>>();
+        let mut text = String::from(
+            "[Delegated agent tasks]\nUse WaitAgentTask with the exact task_id to wait. Use RespondAgentTaskInput with task_id and request_id when a child requests input. A reported task awaits your decision: CompleteAgentTask accepts it, UpdateAgentTask resumes it with changes, and CancelAgentTask abandons it. When the parent goal changes, call UpdateAgentTask for every affected non-terminal task. Use PauseAgent with the exact assignee_agent_id when a running task must be paused.\n",
+        );
+        if tasks.is_empty() {
+            text.push_str("- No delegated tasks.\n");
+        }
+        for task in tasks {
+            text.push_str(&format!(
+                "- task_id: {}\n  title: {}\n  task_revision: {}\n  task_status: {}\n",
+                task.task_id,
+                task.title,
+                task.revision,
+                task.status.as_str()
+            ));
+            if let Some(agent_id) = task.assignee_agent_id.as_deref() {
+                text.push_str(&format!("  assignee_agent_id: {agent_id}\n"));
+                if let Some(runtime) = self.cluster.get(agent_id).await {
+                    let cache = runtime.sm.unit().cache();
+                    let pause_requested = cache
+                        .get::<bool>(crate::context::keys::PAUSE_REQUESTED)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or(false);
+                    let pause_mode = cache
+                        .get::<String>(crate::context::keys::PAUSE_MODE)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "wait_for_tool".to_string());
+                    text.push_str(&format!(
+                        "  agent_state: {}\n  pause_requested: {}\n  pause_mode: {}\n",
+                        runtime.sm.current_state(),
+                        pause_requested,
+                        pause_mode
+                    ));
+                }
+            }
+            if let Some(report) = task.report.as_ref() {
+                text.push_str(&format!(
+                    "  report:\n    report_type: {}\n    summary: {}\n",
+                    report.report_type, report.summary
+                ));
+            }
+            if let Some(progress) = task.progress.last() {
+                text.push_str(&format!(
+                    "  latest_progress:\n    stage_id: {}\n    summary: {}\n",
+                    progress.stage_id, progress.summary
+                ));
+                if let Some(next_stage) = progress.next_stage.as_deref() {
+                    text.push_str(&format!("    next_stage: {next_stage}\n"));
+                }
+            }
+            for request in task.input_requests.iter().filter(|request| {
+                request.status == crate::conversation_state::AgentTaskInputRequestStatus::Pending
+            }) {
+                text.push_str(&format!(
+                    "  input_request:\n    request_id: {}\n    blocking: {}\n    question: {}\n",
+                    request.request_id, request.blocking, request.question
+                ));
+                if !request.required_fields.is_empty() {
+                    text.push_str(&format!(
+                        "    required_fields: {}\n",
+                        request.required_fields.join(", ")
+                    ));
+                }
+            }
+        }
+        self.state
+            .set_dynamic_snapshot_field(delegator_agent_id, "runtime.delegated_agent_tasks", &text)
+            .await;
     }
 
     async fn route_agent_lifecycle_fact(&self, subtype: &str, payload: serde_json::Value) {

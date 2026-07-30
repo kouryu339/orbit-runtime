@@ -414,7 +414,7 @@ func (r *Runtime) SendMessageAdmission(
 }
 
 func (r *Runtime) Pause(ctx context.Context, conversationID string) error {
-	_, err := r.PauseAdmission(ctx, conversationID)
+	_, err := r.PauseAdmissionWithMode(ctx, conversationID, "wait_for_tool")
 	return err
 }
 
@@ -422,8 +422,17 @@ func (r *Runtime) PauseAdmission(
 	ctx context.Context,
 	conversationID string,
 ) (AdmissionResult, error) {
+	return r.PauseAdmissionWithMode(ctx, conversationID, "wait_for_tool")
+}
+
+func (r *Runtime) PauseAdmissionWithMode(
+	ctx context.Context,
+	conversationID string,
+	mode string,
+) (AdmissionResult, error) {
 	raw, err := r.invoke(ctx, "conversation.pause", map[string]any{
 		"conversation_id": conversationID,
+		"mode":            mode,
 	})
 	if err != nil {
 		return AdmissionResult{}, err

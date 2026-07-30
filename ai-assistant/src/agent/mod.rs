@@ -6,6 +6,7 @@ pub mod cluster;
 pub mod runtime;
 pub mod systems;
 pub mod types;
+mod wait_interrupt;
 
 pub mod keys {
     pub const ACTIVE_AGENT: &str = "agent:active";
@@ -18,7 +19,7 @@ pub mod keys {
 }
 
 pub use cluster::{AgentCluster, AgentClusterSnapshot, AgentRuntimeSnapshot};
-pub use runtime::{AgentId, AgentKind, AgentPermissions, AgentRuntime};
+pub use runtime::{AgentId, AgentKind, AgentPauseMode, AgentPermissions, AgentRuntime};
 pub use types::*;
 
 pub fn global_conversation() -> Option<&'static Arc<crate::conversation::Conversation>> {

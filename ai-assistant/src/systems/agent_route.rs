@@ -645,6 +645,7 @@ mod tests {
                 serde_json::to_value(crate::events::AgentPauseRequestedPayload {
                     agent_id: "agent_1".to_string(),
                     agent_name: "Worker".to_string(),
+                    mode: crate::agent::AgentPauseMode::WaitForTool,
                 })
                 .unwrap(),
             ))
@@ -676,17 +677,10 @@ mod tests {
                 && record.metadata.subtype.as_deref()
                     == Some(ledger::GATEWAY_SUBTYPE_PAUSE_REQUESTED)
         }));
-        assert!(records.iter().any(|record| {
+        assert!(!records.iter().any(|record| {
             record.agent_id == "agent_1"
-                && record.role == LedgerRole::GatewayMessage
                 && record.metadata.subtype.as_deref()
                     == Some(ledger::GATEWAY_SUBTYPE_AGENT_SUSPENDED)
-                && record
-                    .metadata
-                    .extra
-                    .get("state")
-                    .and_then(|value| value.as_str())
-                    == Some(crate::state::states::SUSPENDED)
         }));
     }
 

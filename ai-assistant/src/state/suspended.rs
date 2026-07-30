@@ -5,6 +5,7 @@
 //!   - `USER_INPUT` / `RESUME` → `thinking`
 
 use corework::cache::CacheExt;
+use corework::event::BaseEvent;
 use corework::execution_unit::ExecutionUnit;
 use corework::statemachine::{FnState, SimpleTransition};
 use std::sync::Arc;
@@ -40,6 +41,25 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         states::SUSPENDED,
     )
     .await;
+    let stop_reason = cache.get::<String>(keys::LAST_STOP_REASON).await?;
+    if stop_reason.as_deref() == Some("pause") {
+        let (agent_id, agent_name) = crate::agent::source_meta_from_cache(&*cache).await;
+        let pause_mode = cache
+            .get::<String>(keys::PAUSE_MODE)
+            .await?
+            .unwrap_or_else(|| "wait_for_tool".to_string());
+        event_bus
+            .publish(BaseEvent::new(
+                crate::events::types::AGENT_SUSPENDED,
+                serde_json::json!({
+                    "agent_id": agent_id,
+                    "agent_name": agent_name,
+                    "state": states::SUSPENDED,
+                    "pause_mode": pause_mode,
+                }),
+            ))
+            .await?;
+    }
 
     Ok(())
 }

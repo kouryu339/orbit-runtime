@@ -611,8 +611,18 @@ fn invoke_command(
         }
         "conversation.pause" => {
             let conversation_id = required_string(payload, "conversation_id")?;
-            let admission = facade
-                .pause_conversation_with_admission(&conversation_id, command_id.to_owned())?;
+            let mode = ai_assistant::agent::AgentPauseMode::parse(
+                payload
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or("wait_for_tool"),
+            )
+            .map_err(FfiError::invalid_argument)?;
+            let admission = facade.pause_conversation_with_admission(
+                &conversation_id,
+                command_id.to_owned(),
+                mode,
+            )?;
             admission_json(admission)
         }
         "conversation.close" => {

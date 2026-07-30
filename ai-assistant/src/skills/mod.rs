@@ -570,6 +570,21 @@ impl SkillManager {
     }
 
     /// 将指定 system state Skill 声明的工具加入 Agent 基础白名单。
+    /// Whether a system-layer Skill explicitly grants a tool capability.
+    ///
+    /// Prompt projection uses this to expose output schemas only when the
+    /// selected thinking strategy can author temporary Workflow scripts.
+    pub fn system_skill_declares_tool(&self, skill_name: &str, tool_name: &str) -> bool {
+        self.get(skill_name).is_some_and(|skill| {
+            skill.metadata.system_layer
+                && skill
+                    .metadata
+                    .tools
+                    .iter()
+                    .any(|declared| declared == tool_name)
+        })
+    }
+
     pub fn inject_tools_for_state(&self, state: &str, tools: &mut Vec<String>) {
         let Some(skill) = self.get(state).filter(|skill| skill.metadata.system_layer) else {
             return;
@@ -714,6 +729,14 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn only_script_capable_thinking_skill_declares_workflow_script_tool() {
+        let mgr = SkillManager::new_with_embedded_system("/tmp/skills");
+
+        assert!(!mgr.system_skill_declares_tool("thinking", "executeWorkflowScript"));
+        assert!(mgr.system_skill_declares_tool("thinking-pro", "executeWorkflowScript"));
     }
 
     #[tokio::test]

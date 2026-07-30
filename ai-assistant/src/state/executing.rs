@@ -139,6 +139,8 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     for r in &results {
         let (cmd_name, _) = parse_tool_command(&r.command);
         let entry = r.to_ai.clone();
+        let interrupted_unknown = r.result.get("status").and_then(serde_json::Value::as_str)
+            == Some("interrupted_unknown");
         tracing::debug!(
             conversation_id = %conversation_id,
             agent_id = %source_id,
@@ -165,7 +167,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 display_role: "tool_step".to_string(),
                 tool_name: Some(cmd_name.to_string()),
                 tool_command: Some(r.command.clone()),
-                success: Some(r.success),
+                success: (!interrupted_unknown).then_some(r.success),
                 reasoning: None,
                 decision: None,
                 tools: Vec::new(),
@@ -184,12 +186,21 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
             .get(idx)
             .cloned()
             .unwrap_or_else(|| format!("{}:{}:{}", source_id, turn_id, idx));
-        let status = if tool_part.display.success == Some(false) {
+        let interrupted_unknown = tool_part
+            .result
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            == Some("interrupted_unknown");
+        let status = if interrupted_unknown {
+            "interrupted_unknown"
+        } else if tool_part.display.success == Some(false) {
             "error"
         } else {
             "success"
         };
-        let subtype = if tool_part.display.success == Some(false) {
+        let subtype = if interrupted_unknown {
+            crate::ledger::GATEWAY_SUBTYPE_TOOL_CALL_INTERRUPTED_UNKNOWN
+        } else if tool_part.display.success == Some(false) {
             crate::ledger::GATEWAY_SUBTYPE_TOOL_CALL_FAILED
         } else {
             crate::ledger::GATEWAY_SUBTYPE_TOOL_CALL_FINISHED
@@ -218,12 +229,13 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     metadata.extra.insert(key.to_string(), value.clone());
                 }
             }
-            if object.get("status").and_then(serde_json::Value::as_str)
-                == Some("recovery_interrupted")
-            {
+            if matches!(
+                object.get("status").and_then(serde_json::Value::as_str),
+                Some("recovery_interrupted" | "interrupted_unknown")
+            ) {
                 metadata.extra.insert(
                     "status".to_string(),
-                    serde_json::json!("recovery_interrupted"),
+                    object.get("status").cloned().unwrap_or_default(),
                 );
             }
         }
@@ -262,15 +274,20 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         .unwrap_or(false);
     cache.delete(keys::PENDING_TOOLS_WAIT_FOR_INPUT).await?;
     if wait_for_input {
+        let stop_reason = cache
+            .get::<String>(keys::PENDING_TOOLS_STOP_REASON)
+            .await?
+            .unwrap_or_else(|| "waiting".to_string());
+        cache.delete(keys::PENDING_TOOLS_STOP_REASON).await?;
+        cache.set(keys::TASK_STATUS, &stop_reason, None).await?;
         cache
-            .set(keys::TASK_STATUS, &"waiting".to_string(), None)
-            .await?;
-        cache
-            .set(keys::LAST_STOP_REASON, &"waiting".to_string(), None)
+            .set(keys::LAST_STOP_REASON, &stop_reason, None)
             .await?;
         cache
             .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
             .await?;
+    } else {
+        cache.delete(keys::PENDING_TOOLS_STOP_REASON).await?;
     }
 
     Ok(())
@@ -313,6 +330,14 @@ async fn run_tools(
     }
 
     let mut join_set = JoinSet::new();
+    let execution_lease = ctx
+        .resolve_shared_component::<crate::agent::runtime::AgentExecutionControl>()
+        .ok()
+        .map(|control| control.begin_tool_batch());
+    let detach_token = execution_lease
+        .as_ref()
+        .map(|lease| lease.token())
+        .unwrap_or_default();
 
     for (idx, cmd) in tools.iter().enumerate() {
         let cmd = cmd.clone();
@@ -425,21 +450,79 @@ async fn run_tools(
     }
 
     // 收集所有结果，按原始顺序排列
-    let mut results = Vec::with_capacity(tools.len());
-    while let Some(res) = join_set.join_next().await {
-        match res {
-            Ok((idx, result)) => {
-                results.push((idx, result));
+    let mut results = vec![None; tools.len()];
+    let mut detached = false;
+    while !join_set.is_empty() {
+        tokio::select! {
+            res = join_set.join_next() => {
+                if let Some(res) = res {
+                    match res {
+                        Ok((idx, result)) => results[idx] = Some(result),
+                        Err(error) if error.is_cancelled() && detached => {}
+                        Err(error) => tracing::error!("tool task failed: {:?}", error),
+                    }
+                }
             }
-            Err(e) => {
-                tracing::error!("任务执行 panicked: {:?}", e);
+            _ = detach_token.cancelled(), if !detached => {
+                detached = true;
+                join_set.abort_all();
             }
         }
     }
 
-    // 按索引排序以恢复原始顺序
-    results.sort_by_key(|(idx, _)| *idx);
-    results.into_iter().map(|(_, r)| r).collect()
+    for (idx, slot) in results.iter_mut().enumerate() {
+        if slot.is_some() {
+            continue;
+        }
+        let command = tools.get(idx).cloned().unwrap_or_default();
+        let tool_name = structured_tools
+            .get(idx)
+            .map(|call| call.name.as_str())
+            .unwrap_or_else(|| parse_tool_command(&command).0)
+            .to_string();
+        let result = if detached {
+            interrupted_unknown_tool_result(&command, &tool_name)
+        } else {
+            crate::decision::ToolResult {
+                command: command.clone(),
+                success: false,
+                to_ai: format!("Tool '{tool_name}' did not produce a runtime result."),
+                error_code: -1,
+                result: serde_json::json!({
+                    "status": "runtime_failed",
+                    "source": "tool_join"
+                }),
+            }
+        };
+        let turn_id = crate::context::AssistantContext::current_turn_id(&ctx.cache).await;
+        let source_id = crate::agent::source_id_from_cache(&*ctx.cache).await;
+        publish_tool_end_event(ctx, &tool_name, &command, &source_id, turn_id, &result).await;
+        *slot = Some(result);
+    }
+
+    drop(execution_lease);
+    results.into_iter().flatten().collect()
+}
+
+fn interrupted_unknown_tool_result(command: &str, tool_name: &str) -> crate::decision::ToolResult {
+    crate::decision::ToolResult {
+        command: command.to_string(),
+        success: false,
+        to_ai: format!(
+            "Tool '{tool_name}' returned early because a detach-tool pause was requested. Its external outcome is indeterminate: it may have succeeded, failed, or still be running. Do not repeat this call automatically. Verify the external system state and idempotency before retrying or compensating."
+        ),
+        error_code: -6,
+        result: serde_json::json!({
+            "status": "interrupted_unknown",
+            "reason": "pause_requested",
+            "success": null,
+            "failure": null,
+            "idempotency": "unknown",
+            "retry_safe": false,
+            "verification_required": true,
+            "source": "live_pause"
+        }),
+    }
 }
 
 async fn authorize_tool(
@@ -591,7 +674,22 @@ async fn publish_tool_fact(
 
 #[cfg(test)]
 mod tests {
+    use super::interrupted_unknown_tool_result;
     use crate::tool_runner::parse_tool_command;
+
+    #[test]
+    fn detached_tool_result_is_explicitly_indeterminate_and_not_retry_safe() {
+        let result = interrupted_unknown_tool_result("WriteOrder --id 1", "WriteOrder");
+
+        assert!(!result.success);
+        assert_eq!(result.error_code, -6);
+        assert_eq!(result.result["status"], "interrupted_unknown");
+        assert_eq!(result.result["retry_safe"], false);
+        assert_eq!(result.result["verification_required"], true);
+        assert!(result
+            .to_ai
+            .contains("Do not repeat this call automatically"));
+    }
 
     #[test]
     fn test_parse_tool_command_with_args() {

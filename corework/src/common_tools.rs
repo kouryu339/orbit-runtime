@@ -14,6 +14,7 @@ use crate::error::{FrameworkError, Result};
 use crate::event::{BaseEvent, EventHandler};
 use crate::orchestration::Context;
 use crate::system::SystemOperation;
+use crate::wait_control::{WaitInterrupt, WaitInterruptSourceHandle};
 
 const DEFAULT_WAIT_MS: u64 = 30_000;
 const MAX_WAIT_MS: u64 = 300_000;
@@ -70,7 +71,7 @@ impl EventHandler for WaitEventHandler {
 
 #[define_operation(
     name = "Wait",
-    display_name = "等待{timeout_ms}毫秒或事件{event_type}，原因{reason}，返回唤醒类型{wake_reason}、耗时{elapsed_ms}和事件{event}",
+    display_name = "等待{timeout_ms}毫秒或事件{event_type}，原因{reason}，返回唤醒类型{wake_reason}、耗时{elapsed_ms}、事件{event}和外部关注{interrupt}",
     category = "Utility",
     description = "Yield execution until a timeout expires or an optional event arrives in the current scope. Use this instead of repeatedly polling while another task is still working.",
     params {
@@ -79,9 +80,10 @@ impl EventHandler for WaitEventHandler {
         reason: "String@Optional short explanation of what is being awaited."
     },
     outputs {
-        wake_reason: "String@Either timeout or event.",
+        wake_reason: "String@Either timeout, event, or external_attention.",
         elapsed_ms: "Number@Actual elapsed milliseconds.",
-        event: "Any@Matched event when wake_reason is event; otherwise null."
+        event: "Any@Matched event when wake_reason is event; otherwise null.",
+        interrupt: "Any@Current external attention request when wake_reason is external_attention; otherwise null."
     },
     destructive = false,
     readonly = true,
@@ -121,23 +123,92 @@ impl SystemOperation for Wait {
         let reason = args.get("reason").unwrap_or("").trim().to_string();
         let started = Instant::now();
 
-        let event = if let Some(event_type) = event_type.as_deref() {
-            wait_for_event(ctx, event_type, timeout_ms).await?
-        } else {
-            tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
-            None
+        let interrupt_source = ctx
+            .execution_unit()
+            .and_then(|unit| unit.resolve_shared_component::<WaitInterruptSourceHandle>());
+        let event_handler = event_type
+            .as_deref()
+            .map(|_| Arc::new(WaitEventHandler::new(ctx)));
+        if let (Some(event_type), Some(handler)) = (event_type.as_deref(), event_handler.as_ref()) {
+            ctx.world_event_bus
+                .subscribe(event_type.to_string(), handler.clone())
+                .await?;
+        }
+
+        enum WaitOutcome {
+            Timeout,
+            Event(BaseEvent),
+            Interrupt(WaitInterrupt),
+        }
+
+        let event_wait = async {
+            match event_handler.as_ref() {
+                Some(handler) => {
+                    handler.notify.notified().await;
+                    handler.event.lock().await.clone()
+                }
+                None => std::future::pending::<Option<BaseEvent>>().await,
+            }
+        };
+        let interrupt_wait = async {
+            match interrupt_source.as_ref() {
+                Some(source) => source.wait_for_interrupt().await,
+                None => std::future::pending::<WaitInterrupt>().await,
+            }
+        };
+        let outcome = tokio::select! {
+            biased;
+            interrupt = interrupt_wait => WaitOutcome::Interrupt(interrupt),
+            event = event_wait => match event {
+                Some(event) => WaitOutcome::Event(event),
+                None => WaitOutcome::Timeout,
+            },
+            _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => WaitOutcome::Timeout,
         };
 
+        if let (Some(event_type), Some(handler)) = (event_type.as_deref(), event_handler.as_ref()) {
+            ctx.world_event_bus
+                .unsubscribe(event_type, handler.name())
+                .await?;
+        }
+
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        let wake_reason = if event.is_some() { "event" } else { "timeout" };
-        let event_json = event
-            .as_ref()
-            .and_then(|value| serde_json::to_value(value).ok())
-            .unwrap_or(serde_json::Value::Null);
-        let summary = if reason.is_empty() {
-            format!("Wait finished by {wake_reason} after {elapsed_ms} ms.")
-        } else {
-            format!("Wait for '{reason}' finished by {wake_reason} after {elapsed_ms} ms.")
+        let (wake_reason, event_json, interrupt_json, summary) = match outcome {
+            WaitOutcome::Timeout => {
+                let summary = if reason.is_empty() {
+                    format!("Wait finished by timeout after {elapsed_ms} ms.")
+                } else {
+                    format!("Wait for '{reason}' finished by timeout after {elapsed_ms} ms.")
+                };
+                (
+                    "timeout",
+                    serde_json::Value::Null,
+                    serde_json::Value::Null,
+                    summary,
+                )
+            }
+            WaitOutcome::Event(event) => {
+                let event_json = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
+                let summary = if reason.is_empty() {
+                    format!("Wait finished by event after {elapsed_ms} ms.")
+                } else {
+                    format!("Wait for '{reason}' finished by event after {elapsed_ms} ms.")
+                };
+                ("event", event_json, serde_json::Value::Null, summary)
+            }
+            WaitOutcome::Interrupt(interrupt) => {
+                let detail = interrupt.summary.clone().unwrap_or_else(|| {
+                    format!("External attention is required: {}.", interrupt.reason)
+                });
+                (
+                    "external_attention",
+                    serde_json::Value::Null,
+                    serde_json::to_value(interrupt).unwrap_or(serde_json::Value::Null),
+                    format!(
+                        "{detail} Wait ended early after {elapsed_ms} ms; the original wait condition is not complete."
+                    ),
+                )
+            }
         };
 
         Ok(AIOutput::success(
@@ -145,6 +216,7 @@ impl SystemOperation for Wait {
                 "wake_reason": wake_reason,
                 "elapsed_ms": elapsed_ms,
                 "event": event_json,
+                "interrupt": interrupt_json,
             }),
             summary,
         ))
@@ -340,39 +412,14 @@ fn validate_markdown_relative_path(file_name: &str) -> std::result::Result<PathB
     Ok(normalized)
 }
 
-async fn wait_for_event(
-    ctx: &Context,
-    event_type: &str,
-    timeout_ms: u64,
-) -> Result<Option<BaseEvent>> {
-    let handler = Arc::new(WaitEventHandler::new(ctx));
-    let handler_name = handler.name().to_string();
-    ctx.world_event_bus
-        .subscribe(event_type.to_string(), handler.clone())
-        .await?;
-
-    let notified = handler.notify.notified();
-    let woke = tokio::time::timeout(Duration::from_millis(timeout_ms), notified)
-        .await
-        .is_ok();
-    let event = if woke {
-        handler.event.lock().await.clone()
-    } else {
-        None
-    };
-
-    ctx.world_event_bus
-        .unsubscribe(event_type, &handler_name)
-        .await?;
-    Ok(event)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cache::InMemoryCache;
     use crate::event::{BaseEvent, InMemoryEventBus};
+    use crate::execution_unit::{ExecutionUnit, UnitType};
     use crate::monitoring::NoopTelemetry;
+    use crate::wait_control::{WaitInterruptSource, WaitInterruptSourceHandle};
 
     fn test_context() -> Context {
         Context::new(
@@ -527,6 +574,47 @@ mod tests {
 
         assert!(output.is_ok());
         assert_eq!(output.result["wake_reason"], "timeout");
+        assert!(output.result["interrupt"].is_null());
+    }
+
+    struct ImmediateInterruptSource;
+
+    #[async_trait]
+    impl WaitInterruptSource for ImmediateInterruptSource {
+        async fn wait_for_interrupt(&self) -> WaitInterrupt {
+            WaitInterrupt {
+                reason: "test_attention".to_string(),
+                details: serde_json::json!({"task_id": "task-1"}),
+                summary: Some("A test task needs attention.".to_string()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_returns_early_for_external_attention() {
+        let framework = crate::world::FrameworkState::initialize().unwrap();
+        let unit = Arc::new(ExecutionUnit::new_root(UnitType::Module, framework));
+        let source: Arc<dyn WaitInterruptSource> = Arc::new(ImmediateInterruptSource);
+        unit.attach_shared_component(Arc::new(WaitInterruptSourceHandle::new(source)))
+            .unwrap();
+
+        let output = Wait
+            .execute(
+                AIInput {
+                    input: "--timeout_ms 1000 --reason background-work".to_string(),
+                },
+                &unit.create_context(),
+            )
+            .await
+            .unwrap();
+
+        assert!(output.is_ok());
+        assert_eq!(output.result["wake_reason"], "external_attention");
+        assert_eq!(output.result["interrupt"]["reason"], "test_attention");
+        assert_eq!(output.result["interrupt"]["details"]["task_id"], "task-1");
+        assert!(output
+            .to_ai
+            .contains("the original wait condition is not complete"));
     }
 
     #[tokio::test]

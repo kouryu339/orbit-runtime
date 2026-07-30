@@ -40,8 +40,18 @@ pub mod types {
     pub const AGENT_TASK_ASSIGNED: &str = "agent-task:assigned";
     /// Background Agent reported a delegated task result.
     pub const AGENT_TASK_REPORTED: &str = "agent-task:reported";
+    /// Background Agent reported non-terminal progress for a delegated task.
+    pub const AGENT_TASK_PROGRESS_REPORTED: &str = "agent-task:progress-reported";
+    /// Background Agent requested missing input from its task delegator.
+    pub const AGENT_TASK_INPUT_REQUESTED: &str = "agent-task:input-requested";
+    /// Task delegator answered a background Agent input request.
+    pub const AGENT_TASK_INPUT_RESPONDED: &str = "agent-task:input-responded";
+    /// Task delegator changed the objective, constraints, or instructions.
+    pub const AGENT_TASK_UPDATED: &str = "agent-task:updated";
     /// Delegated task reached a terminal state and was routed to its delegator.
     pub const AGENT_TASK_COMPLETED: &str = "agent-task:completed";
+    /// Delegated task was canceled by its delegator.
+    pub const AGENT_TASK_CANCELED: &str = "agent-task:canceled";
     /// Host-owned dynamic snapshot was injected for an agent.
     pub const AGENT_DYNAMIC_SNAPSHOT_SET: &str = "agent:dynamic-snapshot-set";
     /// Agent-local skill/tool state changed.
@@ -197,6 +207,8 @@ pub struct AgentMessageProducedPayload {
 pub struct AgentPauseRequestedPayload {
     pub agent_id: String,
     pub agent_name: String,
+    #[serde(default)]
+    pub mode: crate::agent::AgentPauseMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +260,69 @@ pub struct AgentTaskReportedPayload {
     pub result: serde_json::Value,
     #[serde(default)]
     pub artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskProgressReportedPayload {
+    pub task_id: String,
+    pub progress_id: String,
+    pub reporter_agent_id: String,
+    pub reporter_agent_name: String,
+    pub stage_id: String,
+    pub summary: String,
+    #[serde(default)]
+    pub result: serde_json::Value,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    #[serde(default)]
+    pub next_stage: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskCompletedPayload {
+    pub task_id: String,
+    pub completed_by_agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskCanceledPayload {
+    pub task_id: String,
+    pub canceled_by_agent_id: String,
+    pub reason: String,
+    #[serde(default)]
+    pub mode: crate::agent::AgentPauseMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskInputRequestedPayload {
+    pub task_id: String,
+    pub request_id: String,
+    pub requester_agent_id: String,
+    pub question: String,
+    #[serde(default)]
+    pub required_fields: Vec<String>,
+    #[serde(default)]
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskInputRespondedPayload {
+    pub task_id: String,
+    pub request_id: String,
+    pub responder_agent_id: String,
+    pub answer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskUpdatedPayload {
+    pub task_id: String,
+    pub update_id: String,
+    pub updater_agent_id: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
+    pub acceptance: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

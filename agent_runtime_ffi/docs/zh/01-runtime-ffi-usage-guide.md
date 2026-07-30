@@ -178,7 +178,7 @@ LLM 和 Agent Cluster 三类注册配置表达。
 | `conversation.spawn` | `spawn` 对象或直接展开 spawn 字段 | conversation info |
 | `conversation.spawn_from_snapshot` | `spawn` + `snapshot` | conversation info + `restored:true` |
 | `conversation.send_message` | `conversation_id`, `content` | admission decision |
-| `conversation.pause` | `conversation_id` | admission decision |
+| `conversation.pause` | `conversation_id`, `mode?:"wait_for_tool"|"detach_tool"` | admission decision；默认等待当前工具完成，`detach_tool` 生成 `interrupted_unknown` 且要求外部验证 |
 | `conversation.close` | `conversation_id` | `{}` |
 | `conversation.export_snapshot` | `conversation_id`, `options?` object/string | conversation snapshot |
 | `conversation.agent_tasks` | `conversation_id` | `agent-runtime-agent-tasks/v1` |

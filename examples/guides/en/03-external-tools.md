@@ -17,8 +17,11 @@ There are three distinct context stages:
 ## 3.1 What the Agent Sees
 
 For tools whitelisted by active Skills, Runtime exposes the tool name,
-description, call syntax, parameter contracts, output fields, and behavior
-properties such as readonly, destructive, idempotent, and open-world access.
+description, call syntax, parameter contracts, and behavior properties such as
+readonly, destructive, idempotent, and open-world access. Output fields remain
+part of the registered Runtime metadata, but enter the model prompt only when
+the selected thinking system Skill grants `executeWorkflowScript`; the built-in
+`thinking-pro` Skill does so because temporary scripts need named output pins.
 
 The agent does not see every registered tool. `SKILL.md.tools` is an enforced
 allowlist: a tool must be referenced by an active role or feature Skill before

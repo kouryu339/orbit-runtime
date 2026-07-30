@@ -34,15 +34,13 @@ pub(crate) async fn consume_pause_if_requested(
         .set(keys::LAST_STOP_REASON, &"pause".to_string(), None)
         .await?;
 
-    // 立即取消正在进行的 LLM HTTP 请求（核心：让 tokio::select! 赢得竞争）
-    thinking::request_cancel();
-
     cache.delete(keys::PENDING_TOOLS).await?;
     cache.delete(keys::PENDING_STRUCTURED_TOOLS).await?;
     cache.delete(keys::PENDING_TOOL_CALLS).await?;
     cache.delete(keys::PENDING_TOOL_CALL_IDS).await?;
     cache.delete(keys::PENDING_TOOL_DISPLAY_COMMANDS).await?;
     cache.delete(keys::PENDING_TOOLS_WAIT_FOR_INPUT).await?;
+    cache.delete(keys::PENDING_TOOLS_STOP_REASON).await?;
     cache.delete(keys::NEXT_STATE).await?;
 
     // 静默暂停：不插入任何消息，不设置 PENDING_RESPONSE。

@@ -85,6 +85,9 @@ Typed helpers cover the ABI 1 command set exposed by the native Runtime:
   Registered execution, explicit Draft test execution, and temporary scripts;
 - conversation spawn, restore, materialize, import, export, close, pause, and
   send message;
+- explicit pause policy through `pause_admission_with_mode`: `wait_for_tool`
+  preserves the in-flight result, while `detach_tool` reports an indeterminate
+  external outcome;
 - dynamic snapshot, tool permission resolution, summary model, history
   compaction, and studio open commands;
 - public event filtering through `next_public_event()` and
@@ -171,11 +174,11 @@ C++ RPC tool sidecars.
 
 ## Native Release Artifact
 
-This header targets Orbit Runtime native release `v0.4.6` / ABI 1.3. Download the
+This header targets Orbit Runtime native release `v0.4.7-beta.1` / ABI 1.3. Download the
 platform package from:
 
 ```text
-https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.6
+https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.7-beta.1
 ```
 
 Use `bin/agent_runtime.dll` on Windows x86_64 or `lib/libagent_runtime.so` on

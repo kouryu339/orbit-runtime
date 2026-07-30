@@ -19,7 +19,12 @@ pub const GATEWAY_SUBTYPE_AGENT_REPORT: &str = "agent_report";
 pub const GATEWAY_SUBTYPE_AGENT_TASK_CREATED: &str = "agent_task_created";
 pub const GATEWAY_SUBTYPE_AGENT_TASK_ASSIGNED: &str = "agent_task_assigned";
 pub const GATEWAY_SUBTYPE_AGENT_TASK_REPORT: &str = "agent_task_report";
+pub const GATEWAY_SUBTYPE_AGENT_TASK_PROGRESS: &str = "agent_task_progress";
 pub const GATEWAY_SUBTYPE_AGENT_TASK_COMPLETED: &str = "agent_task_completed";
+pub const GATEWAY_SUBTYPE_AGENT_TASK_CANCELED: &str = "agent_task_canceled";
+pub const GATEWAY_SUBTYPE_AGENT_TASK_INPUT_REQUESTED: &str = "agent_task_input_requested";
+pub const GATEWAY_SUBTYPE_AGENT_TASK_INPUT_RESPONDED: &str = "agent_task_input_responded";
+pub const GATEWAY_SUBTYPE_AGENT_TASK_UPDATED: &str = "agent_task_updated";
 pub const GATEWAY_SUBTYPE_AGENT_SUSPENDED: &str = "agent_suspended";
 pub const GATEWAY_SUBTYPE_AGENT_RESUMED: &str = "agent_resumed";
 pub const GATEWAY_SUBTYPE_AGENT_CANCELED: &str = "agent_canceled";
@@ -28,6 +33,7 @@ pub const GATEWAY_SUBTYPE_TOOL_CALL_PERMISSION_REQUESTED: &str = "tool_call_perm
 pub const GATEWAY_SUBTYPE_TOOL_CALL_STARTED: &str = "tool_call_started";
 pub const GATEWAY_SUBTYPE_TOOL_CALL_FINISHED: &str = "tool_call_finished";
 pub const GATEWAY_SUBTYPE_TOOL_CALL_FAILED: &str = "tool_call_failed";
+pub const GATEWAY_SUBTYPE_TOOL_CALL_INTERRUPTED_UNKNOWN: &str = "tool_call_interrupted_unknown";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

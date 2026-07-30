@@ -1065,6 +1065,7 @@ pub const RECOVERY_TRANSIENT_KEYS: &[&str] = &[
     "next_state_after_saying",
     "thinking_round_count",
     "pause_requested",
+    "pause_mode",
     "waiting_for_input",
     // turn_id 是“当前 turn 的事件序号”，跨进程恢复后由新 thinking on_enter
     // 重新从 0 自增即可，前端凭 turn_id 过滤旧 turn 残余事件，恢复时本就需要清零。

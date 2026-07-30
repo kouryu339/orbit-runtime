@@ -128,6 +128,10 @@ func (*Runtime) PauseAdmission(context.Context, string) (AdmissionResult, error)
 	return AdmissionResult{}, errors.New("runtimehost requires linux and cgo")
 }
 
+func (*Runtime) PauseAdmissionWithMode(context.Context, string, string) (AdmissionResult, error) {
+	return AdmissionResult{}, errors.New("runtimehost requires linux and cgo")
+}
+
 func (*Runtime) SendCommand(context.Context, json.RawMessage) error {
 	return errors.New("runtimehost requires linux and cgo")
 }

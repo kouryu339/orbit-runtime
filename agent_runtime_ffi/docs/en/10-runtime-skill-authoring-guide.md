@@ -292,7 +292,11 @@ A concrete cluster Agent mapping overrides its profile default. `thinking-pro`
 replaces the `thinking` state implementation; it is not an additive feature, so
 both instruction sets are not injected together. It adds only
 `executeWorkflowScript`, which compiles and executes one complete temporary
-script without writing to the Workflow catalog.
+script without writing to the Workflow catalog. Runtime also projects active
+tool output schemas into the model prompt only for a thinking system Skill that
+grants this script capability. Lightweight `thinking` still keeps the complete
+schemas in Runtime for execution and FFI inspection, but omits them from the
+ordinary model prompt.
 
 Persistent Workflow catalog access does not belong to the thinking state. A
 host must grant `listWorkflows`, `readWorkflow`, `createWorkflowDraft`,

@@ -875,18 +875,19 @@ impl RuntimeFacade {
         &self,
         conversation_id: &str,
         command_id: String,
+        mode: ai_assistant::agent::AgentPauseMode,
     ) -> Result<ai_assistant::gateway::AdmissionResult, RuntimeError> {
         self.append_conversation_log(
             conversation_id,
             "pause_conversation_with_admission",
-            json!({ "command_id": command_id.clone() }),
+            json!({ "command_id": command_id.clone(), "mode": mode.as_str() }),
         );
         let manager = self.manager()?;
         let conversation_id = non_empty_arg(conversation_id, "conversation_id")?;
         self.require_conversation_owner(&conversation_id)?;
         self.rt.block_on(async move {
             manager
-                .request_pause_with_admission(&conversation_id, Some(command_id))
+                .request_pause_with_admission(&conversation_id, Some(command_id), mode)
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))
         })

@@ -22,7 +22,7 @@ compact 是显式 conversation 命令。Gateway 对目标 Agent 加命令门，�
 - shared state：`ai:ledger-record-appended`, `ai:messages-changed`,
   `frontend:state_snapshot`；
 - Agent：focus、active/suspended/completed 和 appoint/report；
-- task：created、assigned、reported、completed；
+- task：created、assigned、progress reported、candidate reported、completed、canceled；
 - plan 与 Workflow Studio draft update。
 
 用户可见事件会补充 conversation/agent/turn 元数据。FFI 再包装成

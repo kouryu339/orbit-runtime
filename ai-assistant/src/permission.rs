@@ -186,6 +186,25 @@ impl PermissionBroker {
         }
     }
 
+    pub async fn cancel_agent(&self, agent_id: &str) {
+        let entries = {
+            let mut pending = self.pending.lock().await;
+            let call_ids = pending
+                .iter()
+                .filter(|(_, entry)| entry.request.agent_id == agent_id)
+                .map(|(call_id, _)| call_id.clone())
+                .collect::<Vec<_>>();
+            call_ids
+                .into_iter()
+                .filter_map(|call_id| pending.remove(&call_id))
+                .collect::<Vec<_>>()
+        };
+        for entry in entries {
+            self.publish_resolution(&entry.request, "cancelled").await;
+            drop(entry.sender);
+        }
+    }
+
     async fn publish_resolution(&self, request: &PendingToolPermission, decision: &str) {
         self.publish(
             crate::events::types::TOOL_PERMISSION_RESOLVED,

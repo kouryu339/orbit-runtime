@@ -227,10 +227,11 @@ impl ConversationManager {
         &self,
         conversation_id: &str,
         command_id: Option<String>,
+        mode: crate::agent::AgentPauseMode,
     ) -> Result<crate::gateway::AdmissionResult> {
         self.require_runtime(conversation_id)
             .await?
-            .request_pause_with_admission(command_id)
+            .request_pause_with_admission(command_id, mode)
             .await
     }
 
@@ -519,6 +520,9 @@ impl ConversationManager {
             )
             .await?;
         cache
+            .delete(crate::context::keys::PENDING_TOOLS_STOP_REASON)
+            .await?;
+        cache
             .set(
                 crate::context::keys::PENDING_TOOL_RECOVERY_RESULTS,
                 &recovery_results,
@@ -695,10 +699,11 @@ impl ConversationRuntime {
     pub async fn request_pause_with_admission(
         &self,
         command_id: Option<String>,
+        mode: crate::agent::AgentPauseMode,
     ) -> Result<crate::gateway::AdmissionResult> {
         self.command_gate.ensure_open(&self.id)?;
         self.conversation
-            .request_pause_with_admission(command_id)
+            .request_pause_with_admission(command_id, mode)
             .await
     }
 

@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use corework::cache::CacheExt;
 use corework::event::EventBus;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -25,17 +26,35 @@ pub struct AgentClusterSnapshot {
 }
 
 pub struct AgentCluster {
-    agents: RwLock<HashMap<AgentId, Arc<AgentRuntime>>>,
+    agents: Arc<RwLock<HashMap<AgentId, Arc<AgentRuntime>>>>,
     state: Arc<crate::conversation_state::ConversationState>,
     default_agent_id: AgentId,
     event_bus: Arc<dyn EventBus>,
-    drivers: Mutex<DriverState>,
+    drivers: Arc<Mutex<DriverState>>,
+    retiring_agents: Arc<Mutex<HashSet<AgentId>>>,
 }
 
 #[derive(Default)]
 struct DriverState {
     shutdown: bool,
     tasks: Vec<JoinHandle<()>>,
+    running_agents: HashSet<AgentId>,
+    pending_followup_agents: HashSet<AgentId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentDriverSchedule {
+    Started,
+    QueuedFollowup,
+    AlreadyRunning,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWakeOutcome {
+    Woken,
+    AlreadyRunning,
+    ExplicitlyPaused,
 }
 
 impl AgentCluster {
@@ -49,11 +68,12 @@ impl AgentCluster {
         let mut agents = HashMap::new();
         agents.insert(default_agent.id.clone(), default_agent);
         Self {
-            agents: RwLock::new(agents),
+            agents: Arc::new(RwLock::new(agents)),
             state,
             default_agent_id,
             event_bus,
-            drivers: Mutex::new(DriverState::default()),
+            drivers: Arc::new(Mutex::new(DriverState::default())),
+            retiring_agents: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -228,6 +248,8 @@ impl AgentCluster {
             )));
         }
         let agent = self.active_agent().await?;
+        let _dispatch = agent.lock_dispatch().await;
+        let driver_was_running = self.agent_driver_is_running(&agent.id).await;
         tracing::info!(
             agent_id = %agent.id,
             agent_name = %agent.name,
@@ -236,15 +258,90 @@ impl AgentCluster {
             "agent send_to_active accepted"
         );
         agent.push_user_message(input).await?;
-        if agent.sm.current_state() == states::SAYING {
-            agent.sm.tick().await?;
+        if !driver_was_running {
+            if agent.sm.current_state() == states::SAYING {
+                agent.sm.tick().await?;
+            }
+            if agent.sm.current_state() == states::SAYING
+                || agent.sm.current_state() == states::SUSPENDED
+            {
+                agent.sm.send_event(events::USER_INPUT).await?;
+            }
         }
-        if agent.sm.current_state() == states::SAYING
-            || agent.sm.current_state() == states::SUSPENDED
-        {
-            agent.sm.send_event(events::USER_INPUT).await?;
+        self.schedule_agent_driver(Arc::clone(&agent), true).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn wake_agent_if_suspended(
+        &self,
+        agent_id: &str,
+    ) -> crate::Result<AgentWakeOutcome> {
+        let agent = self.get(agent_id).await.ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!("target Agent not found: {}", agent_id))
+        })?;
+        let _dispatch = agent.lock_dispatch().await;
+        let cache = agent.sm.unit().cache();
+        let task_status: Option<String> = cache.get(crate::context::keys::TASK_STATUS).await?;
+        let pause_requested = cache
+            .get::<bool>(crate::context::keys::PAUSE_REQUESTED)
+            .await?
+            .unwrap_or(false);
+        if pause_requested || task_status.as_deref() == Some("paused") {
+            return Ok(AgentWakeOutcome::ExplicitlyPaused);
         }
+        if agent.sm.current_state() != states::SUSPENDED {
+            return Ok(AgentWakeOutcome::AlreadyRunning);
+        }
+        cache
+            .set(
+                crate::context::keys::TASK_STATUS,
+                &"running".to_string(),
+                None,
+            )
+            .await?;
+        cache.delete(crate::context::keys::LAST_STOP_REASON).await?;
+        cache
+            .delete(crate::context::keys::NEXT_STATE_AFTER_SAYING)
+            .await?;
+        // Queue the transition instead of running `thinking.on_enter` inside
+        // the child Agent's System call. The scheduled driver owns execution.
+        agent.sm.post_event(events::RESUME);
+        self.schedule_agent_driver(Arc::clone(&agent), false)
+            .await?;
+        Ok(AgentWakeOutcome::Woken)
+    }
+
+    pub(crate) async fn schedule_agent_driver(
+        &self,
+        agent: Arc<AgentRuntime>,
+        queue_followup_if_running: bool,
+    ) -> crate::Result<AgentDriverSchedule> {
+        let agent_id = agent.id.clone();
+        if self.retiring_agents.lock().await.contains(&agent_id) {
+            return Err(crate::Error::Other(anyhow::anyhow!(
+                "agent '{}' is retiring and cannot be scheduled",
+                agent_id
+            )));
+        }
+        let mut drivers = self.drivers.lock().await;
+        if drivers.shutdown {
+            return Err(crate::Error::Other(anyhow::anyhow!(
+                "conversation is shutting down"
+            )));
+        }
+        if drivers.running_agents.contains(&agent_id) {
+            if queue_followup_if_running {
+                drivers.pending_followup_agents.insert(agent_id);
+                return Ok(AgentDriverSchedule::QueuedFollowup);
+            }
+            return Ok(AgentDriverSchedule::AlreadyRunning);
+        }
+        drivers.running_agents.insert(agent_id.clone());
+
         let driver = std::sync::Arc::clone(&agent);
+        let driver_state = Arc::clone(&self.drivers);
+        let retiring_agents = Arc::clone(&self.retiring_agents);
+        let agents = Arc::clone(&self.agents);
         let llm_request_headers = llm_gateway::request_context::current_request_headers();
         let allow_insecure_llm_request_headers =
             llm_gateway::request_context::allow_insecure_request_headers();
@@ -259,34 +356,48 @@ impl AgentCluster {
                 state = %driver.sm.current_state(),
                 "agent driver start"
             );
-            let result = llm_gateway::request_context::scope_request_headers(
-                llm_request_headers,
-                allow_insecure_llm_request_headers,
-                driver.drive(None),
-            )
-            .await;
-            if let Err(error) = result {
-                tracing::warn!(
-                    agent_id = %driver.id,
-                    state = %driver.sm.current_state(),
-                    error = %error,
-                    "agent drive task failed"
-                );
-            } else {
-                tracing::debug!(
-                    agent_id = %driver.id,
-                    state = %driver.sm.current_state(),
-                    "agent driver finished"
-                );
+            loop {
+                let result = llm_gateway::request_context::scope_request_headers(
+                    llm_request_headers.clone(),
+                    allow_insecure_llm_request_headers,
+                    driver.drive(None),
+                )
+                .await;
+                if let Err(error) = result {
+                    tracing::warn!(
+                        agent_id = %driver.id,
+                        state = %driver.sm.current_state(),
+                        error = %error,
+                        "agent drive task failed"
+                    );
+                }
+                let mut state = driver_state.lock().await;
+                let retiring = retiring_agents.lock().await.contains(&driver.id);
+                if !retiring && state.pending_followup_agents.remove(&driver.id) && !state.shutdown
+                {
+                    drop(state);
+                    continue;
+                }
+                state.pending_followup_agents.remove(&driver.id);
+                state.running_agents.remove(&driver.id);
+                drop(state);
+                if retiring_agents.lock().await.remove(&driver.id) {
+                    agents.write().await.remove(&driver.id);
+                }
+                break;
             }
         });
-        let mut drivers = self.drivers.lock().await;
         if drivers.shutdown {
             handle.abort();
+            drivers.running_agents.remove(&agent_id);
         } else {
             drivers.tasks.push(handle);
         }
-        Ok(())
+        Ok(AgentDriverSchedule::Started)
+    }
+
+    async fn agent_driver_is_running(&self, agent_id: &str) -> bool {
+        self.drivers.lock().await.running_agents.contains(agent_id)
     }
 
     pub async fn shutdown(&self) {
@@ -300,6 +411,39 @@ impl AgentCluster {
             let _ = task.await;
         }
         self.agents.write().await.clear();
+        self.retiring_agents.lock().await.clear();
+    }
+
+    pub(crate) async fn retire_task_agent(
+        &self,
+        agent_id: &str,
+        mode: crate::agent::AgentPauseMode,
+    ) -> crate::Result<&'static str> {
+        if agent_id == self.default_agent_id {
+            return Err(crate::Error::Other(anyhow::anyhow!(
+                "default Agent cannot be retired as a delegated-task worker"
+            )));
+        }
+        let agent = self.get(agent_id).await.ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!("target Agent not found: {}", agent_id))
+        })?;
+        self.retiring_agents
+            .lock()
+            .await
+            .insert(agent_id.to_string());
+        if let Err(error) = agent.pause_with_mode(mode).await {
+            self.retiring_agents.lock().await.remove(agent_id);
+            return Err(error);
+        }
+
+        if !self.agent_driver_is_running(agent_id).await
+            && agent.sm.current_state() == states::SUSPENDED
+        {
+            self.agents.write().await.remove(agent_id);
+            self.retiring_agents.lock().await.remove(agent_id);
+            return Ok("retired");
+        }
+        Ok("retirement_pending")
     }
 
     pub async fn pause_active(&self) -> crate::Result<()> {
@@ -308,29 +452,108 @@ impl AgentCluster {
     }
 
     pub async fn pause_agent(&self, agent_id: &str) -> crate::Result<()> {
+        self.pause_agent_with_mode(agent_id, crate::agent::AgentPauseMode::WaitForTool)
+            .await
+    }
+
+    pub async fn pause_agent_with_mode(
+        &self,
+        agent_id: &str,
+        mode: crate::agent::AgentPauseMode,
+    ) -> crate::Result<()> {
         let agent = self.get(agent_id).await.ok_or_else(|| {
             crate::Error::Other(anyhow::anyhow!("target Agent not found: {}", agent_id))
         })?;
-        agent.pause().await?;
-        if let Err(e) = self
-            .event_bus
-            .publish(corework::event::BaseEvent::new(
-                crate::events::types::AGENT_SUSPENDED,
-                serde_json::json!({
-                    "agent_id": agent.id,
-                    "agent_name": agent.name,
-                    "state": crate::state::states::SUSPENDED,
-                }),
-            ))
-            .await
-        {
-            tracing::warn!(
-                agent_id = %agent.id,
-                error = %e,
-                "publish agent suspended event failed"
-            );
-        }
+        agent.pause_with_mode(mode).await?;
         Ok(())
+    }
+
+    pub(crate) async fn deliver_delegated_task_input(
+        &self,
+        assignee_agent_id: &str,
+        task_id: &str,
+        request_id: &str,
+        task_revision: u64,
+        question: &str,
+        answer: &str,
+        from_agent_id: &str,
+        from_agent_name: &str,
+    ) -> crate::Result<&'static str> {
+        if self.drivers.lock().await.shutdown {
+            return Err(crate::Error::Other(anyhow::anyhow!(
+                "conversation is shutting down"
+            )));
+        }
+        let agent = self.get(assignee_agent_id).await.ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!(
+                "task assignee Agent not found: {}",
+                assignee_agent_id
+            ))
+        })?;
+        let disposition = {
+            let _dispatch = agent.lock_dispatch().await;
+            agent
+                .push_delegated_task_input(
+                    task_id,
+                    request_id,
+                    task_revision,
+                    question,
+                    answer,
+                    from_agent_id,
+                    from_agent_name,
+                )
+                .await?
+        };
+        if disposition == super::runtime::DelegatedTaskInputDisposition::Resume {
+            self.schedule_agent_driver(Arc::clone(&agent), false)
+                .await?;
+        }
+        Ok(disposition.as_str())
+    }
+
+    pub(crate) async fn deliver_delegated_task_update(
+        &self,
+        assignee_agent_id: &str,
+        task_id: &str,
+        update_id: &str,
+        task_revision: u64,
+        instruction: &str,
+        objective: Option<&str>,
+        acceptance: Option<&[String]>,
+        from_agent_id: &str,
+        from_agent_name: &str,
+    ) -> crate::Result<&'static str> {
+        if self.drivers.lock().await.shutdown {
+            return Err(crate::Error::Other(anyhow::anyhow!(
+                "conversation is shutting down"
+            )));
+        }
+        let agent = self.get(assignee_agent_id).await.ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!(
+                "task assignee Agent not found: {}",
+                assignee_agent_id
+            ))
+        })?;
+        let disposition = {
+            let _dispatch = agent.lock_dispatch().await;
+            agent
+                .push_delegated_task_update(
+                    task_id,
+                    update_id,
+                    task_revision,
+                    instruction,
+                    objective,
+                    acceptance,
+                    from_agent_id,
+                    from_agent_name,
+                )
+                .await?
+        };
+        if disposition == super::runtime::DelegatedTaskInputDisposition::Resume {
+            self.schedule_agent_driver(Arc::clone(&agent), false)
+                .await?;
+        }
+        Ok(disposition.as_str())
     }
 
     pub(crate) async fn appoint_from(
@@ -570,5 +793,99 @@ mod tests {
         assert!(prompt_section.contains("MP3"));
         assert!(prompt_section.contains("- Format: MP3"));
         assert!(!prompt_section.contains("sunwoo:conversion_ui"));
+    }
+
+    #[tokio::test]
+    async fn user_input_and_internal_wake_share_one_driver_slot() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let agent = test_agent("boss").await;
+        let state = Arc::new(crate::conversation_state::ConversationState::new(
+            "driver-test",
+            Default::default(),
+            "boss",
+        ));
+        agent
+            .sm
+            .unit()
+            .attach_shared_component(Arc::clone(&state))
+            .unwrap();
+        let cluster = AgentCluster::new(Arc::clone(&agent), agent.sm.unit().event_bus());
+        cluster
+            .drivers
+            .lock()
+            .await
+            .running_agents
+            .insert(agent.id.clone());
+
+        let (internal_wake, user_input) = tokio::join!(
+            cluster.schedule_agent_driver(Arc::clone(&agent), false),
+            cluster.schedule_agent_driver(Arc::clone(&agent), true),
+        );
+
+        assert_eq!(internal_wake.unwrap(), AgentDriverSchedule::AlreadyRunning);
+        assert_eq!(user_input.unwrap(), AgentDriverSchedule::QueuedFollowup);
+        let drivers = cluster.drivers.lock().await;
+        assert_eq!(drivers.running_agents.len(), 1);
+        assert!(drivers.running_agents.contains("boss"));
+        assert!(drivers.pending_followup_agents.contains("boss"));
+        assert!(drivers.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_input_does_not_transition_state_machine_while_wake_driver_owns_it() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let agent = test_agent("boss").await;
+        let state = Arc::new(crate::conversation_state::ConversationState::new(
+            "driver-input-test",
+            Default::default(),
+            "boss",
+        ));
+        agent
+            .sm
+            .unit()
+            .attach_shared_component(Arc::clone(&state))
+            .unwrap();
+        let cluster = AgentCluster::new(Arc::clone(&agent), agent.sm.unit().event_bus());
+        cluster
+            .drivers
+            .lock()
+            .await
+            .running_agents
+            .insert(agent.id.clone());
+
+        cluster.send_to_active("new user input").await.unwrap();
+
+        assert_eq!(agent.sm.current_state(), crate::state::states::SUSPENDED);
+        let drivers = cluster.drivers.lock().await;
+        assert_eq!(drivers.running_agents.len(), 1);
+        assert!(drivers.pending_followup_agents.contains("boss"));
+        assert!(drivers.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retiring_suspended_task_agent_removes_only_that_runtime() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let boss = test_agent("boss").await;
+        let state = Arc::new(crate::conversation_state::ConversationState::new(
+            "retire-test",
+            Default::default(),
+            "boss",
+        ));
+        boss.sm
+            .unit()
+            .attach_shared_component(Arc::clone(&state))
+            .unwrap();
+        let cluster = AgentCluster::new(Arc::clone(&boss), boss.sm.unit().event_bus());
+        let worker = test_agent("worker").await;
+        cluster.register_for_test(Arc::clone(&worker)).await;
+
+        let outcome = cluster
+            .retire_task_agent("worker", crate::agent::AgentPauseMode::WaitForTool)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, "retired");
+        assert!(cluster.get("worker").await.is_none());
+        assert!(cluster.get("boss").await.is_some());
     }
 }

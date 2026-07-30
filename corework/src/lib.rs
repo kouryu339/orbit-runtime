@@ -65,6 +65,7 @@ pub mod saga;
 pub mod scoped_cache;
 pub mod statemachine; // 基于 ExecutionUnit 的状态机封装
 pub mod system;
+pub mod wait_control;
 pub mod workflow; // 基于 ExecutionUnit 的蓝图编排
 pub mod workspace; // 文件副本安全机制（Copy-on-Read）
 pub mod world;
@@ -102,6 +103,7 @@ pub mod prelude {
     };
     pub use crate::scoped_cache::{ScopedCache, ScopedCacheStats};
     pub use crate::system::{AutoRegisterSystem, SystemFactory, SystemOperation, SystemRegistry};
+    pub use crate::wait_control::{WaitInterrupt, WaitInterruptSource, WaitInterruptSourceHandle};
 
     // 装饰器宏（框架核心）
     pub use crate::{buns_model, buns_orchestration, buns_system, define_operation};

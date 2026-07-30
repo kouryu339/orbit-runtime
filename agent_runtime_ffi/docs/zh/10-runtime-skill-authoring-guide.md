@@ -290,6 +290,9 @@ RPC 工具端点可以通过 `ListTools` 暴露多个具体工具。skill 的 `t
 具体 cluster Agent 的映射覆盖 profile 默认值。`thinking-pro` 不是叠加 feature，而是
 `thinking` 状态的替代实现，因此不会同时注入两套思考规范。它只额外声明
 `executeWorkflowScript`，用于编译和执行一次性完整脚本，不会写入 Workflow 目录。
+Runtime 只在当前 thinking system Skill 授予该脚本能力时，才把 active tools 的输出 schema
+投影进模型提示。轻量 `thinking` 仍在 Runtime 和 FFI 中保留完整 schema，但普通模型提示不再
+携带这些输出项。
 
 持久化 Workflow 目录能力不属于思考状态。宿主必须通过 role 或 feature Skill 的 `tools`
 白名单独立开放 `listWorkflows`、`readWorkflow`、`createWorkflowDraft`、`updateWorkflow`、

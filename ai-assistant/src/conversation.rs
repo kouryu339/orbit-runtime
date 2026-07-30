@@ -281,9 +281,12 @@ impl Conversation {
     pub async fn request_pause_with_admission(
         &self,
         command_id: Option<String>,
+        mode: crate::agent::AgentPauseMode,
     ) -> Result<crate::gateway::AdmissionResult> {
         self.permission_broker.cancel_all().await;
-        self.gateway.request_pause_with_admission(command_id).await
+        self.gateway
+            .request_pause_with_admission(command_id, mode)
+            .await
     }
 
     pub async fn resolve_tool_permission(

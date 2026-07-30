@@ -42,7 +42,9 @@ display commands 和 next-state 等短期字段。
 ## 2.5 结束条件
 
 Agent driver 在状态回到 `suspended`、任务达到终态或发生不可恢复错误时结束。
-后台任务必须通过 `ReportAgentTask` 发布 completed/failed/canceled 报告；Runtime 再将
-报告写入委托方 ledger并完成任务，不依赖前台 Agent 轮询榜单。
+后台 Agent 可通过 `ReportAgentTaskProgress` 持久化阶段进度并继续工作。候选最终结果通过
+`ReportAgentTask` 提交后，任务进入非终态 `reported`，执行者停驻等待委托方决定：
+`CompleteAgentTask` 接受报告并结束任务，`UpdateAgentTask` 修改要求并恢复执行，
+`CancelAgentTask` 放弃任务。报告与终态分离，避免执行者单方面宣告委托完成。
 
 下一篇：[03 EXEC 行式协议与工具执行](03_exec_line_protocol_and_tool_execution.md)

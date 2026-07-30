@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 ABI_VERSION = 1
-DEFAULT_RUNTIME_VERSION = "0.4.6"
+DEFAULT_RUNTIME_VERSION = "0.4.7-beta.1"
 CONVERSATION_CREATED_EVENT_TYPE = "conversation:created"
 CONVERSATION_CLOSED_EVENT_TYPE = "conversation:closed"
 FRONTEND_STATE_SNAPSHOT_EVENT_TYPE = "frontend:state_snapshot"
@@ -812,8 +812,13 @@ class Runtime:
             {"conversation_id": conversation_id, "content": content},
         )
 
-    def pause_conversation(self, conversation_id: str) -> Any:
-        return self.invoke("conversation.pause", {"conversation_id": conversation_id})
+    def pause_conversation(
+        self, conversation_id: str, mode: str = "wait_for_tool"
+    ) -> Any:
+        return self.invoke(
+            "conversation.pause",
+            {"conversation_id": conversation_id, "mode": mode},
+        )
 
     def close_conversation(self, conversation_id: str) -> Any:
         return self.invoke("conversation.close", {"conversation_id": conversation_id})

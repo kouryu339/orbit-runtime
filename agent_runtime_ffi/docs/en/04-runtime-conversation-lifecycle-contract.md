@@ -50,7 +50,35 @@ durable business truth; the host must republish it after recovery.
 Fixed Agents are registered in the cluster and hand off focus. Background
 Agents are created dynamically by task tools from profiles and do not steal
 focus. The host may read task state through `conversation.agent_tasks`; the
-model observes reports and ledger facts rather than a task-list polling tool.
+model observes the task board through its dynamic tail snapshot and can wait on
+one delegated task without polling.
+
+Background-task completion is a two-phase contract:
+
+```text
+running -> ReportAgentTaskProgress -> running
+running -> ReportAgentTask -> reported
+reported -> UpdateAgentTask -> running
+reported -> CompleteAgentTask -> completed or failed
+non-terminal -> CancelAgentTask -> canceled
+```
+
+Only the current assignee may request input, report progress, or submit a
+candidate final result. Only the delegator may answer, update, complete, cancel,
+wait for, or pause that delegated task. `PauseAgent` derives the target from the
+caller's direct non-terminal task relation; arbitrary or self-targeting Agent
+ids are rejected.
+
+`WaitAgentTask` and generic `Wait` subscribe before reading state, so input
+requests and candidate reports are not lost across the read/wait boundary. A
+child attention event ends the wait early without claiming that the original
+wait target completed. User input and internal child wakeups share one per-Agent
+dispatch gate and driver slot.
+
+Completing or canceling a task retires its temporary worker while preserving the
+task, revisions, progress, requests, reports, and ledger facts for audit. A
+`detach_tool` pause returns `interrupted_unknown`; hosts must verify external
+state and idempotency before retrying the detached operation.
 
 ## 4.5 Events
 

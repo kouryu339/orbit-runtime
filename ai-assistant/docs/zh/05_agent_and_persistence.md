@@ -17,9 +17,24 @@ handoff 更稳定；只有 Skill 上下文明显过大时，才用隔离收益�
 
 前台调用 `CreateBackgroundAgentTask`，Runtime 从 resources 中的 Agent profile 创建
 唯一后台实例，写入 task created/assigned 事件和任务契约。后台 Agent 不改变 focus，
-结束时必须调用 `ReportAgentTask`。Gateway 根据 `task_id`/reporter 找到委托关系，
-更新任务终态并将报告写入委托方 ledger。需要再次工作时创建新实例，不复用一次性
-任务上下文。
+阶段结果使用 `ReportAgentTaskProgress` 写入任务榜，任务保持 `running`，执行者继续工作。
+候选最终结果使用 `ReportAgentTask` 提交；Gateway 根据 `task_id`/reporter 校验委托关系，
+把任务置为非终态 `reported`、写入委托方 ledger，并停驻执行者。委托方随后必须显式调用
+`CompleteAgentTask` 接受结果并回收执行者，或调用 `UpdateAgentTask` 将任务恢复为 `running`
+继续迭代，也可调用 `CancelAgentTask` 放弃任务。任务记录保留用于审计，终态只回收运行实例。
+
+委托方创建任务后会获得 `WaitAgentTask`、`RespondAgentTaskInput`、`UpdateAgentTask`、
+`CompleteAgentTask`、`CancelAgentTask` 和 `PauseAgent`。`WaitAgentTask` 按 `task_id` 等待，
+在任一直属委派任务请求输入或提交候选结果、目标任务进入终态、收到新用户输入或超时时返回；
+需关注的任务通过 `attention_task_id` 单独标识。后台 Agent
+可用 `RequestAgentTaskInput` 发起非终态问题，委托方按
+`task_id + request_id` 回答，Runtime 根据任务关系自动注入当前执行者，不接受目标 Agent id。
+父目标或约束变化时，委托方对每个受影响的非终态任务调用 `UpdateAgentTask`；任务 revision
+递增，更新同样自动注入当前执行者。暂停中的执行者只收件、不自动恢复。
+委托方若正在使用通用 `Wait` 做定时或事件等待，直属子任务的待处理输入请求也会使其以
+`wake_reason=external_attention` 提前返回；`interrupt` 携带 `attention_task_id` 和
+`request_id`；候选结果也会提前结束通用等待。返回文案明确原等待条件尚未完成。
+`WaitAgentTask` 只负责观察，任务终态由 `CompleteAgentTask` 或 `CancelAgentTask` 产生。
 
 ## 5.2 Ledger
 

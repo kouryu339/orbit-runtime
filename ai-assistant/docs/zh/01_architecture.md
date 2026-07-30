@@ -46,7 +46,7 @@ host command / Agent event
   -> frontend:state_snapshot and domain events
 ```
 
-它处理用户消息、pause、appoint/report、后台任务 created/assigned/reported/completed、
+它处理用户消息、pause、appoint/report、后台任务 created/assigned/progress/reported/completed/canceled、
 history compact 和前端快照发布。前端只消费共享投影，不读取任意 Agent 私有 cache。
 
 ## 1.4 AgentCluster

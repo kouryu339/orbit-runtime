@@ -906,9 +906,21 @@ public:
         const std::string& conversation_id,
         RuntimeCommandOptions options = {})
     {
+        return pause_admission_with_mode(
+            conversation_id,
+            "wait_for_tool",
+            std::move(options));
+    }
+
+    AdmissionResult pause_admission_with_mode(
+        const std::string& conversation_id,
+        const std::string& mode,
+        RuntimeCommandOptions options = {})
+    {
         std::string result = invoke(
             "conversation.pause",
-            std::string("{\"conversation_id\":") + detail::quote(conversation_id) + "}",
+            std::string("{\"conversation_id\":") + detail::quote(conversation_id)
+                + ",\"mode\":" + detail::quote(mode) + "}",
             std::move(options));
         return admission_from_result(result);
     }
@@ -916,6 +928,11 @@ public:
     std::string pause(const std::string& conversation_id)
     {
         return pause_admission(conversation_id).json;
+    }
+
+    std::string pause(const std::string& conversation_id, const std::string& mode)
+    {
+        return pause_admission_with_mode(conversation_id, mode).json;
     }
 
     void close_conversation(const std::string& conversation_id)

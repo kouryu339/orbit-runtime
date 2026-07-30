@@ -231,7 +231,11 @@ impl WorkflowStudioChatBridge {
         let manager = Arc::clone(&self.manager);
         self.runtime_handle.block_on(async move {
             manager
-                .request_pause_with_admission(&conversation_id, Some(command_id))
+                .request_pause_with_admission(
+                    &conversation_id,
+                    Some(command_id),
+                    ai_assistant::agent::AgentPauseMode::WaitForTool,
+                )
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))
         })

@@ -209,7 +209,7 @@ pub(crate) fn format_immutable_cache_entries_section(entries: &BTreeMap<String, 
 }
 
 /// Format tool metadata as prompt text for EXEC line-protocol usage.
-pub(crate) fn format_tools_section(tool_names: &[String]) -> String {
+pub(crate) fn format_tools_section(tool_names: &[String], include_outputs: bool) -> String {
     if tool_names.is_empty() {
         return String::new();
     }
@@ -263,7 +263,7 @@ pub(crate) fn format_tools_section(tool_names: &[String]) -> String {
 
             output.push_str(&format!("### {}{}\n", meta.name, tags_str));
 
-            if !meta.outputs.is_empty() {
+            if include_outputs && !meta.outputs.is_empty() {
                 output.push_str(crate::prompt_assets::template("tool_outputs_label.md").trim());
                 let pins: Vec<String> = meta
                     .outputs
@@ -307,7 +307,7 @@ pub(crate) fn format_tools_section(tool_names: &[String]) -> String {
                 output.push('\n');
             }
 
-            if !meta.outputs.is_empty() {
+            if include_outputs && !meta.outputs.is_empty() {
                 output
                     .push_str(crate::prompt_assets::template("tool_output_fields_label.md").trim());
                 output.push('\n');
@@ -329,7 +329,7 @@ pub(crate) fn format_tools_section(tool_names: &[String]) -> String {
 
             output.push('\n');
         } else if let Some(meta) = crate::runtime_tools::get_runtime_tool(name) {
-            push_runtime_tool_section(&mut output, &meta);
+            push_runtime_tool_section(&mut output, &meta, include_outputs);
         } else {
             output.push_str(&format!("### {}\n(no description)\n\n", name));
         }
@@ -338,7 +338,11 @@ pub(crate) fn format_tools_section(tool_names: &[String]) -> String {
     output
 }
 
-fn push_runtime_tool_section(output: &mut String, meta: &RuntimeToolMetadata) {
+fn push_runtime_tool_section(
+    output: &mut String,
+    meta: &RuntimeToolMetadata,
+    include_outputs: bool,
+) {
     let mut tags = Vec::new();
     if meta.readonly {
         tags.push("readonly");
@@ -371,7 +375,7 @@ fn push_runtime_tool_section(output: &mut String, meta: &RuntimeToolMetadata) {
     }
     output.push_str("`\n");
 
-    if !meta.outputs.is_empty() {
+    if include_outputs && !meta.outputs.is_empty() {
         output.push_str("**Output pins**: ");
         let pins: Vec<String> = meta
             .outputs
@@ -408,7 +412,7 @@ fn push_runtime_tool_section(output: &mut String, meta: &RuntimeToolMetadata) {
         output.push_str("(no parameters)\n");
     }
 
-    if !meta.outputs.is_empty() {
+    if include_outputs && !meta.outputs.is_empty() {
         output.push_str("Outputs:\n");
         for o in &meta.outputs {
             output.push_str(&format!(
@@ -520,7 +524,21 @@ impl SystemOperation for BuildSystemPromptSystem {
         }
 
         let all_tools = AssistantContext::all_active_tools(&ctx.cache).await?;
-        let tools_section = format_tools_section(&all_tools);
+        let system_skills: BTreeMap<String, String> = ctx
+            .cache
+            .get(crate::context::keys::SYSTEM_SKILLS)
+            .await?
+            .unwrap_or_default();
+        let thinking_skill = system_skills
+            .get(crate::state::states::THINKING)
+            .map(String::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(crate::state::states::THINKING);
+        let include_tool_outputs = mgr()
+            .read()
+            .await
+            .system_skill_declares_tool(thinking_skill, "executeWorkflowScript");
+        let tools_section = format_tools_section(&all_tools, include_tool_outputs);
         if !tools_section.is_empty() {
             sections.push(PromptSection::new(tools_section));
         }
@@ -1036,8 +1054,19 @@ mod tests {
 
     #[test]
     fn test_format_tools_section_empty() {
-        let section = format_tools_section(&[]);
+        let section = format_tools_section(&[], false);
         assert!(section.is_empty());
+    }
+
+    #[test]
+    fn local_tool_outputs_are_only_projected_for_script_capable_thinking() {
+        let tools = vec!["ContinueThinking".to_string()];
+
+        let regular = format_tools_section(&tools, false);
+        let script_capable = format_tools_section(&tools, true);
+
+        assert!(!regular.contains("Always true, indicating"));
+        assert!(script_capable.contains("Always true, indicating"));
     }
 
     #[test]
@@ -1100,11 +1129,18 @@ mod tests {
         };
         let mut section = String::new();
 
-        push_runtime_tool_section(&mut section, &meta);
+        push_runtime_tool_section(&mut section, &meta, true);
 
         assert!(section.contains("Call syntax: `EXEC UserGet --user_id <num>`"));
         assert!(section.contains("`--user_id` (**required**, type=num)"));
+        assert!(section.contains("**Output pins**"));
+        assert!(section.contains("Outputs:"));
         assert!(!section.contains("user_id ="));
+
+        let mut without_outputs = String::new();
+        push_runtime_tool_section(&mut without_outputs, &meta, false);
+        assert!(!without_outputs.contains("**Output pins**"));
+        assert!(!without_outputs.contains("Outputs:"));
     }
 
     #[test]

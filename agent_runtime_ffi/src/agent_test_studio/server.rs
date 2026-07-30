@@ -321,7 +321,11 @@ fn pause_response(state: &AgentTestStudioState) -> StudioResponse {
     let conversation_id = state.supervisor_conversation_id.clone();
     match run_request_future(&state.runtime_handle, async move {
         manager
-            .request_pause_with_admission(&conversation_id, Some(command_id.clone()))
+            .request_pause_with_admission(
+                &conversation_id,
+                Some(command_id.clone()),
+                ai_assistant::agent::AgentPauseMode::WaitForTool,
+            )
             .await
             .map_err(|error| RuntimeError::Internal(error.to_string()))
             .map(|admission| (command_id, admission))

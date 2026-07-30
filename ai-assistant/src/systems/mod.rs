@@ -5,6 +5,7 @@
 //! 自动作为 tool role 消息插入对话历史（conversation cache key）。
 
 pub mod agent_route;
+pub mod agent_wake;
 pub mod history;
 pub mod ledger;
 pub mod plan_file;

@@ -23,10 +23,10 @@ Agent profile + cluster 实例 + focus + role Skill 中的协作工具
 | 渐进 Skill | `GetSkillsList`, `UpdateSkills` | 发现并全量替换动态 feature Skills。 |
 | 计划 | `PlanWrite`, `PlanUpdate`, `PlanFinish` | 建立、调整和完成当前执行计划。 |
 | Agent 协作 | `CreateAgent`, `AppointAgent`, `DismissAgent`, `ListAgents`, `ReportToAgent` | 临时 Agent 与持久焦点协作。 |
-| 后台任务 | `CreateBackgroundAgentTask`, `ReportAgentTask` | task board 驱动的主从后台协作。 |
+| 后台任务 | `CreateBackgroundAgentTask`, `WaitAgentTask`, `PauseAgent`, `RequestAgentTaskInput`, `RespondAgentTaskInput`, `UpdateAgentTask`, `ReportAgentTaskProgress`, `ReportAgentTask`, `CompleteAgentTask`, `CancelAgentTask` | task board 驱动的双向主从后台协作。 |
 | 知识检索 | `RagRetrieve` | 当前 Agent 配置 retrieval 后提供的本地路由工具。 |
 
-这 16 个名称就是当前普通 Agent 可由 Skill 引用的 local AI operation 全集。定义
+这 24 个名称就是当前普通 Agent 可由 Skill 引用的 local AI operation 全集。定义
 来源分别是 `corework/src/common_tools.rs`、`ai-assistant/src/systems`、
 `ai-assistant/src/agent/systems.rs`，以及 Runtime 动态注册的 `RagRetrieve`。
 ledger、prompt、Skill 装载和 Draft 系统虽然也在本地 registry 中运行，但属于状态机
@@ -48,12 +48,20 @@ feature Skills，不会移除它们。
 Skill 中声明：
 
 ```yaml
-tools: ["CreateBackgroundAgentTask", "Wait"]
+tools: ["CreateBackgroundAgentTask"]
 ```
 
-`Wait` 可以按时间等待，也可以指定 `event_type` 提前被事件唤醒；最长等待会被
-Runtime 限制。它不会读取任务结果，唤醒后 Agent 应根据新 ledger/task 事件继续
-判断。不要用连续短 Wait 实现忙轮询。
+创建任务后，Runtime 会向委派者加入 `WaitAgentTask`、`RespondAgentTaskInput`、
+`UpdateAgentTask`、`CompleteAgentTask`、`CancelAgentTask` 和 `PauseAgent`，并向后台执行者加入
+`RequestAgentTaskInput`、`ReportAgentTaskProgress` 和 `ReportAgentTask`。
+`WaitAgentTask` 按 `task_id` 等待；任一由当前 Agent 委派的任务请求输入或提交候选结果、目标任务进入终态、新用户消息或超时都会唤醒。其他任务的普通状态变化不会唤醒；需关注的任务通过 `attention_task_id` 单独标识，不把原等待目标误判为完成；
+新用户消息会让主 Agent 先恢复处理指令，因此可以立即决定是否暂停任务执行者。
+后台 Agent 请求输入后，Runtime 通过不向 AI 暴露的 Corework System 校验
+conversation、ExecutionUnit 和 Agent 调用身份，再由任务关系推导委派者；仅当委派者已停止时
+才唤醒。用户输入和内部唤醒共用每 Agent 调度门与单一 driver 槽位。
+通用 `Wait` 仍用于普通定时和事件等待，不承担任务终态判断；但直属子任务存在待处理求助或候选结果时，
+它会以 `external_attention` 提前返回并给出 `attention_task_id`，避免主 Agent 在普通等待中
+错过求助，同时明确原等待条件尚未完成。
 
 ## 6.2 特殊 Agent 的专属工具
 
@@ -103,7 +111,15 @@ Supervisor 创建和检查对抗测试，最后用 `WriteMarkdown` 产出报告�
 | 工具 | 作用 |
 |---|---|
 | `CreateBackgroundAgentTask` | 从注册 profile 创建后台 Agent，并发布 conversation task。 |
-| `ReportAgentTask` | 后台 Agent 完成、失败或取消任务时向任务榜单报告。 |
+| `ReportAgentTaskProgress` | 后台 Agent 持久化阶段进度；任务保持运行，执行者继续工作。 |
+| `ReportAgentTask` | 后台 Agent 提交候选最终结果；任务进入 `reported` 并停驻，等待委托方决定。 |
+| `RequestAgentTaskInput` | 当前执行者按 `task_id` 向委派者索要缺失信息，不结束任务。 |
+| `RespondAgentTaskInput` | 委派者按 `task_id + request_id` 回答，并自动注入该任务当前执行者。 |
+| `UpdateAgentTask` | 父目标变化后更新受影响的任务、递增 revision，并自动通知当前执行者。 |
+| `CompleteAgentTask` | 委托方接受 `reported` 结果，将任务置为 completed/failed 并回收执行者。 |
+| `CancelAgentTask` | 委托方显式放弃非终态任务，将其置为 canceled 并回收执行者。 |
+| `WaitAgentTask` | 按当前 Agent 创建的 `task_id` 等待；输入请求、候选结果、任务终态、新用户消息或超时均会返回。 |
+| `PauseAgent` | 按任务快照中的 `agent_id` 暂停当前 Agent 创建的任务执行者；支持 `wait_for_tool` 和 `detach_tool`。 |
 | `AppointAgent` | 将工作和会话焦点交给已有持久 Agent。 |
 | `ReportToAgent` | 向指定 Agent 汇报，可选择是否 handoff focus。 |
 | `CreateAgent` | 创建临时 OneShot Agent；适合直接的一次性执行。 |
@@ -124,7 +140,7 @@ Agent 不抢 focus，完成后通过 task report 回到委托方 ledger。
 ---
 name: service_boss
 kind: role
-tools: ["CreateBackgroundAgentTask"]
+tools: ["CreateBackgroundAgentTask"] # Runtime 会加入受任务关系约束的等待、回答、更新、完成、取消和暂停工具
 ---
 ```
 
@@ -134,7 +150,7 @@ tools: ["CreateBackgroundAgentTask"]
 ---
 name: policy_researcher
 kind: role
-tools: ["RagRetrieve", "ReportAgentTask"]
+tools: ["RagRetrieve"] # Runtime 会为后台任务自动加入请求输入、进度报告和最终报告工具
 ---
 ```
 
@@ -179,8 +195,12 @@ cluster 只需要预声明前台主 Agent：
 
 主 Agent 调用 `CreateBackgroundAgentTask` 时使用后台 profile 的 id/name，并给出
 `objective` 和 `acceptance`。Runtime 创建唯一后台实例、登记任务和委托关系。
-后台角色必须调用 `ReportAgentTask` 结束任务；报告会写入委托方 ledger。后台任务
-如果再次需要，应重新创建新实例，不要把一次任务的临时上下文长期复用。
+后台角色使用 `ReportAgentTaskProgress` 汇报阶段结果并继续工作；使用 `ReportAgentTask`
+提交候选最终结果并停驻。委托方调用 `CompleteAgentTask` 接受，或用 `UpdateAgentTask`
+恢复同一执行者继续迭代，也可用 `CancelAgentTask` 放弃任务。
+缺少信息时，后台角色调用 `RequestAgentTaskInput`，委派者由 `WaitAgentTask` 唤醒后使用
+`RespondAgentTaskInput` 回答。用户修改父目标时，主 Agent 应对每个受影响的任务调用
+`UpdateAgentTask`；Runtime 只负责鉴权和精确路由，不依靠关键词猜测任务相关性。
 
 ## 6.5 协作焦点架构
 

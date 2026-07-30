@@ -374,9 +374,17 @@ impl RuntimeApp {
     }
 
     pub fn pause_conversation(&self, conversation_id: &str) -> Result<AdmissionResult> {
+        self.pause_conversation_with_mode(conversation_id, "wait_for_tool")
+    }
+
+    pub fn pause_conversation_with_mode(
+        &self,
+        conversation_id: &str,
+        mode: &str,
+    ) -> Result<AdmissionResult> {
         let result = self.invoke(
             "conversation.pause",
-            json!({ "conversation_id": conversation_id }),
+            json!({ "conversation_id": conversation_id, "mode": mode }),
         )?;
         Ok(admission_from_value(result))
     }

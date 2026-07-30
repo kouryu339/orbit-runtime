@@ -37,6 +37,21 @@ Host application
 - **Split SDK surface**: Runtime Host SDKs embed the runtime; RPC Tool SDKs
   implement callable business tools.
 
+## 0.4.7 Beta Focus
+
+The `0.4.7-beta.1` release candidate strengthens two Runtime boundaries:
+
+- **Reliable delegated background tasks**: parent/child authorization,
+  task-specific waits, asynchronous input requests, durable progress,
+  two-phase report/accept completion, revision-driven continuation, explicit
+  cancellation, scoped pause, and worker retirement are represented as
+  auditable task and ledger transitions.
+- **Script-aware tool prompts**: complete tool output schemas remain registered
+  for Runtime, FFI, Workflow compilation, and Studio nodes, but ordinary
+  lightweight `thinking` prompts omit them. A thinking system Skill that grants
+  `executeWorkflowScript`, including built-in `thinking-pro`, receives the
+  output schemas needed to author named Workflow data dependencies.
+
 ## Repository Layout
 
 | Path | Purpose |

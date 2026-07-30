@@ -512,13 +512,14 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         .filter(|name| !name.trim().is_empty())
         .unwrap_or(states::THINKING);
 
-    let all_tools = {
+    let (all_tools, include_tool_outputs) = {
         let mut tools = AssistantContext::all_active_tools(&cache).await?;
         let m = mgr().read().await;
         tools = m.filtered_tools_for_state(thinking_skill, tools);
-        tools
+        let include_outputs = m.system_skill_declares_tool(thinking_skill, "executeWorkflowScript");
+        (tools, include_outputs)
     };
-    let tools_section = format_tools_section(&all_tools);
+    let tools_section = format_tools_section(&all_tools, include_tool_outputs);
 
     tracing::debug!("built {} tool descriptions", all_tools.len());
 
@@ -877,8 +878,17 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
     for attempt in 1..=3u32 {
         emit_stream_reset(&sm_ctx);
-        reset_cancel_token();
-        let cancel = take_cancel_token();
+        let thinking_lease = sm_ctx
+            .resolve_shared_component::<crate::agent::runtime::AgentExecutionControl>()
+            .map(|control| control.begin_thinking_request());
+        let cancel = if let Some(lease) = thinking_lease.as_ref() {
+            lease.token()
+        } else {
+            // Standalone AIAssistant instances retain the legacy cancellation
+            // path; AgentRuntime instances always use per-agent control.
+            reset_cancel_token();
+            take_cancel_token()
+        };
         let model_name = model_entry
             .as_ref()
             .map(|entry| entry.model_name.as_str())

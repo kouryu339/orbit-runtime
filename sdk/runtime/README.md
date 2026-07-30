@@ -95,7 +95,9 @@ Expose product-level conversation APIs to the frontend:
 
 - create or restore conversation;
 - send user message;
-- pause or close work;
+- pause or close work; pause defaults to `wait_for_tool`, while the explicit
+  `detach_tool` mode closes the Runtime wait with an `interrupted_unknown`
+  result that requires external verification before retry;
 - get recovery snapshot;
 - subscribe to Runtime events.
 
@@ -309,16 +311,16 @@ SDKs should use `release_manifest.json` as the compatibility source of truth:
 
 ```text
 repository: kouryu339/orbit-runtime
-release:    v0.4.6
-ABI:        1.2 (major compatibility value: 1)
+release:    v0.4.7-beta.1
+ABI:        1.3 (major compatibility value: 1)
 ```
 
 Current native packages:
 
 | Platform | Asset | Library path inside package |
 |---|---|---|
-| Windows x86_64 | `orbit-runtime-runtime-v0.4.6-windows-x86_64.zip` | `bin/agent_runtime.dll` |
-| Linux x86_64 | `orbit-runtime-runtime-v0.4.6-linux-x86_64.zip` | `lib/libagent_runtime.so` |
+| Windows x86_64 | `orbit-runtime-runtime-v0.4.7-beta.1-windows-x86_64.zip` | `bin/agent_runtime.dll` |
+| Linux x86_64 | `orbit-runtime-runtime-v0.4.7-beta.1-linux-x86_64.zip` | `lib/libagent_runtime.so` |
 
 macOS is intentionally not published in this release because the release build
 machine does not provide an Apple environment.

@@ -20,7 +20,8 @@ Agent -> Runtime -> Agent Tool RPC -> Tool sidecar -> Business service
 - 工具 `name` 和 `description`；
 - 调用语法；
 - 参数名称、类型、是否必填、默认值和描述；
-- 输出字段名称、类型和描述；
+- 输出字段名称、类型和描述仅在当前 thinking system Skill 授予
+  `executeWorkflowScript` 时进入模型提示；内置 `thinking-pro` 因临时脚本需要命名输出引脚而启用；
 - `readonly`、`destructive`、`idempotent`、`open_world` 等行为属性。
 
 Agent 不会看到所有已注册工具。Skill frontmatter 中的 `tools` 是白名单：只有

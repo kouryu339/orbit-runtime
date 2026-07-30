@@ -128,6 +128,8 @@ pub mod keys {
 
     pub const PENDING_TOOL_CALLS: &str = "pending_tool_calls";
     pub const PENDING_TOOLS_WAIT_FOR_INPUT: &str = "pending_tools_wait_for_input";
+    /// Stop reason applied when an AI tool deliberately parks the Agent after its batch.
+    pub const PENDING_TOOLS_STOP_REASON: &str = "pending_tools_stop_reason";
 
     pub const PENDING_RESPONSE: &str = "pending_response";
 
@@ -183,6 +185,9 @@ pub mod keys {
     pub const THINKING_ROUND_COUNT: &str = "thinking_round_count";
 
     pub const PAUSE_REQUESTED: &str = "pause_requested";
+
+    /// Requested pause behavior: wait_for_tool (default) or detach_tool.
+    pub const PAUSE_MODE: &str = "pause_mode";
 
     pub const RECORDER_ACTIVE: &str = "recorder_active";
 
