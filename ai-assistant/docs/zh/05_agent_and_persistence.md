@@ -17,11 +17,15 @@ handoff 更稳定；只有 Skill 上下文明显过大时，才用隔离收益�
 
 前台调用 `CreateBackgroundAgentTask`，Runtime 从 resources 中的 Agent profile 创建
 唯一后台实例，写入 task created/assigned 事件和任务契约。后台 Agent 不改变 focus，
+新任务的 `task_id` 由 Runtime 独占生成并使用 `agent_task_` 命名空间，AI 不能自定义；旧快照中的
+任务标识仍可恢复。`task_id` 只表示委派关系，不能冒充后台报告 `result` 中的业务对象标识。
 阶段结果使用 `ReportAgentTaskProgress` 写入任务榜，任务保持 `running`，执行者继续工作。
 候选最终结果使用 `ReportAgentTask` 提交；Gateway 根据 `task_id`/reporter 校验委托关系，
 把任务置为非终态 `reported`、写入委托方 ledger，并停驻执行者。委托方随后必须显式调用
 `CompleteAgentTask` 接受结果并回收执行者，或调用 `UpdateAgentTask` 将任务恢复为 `running`
 继续迭代，也可调用 `CancelAgentTask` 放弃任务。任务记录保留用于审计，终态只回收运行实例。
+候选报告的完整 JSON `result` 与 artifacts 会进入委托方 LLM 上下文和尾部快照；报告、阶段进度与
+输入请求均序列化并标记为不可信数据，模型只能读取其中事实，不能把内容作为指令或工具调用执行。
 
 委托方创建任务后会获得 `WaitAgentTask`、`RespondAgentTaskInput`、`UpdateAgentTask`、
 `CompleteAgentTask`、`CancelAgentTask` 和 `PauseAgent`。`WaitAgentTask` 按 `task_id` 等待，
@@ -48,7 +52,9 @@ Agent 私有 cache 只保存执行态。跨 Agent 可见结果、焦点变化和
 ## 5.3 快照
 
 Runtime 支持 conversation snapshot 的 export/import/materialize 和 spawn-from-snapshot。
-快照包含 ledger、cluster/Agent 状态及可恢复 cache 字段；宿主动态快照不作为持久业务
+快照包含 ledger、Agent definition 引用、conversation 内的 Agent instance、任务榜及可恢复
+运行状态；Agent definition、权限、工具、Skill 和模型策略仍以注册表为唯一真相源，快照既不
+复制也不覆盖这些静态配置。宿主动态快照不作为持久业务
 真相，恢复后应重新发布。展示态、pending 工具、错误提示等瞬时字段会在恢复时清理。
 
 ## 5.4 恢复入口与状态机重建
@@ -92,5 +98,7 @@ Conversation close 先关闭 command gate，再调用 `Conversation::shutdown()`
 面向宿主的稳定事件出口由 AgentGateway 统一产生：`conversation:created`、
 `conversation:closed`、`conversation.ledger_delta`、`conversation.state_delta` 和
 `frontend:state_snapshot`。FFI、SDK 或应用宿主应依赖这些事件，而不是依赖内部事件名。
+其中 `agent.upsert` / `agent.retired` 描述 conversation 内运行实例的出现、状态变化和退出；
+载荷只携带实例 id、注册 definition 引用、显示名和运行状态，不复制注册权限或工具配置。
 
 下一篇：[06 运行时机制](06_runtime_mechanics.md)

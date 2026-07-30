@@ -1,7 +1,8 @@
 # 6 配置内置工具与多 Agent 协作
 
-Runtime 内置了一组 Agent 协作工具。它们不需要外部 sidecar，但仍受 Skill 的
-`tools` 白名单控制。配置多 Agent 不是打开一个总开关，而是组合：
+Runtime 内置了一组 Agent 协作工具。它们不需要外部 sidecar。入口权限由 Skill 的
+`tools` 白名单控制；Runtime 建立真实委派任务后，才按委派者/执行者关系动态加入对应的
+任务生命周期工具。配置多 Agent 不是打开一个总开关，而是组合：
 
 ```text
 Agent profile + cluster 实例 + focus + role Skill 中的协作工具
@@ -32,9 +33,11 @@ Agent profile + cluster 实例 + focus + role Skill 中的协作工具
 ledger、prompt、Skill 装载和 Draft 系统虽然也在本地 registry 中运行，但属于状态机
 内部系统，不会作为普通 Agent 的 AI tool contract 暴露。
 
-工具只有被当前 Agent 激活的 system/role/feature Skill 在 `tools` 中显式引用时，
+普通工具只有被当前 Agent 激活的 system/role/feature Skill 在 `tools` 中显式引用时，
 Runtime 才会把工具描述暴露给 AI；没有引用的工具即使已经注册，AI 通常也不知道
-它存在。因此规则统一为：需要就通过 Skill 引入，不需要就不要引入。
+它存在。后台任务生命周期是有意保留的例外：`CreateBackgroundAgentTask` 成功后，
+Runtime 只按该任务的真实委派关系动态加入后续控制，并随执行者生命周期回收；这不构成
+按任意 Agent id 操作的权限。
 
 role Skill 应只声明完成该角色核心职责所需的最小工具集；可组合的业务功能按模块
 拆进 feature Skills，需要时再激活。多个激活 Skill 引用了同一个工具时，Runtime
@@ -56,6 +59,12 @@ tools: ["CreateBackgroundAgentTask"]
 `RequestAgentTaskInput`、`ReportAgentTaskProgress` 和 `ReportAgentTask`。
 `WaitAgentTask` 按 `task_id` 等待；任一由当前 Agent 委派的任务请求输入或提交候选结果、目标任务进入终态、新用户消息或超时都会唤醒。其他任务的普通状态变化不会唤醒；需关注的任务通过 `attention_task_id` 单独标识，不把原等待目标误判为完成；
 新用户消息会让主 Agent 先恢复处理指令，因此可以立即决定是否暂停任务执行者。
+
+新建委派任务的标识只由 Runtime 生成，并使用 `agent_task_` 专用命名空间；AI 调用方不能自定义
+`task_id`，恢复旧快照时原有任务标识仍然有效。任务标识只是协作句柄，不能替代后台执行者在
+结构化 `result` 中返回的业务标识。候选报告的完整 JSON `result` 和产物列表会保留在委托方的
+LLM 上下文与尾部快照中；后台 Agent 的报告、进度和输入请求统一序列化并标记为不可信数据，
+不能作为指令或工具调用执行。
 后台 Agent 请求输入后，Runtime 通过不向 AI 暴露的 Corework System 校验
 conversation、ExecutionUnit 和 Agent 调用身份，再由任务关系推导委派者；仅当委派者已停止时
 才唤醒。用户输入和内部唤醒共用每 Agent 调度门与单一 driver 槽位。
@@ -142,6 +151,13 @@ name: service_boss
 kind: role
 tools: ["CreateBackgroundAgentTask"] # Runtime 会加入受任务关系约束的等待、回答、更新、完成、取消和暂停工具
 ---
+
+# 服务负责人
+
+- 政策研究任务必须调用 `CreateBackgroundAgentTask`，并使用已注册的
+  `name="service.policy_researcher"`。
+- `ReportAgentTask` 只是候选结果；验收后调用 `CompleteAgentTask`，需要继续修改则调用
+  `UpdateAgentTask`，放弃任务才调用 `CancelAgentTask`。
 ```
 
 后台角色：
@@ -195,6 +211,8 @@ cluster 只需要预声明前台主 Agent：
 
 主 Agent 调用 `CreateBackgroundAgentTask` 时使用后台 profile 的 id/name，并给出
 `objective` 和 `acceptance`。Runtime 创建唯一后台实例、登记任务和委托关系。
+把允许调用的后台 profile id/name 写进主 Agent role，而不是只在宿主配置中注册，能让
+模型明确知道应该委派给谁；注册本身只提供可解析资源，不会自动把 profile 目录注入模型。
 后台角色使用 `ReportAgentTaskProgress` 汇报阶段结果并继续工作；使用 `ReportAgentTask`
 提交候选最终结果并停驻。委托方调用 `CompleteAgentTask` 接受，或用 `UpdateAgentTask`
 恢复同一执行者继续迭代，也可用 `CancelAgentTask` 放弃任务。

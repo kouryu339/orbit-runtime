@@ -139,6 +139,17 @@ impl ConversationManager {
             .cloned()
     }
 
+    pub async fn publish_current_state(&self, conversation_id: &str) -> Result<()> {
+        let runtime = self.get(conversation_id).await.ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!(
+                "conversation '{}' not found",
+                conversation_id
+            ))
+        })?;
+        runtime.conversation.publish_current_state().await;
+        Ok(())
+    }
+
     pub async fn attach_shared_component<T>(
         &self,
         conversation_id: &str,

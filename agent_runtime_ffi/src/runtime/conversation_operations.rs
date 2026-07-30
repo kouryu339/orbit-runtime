@@ -330,12 +330,16 @@ impl RuntimeFacade {
                 )
                 .await?;
                 publish_conversation_created_event(
-                    export_event_bus,
+                    Arc::clone(&export_event_bus),
                     &info,
                     &lifecycle_cluster_id,
                     init.lifecycle_cluster_description.as_deref().unwrap_or(""),
                 )
                 .await?;
+                manager
+                    .publish_current_state(&conversation_id)
+                    .await
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
 
                 Ok::<ConversationInfo, RuntimeError>(info)
             }

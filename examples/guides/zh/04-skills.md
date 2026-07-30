@@ -71,13 +71,17 @@ Frontmatter 的核心字段：
 `tools` 只控制可见性，不会创建工具。工具必须由 runtime 内置系统或外部
 Tool sidecar 注册。工具名区分大小写。
 
-这里的可见性是 Runtime 强制执行的白名单，不只是给模型看的建议：
+这里的普通工具可见性是 Runtime 强制执行的白名单，不只是给模型看的建议：
 
 - Skill 未引用的工具不会进入该 Agent 的工具描述上下文；
 - 即使工具已经注册，Agent 直接构造调用也会被执行层拒绝；
 - 一个工具通过 `to_ai` 建议调用后续工具时，后续工具也必须在 active Skill 中；
 - 有强顺序关系的一组工具，应由同一个 role/feature Skill 一并引用，并在正文中
   说明调用顺序、前置条件和终止条件。
+
+后台任务关系工具是明确的生命周期例外：由 Skill 授权的 `CreateBackgroundAgentTask`
+成功后，Runtime 从任务关系推导委派者和执行者，只为双方动态加入各自的后续控制。
+详见[多 Agent 协作](06-builtin-tools-and-agents.md)。
 
 ## 4.3 将 Skill 绑定到 Agent
 
@@ -115,8 +119,8 @@ Tool sidecar 注册。工具名区分大小写。
 ```
 
 Profile 表示 Agent 类型；`agents[].id` 表示这次注册的具体实例。同一种
-Profile 可以创建多个实例。需要委托、报告或后台 Agent 能力时，把相应工具
-写进角色 Skill，由角色显式决定何时使用。
+Profile 可以创建多个实例。委托入口应写进主 Agent 的角色 Skill，由角色明确决定何时
+使用；任务建立后，Runtime 再按关系加入任务级报告与控制工具。
 
 完整格式参考
 [`10-runtime-skill-authoring-guide.md`](../../../agent_runtime_ffi/docs/zh/10-runtime-skill-authoring-guide.md)。

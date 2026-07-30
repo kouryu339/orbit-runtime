@@ -1,8 +1,9 @@
 # 6 Configure Built-in Tools and Multi-Agent Collaboration
 
-Runtime provides collaboration tools, but role Skills must explicitly allow
-them. Multi-agent behavior is composed from agent profiles, cluster instances,
-focus, and tool allowlists.
+Runtime provides collaboration tools. Entry-point authority must be granted by
+an active Skill; relation-scoped background lifecycle controls are added only
+after Runtime creates a real delegated task. Multi-agent behavior is composed
+from agent profiles, cluster instances, focus, and tool allowlists.
 
 Local registration does not make a tool globally visible. The public local
 groups are:
@@ -23,10 +24,13 @@ normal Agent Skill may reference. Ledger, prompt-building, Skill-loading, and
 Draft systems also run in the local registry, but they are state-machine
 internals rather than normal Agent tool contracts.
 
-A tool description is exposed to the AI only when an active system, role, or
-feature Skill explicitly references that tool in `tools`. Registration alone
-does not advertise the tool. Use one rule for every tool: include it through a
-Skill when the Agent needs it, and leave it out otherwise.
+Ordinary tool descriptions are exposed to the AI only when an active system,
+role, or feature Skill explicitly references them in `tools`. Registration
+alone does not advertise a tool. The deliberate exception is the background
+task lifecycle: after `CreateBackgroundAgentTask` succeeds, Runtime adds only
+the follow-up controls implied by that task's delegator/assignee relation and
+removes them with the worker lifecycle. This does not grant arbitrary Agent-id
+control.
 
 Keep each role Skill to the minimum tool set required by that role's core
 responsibility. Put composable business capabilities into feature Skills and
@@ -62,7 +66,25 @@ file-path Workflow execution tools are removed rather than exposed as another
 business-Agent tool set.
 
 For a background master-worker model, grant `CreateBackgroundAgentTask` to the
-front agent and reporting tools to the worker profile. Once a task is created,
+front agent and name each allowed registered worker profile in the role
+instructions. Registration makes a profile resolvable by Runtime; it does not
+automatically inject a worker catalog into the model prompt. For example:
+
+```markdown
+---
+name: service_lead
+kind: role
+tools: ["CreateBackgroundAgentTask"]
+---
+
+- Delegate policy research with `CreateBackgroundAgentTask` using
+  `name="service.policy_researcher"`.
+- Treat `ReportAgentTask` as a candidate result. Use `CompleteAgentTask` to
+  accept it, `UpdateAgentTask` to request another revision, or
+  `CancelAgentTask` to abandon it.
+```
+
+Once a task is created,
 Runtime adds authorization-checked wait, response, update, complete, cancel, and
 pause tools to the delegator, plus input-request, progress-report, and candidate
 final-report tools to the worker. It also projects the task id plus exact
@@ -83,6 +105,15 @@ waiting rather than task completion. However, a pending input request or candida
 result from a directly delegated task ends it early with `wake_reason=external_attention` and
 an `attention_task_id`; the result explicitly says that the original wait
 condition has not completed.
+
+Runtime exclusively generates new delegated-task identifiers in the
+`agent_task_` namespace; AI callers cannot provide their own task id. Existing
+persisted task ids remain valid after restore. A task id is only a collaboration
+handle and must never replace a domain identifier from a worker's structured
+result. Candidate reports preserve their complete JSON `result` and artifact
+list in the delegator's LLM context and tail snapshot. Worker report, progress,
+and input-request values are serialized and explicitly marked as untrusted data,
+not instructions or tool calls.
 
 When a
 parent goal changes, call `UpdateAgentTask` once for each affected task. This

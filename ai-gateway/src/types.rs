@@ -244,6 +244,9 @@ pub struct AsrResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmResponse {
     pub content: String,
+    /// Provider completion reason such as `stop`, `length`, or `tool_calls`.
+    #[serde(default)]
+    pub finish_reason: Option<String>,
     pub tokens: Option<TokenUsage>,
     #[serde(default)]
     pub cached_tokens: u32,

@@ -390,6 +390,10 @@ pub(super) struct ConversationSnapshotImport {
     pub(super) conversation_id: Option<String>,
     #[serde(default)]
     pub(super) ledger: Vec<ai_assistant::ledger::LedgerRecord>,
+    /// Conversation-owned delegation records. Registered Agent definitions are
+    /// resolved from the current registry and are intentionally not embedded.
+    #[serde(default)]
+    tasks: Vec<ai_assistant::conversation_state::AgentTaskEntry>,
     #[serde(
         default,
         alias = "state_delta",
@@ -417,7 +421,22 @@ where
 }
 
 pub(super) fn snapshot_state_deltas(snapshot: &ConversationSnapshotImport) -> Vec<Value> {
-    let mut deltas = snapshot.state_deltas.clone();
+    // A native export carries the materialized task board at the top level.
+    // Replay it first as canonical upserts, then apply any later deltas supplied
+    // by a host-built checkpoint.
+    let mut deltas = snapshot
+        .tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "schema": "agent-runtime-state-delta/v1",
+                "op": "agent_task.upsert",
+                "task_id": task.task_id,
+                "task": task,
+            })
+        })
+        .collect::<Vec<_>>();
+    deltas.extend(snapshot.state_deltas.clone());
     if let Some(state) = &snapshot.state {
         if let Some(items) = state.get("deltas").and_then(Value::as_array) {
             deltas.extend(items.iter().cloned());

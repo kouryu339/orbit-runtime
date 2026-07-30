@@ -13,20 +13,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_RUNTIME_VERSION = "0.4.7-beta.1"
+DEFAULT_RUNTIME_VERSION = "0.4.7"
 DEFAULT_RELEASE_TAG = f"v{DEFAULT_RUNTIME_VERSION}"
 DEFAULT_REPOSITORY = "kouryu339/orbit-runtime"
 ABI_VERSION = 1
 
 _ASSETS = {
     "windows-x86_64": {
-        "archive": "orbit-runtime-runtime-v0.4.7-beta.1-windows-x86_64.zip",
-        "sha256": "4b63991ebf4a18f92caa23b025655d12667783eebb87eac7d997f4c791432ef2",
+        "archive": "orbit-runtime-runtime-v0.4.7-windows-x86_64.zip",
+        "sha256": "44c79b6a228769ed35d97d3a33fc2164c9db7bae661a6c9f11308262b1063d57",
         "library": "bin/agent_runtime.dll",
     },
     "linux-x86_64": {
-        "archive": "orbit-runtime-runtime-v0.4.7-beta.1-linux-x86_64.zip",
-        "sha256": "2f0ff85d95557b8160d6f1f3a79c63add19da7b58b4e6ee964d812740a864727",
+        "archive": "orbit-runtime-runtime-v0.4.7-linux-x86_64.zip",
+        "sha256": "c589266c2b2a1488f9ec08ba50868a51030f5759787e7026095f355fcc523d81",
         "library": "lib/libagent_runtime.so",
     },
 }

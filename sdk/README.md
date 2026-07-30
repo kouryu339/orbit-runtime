@@ -97,7 +97,7 @@ It must not infer compatibility from the product version.
 Runtime Host SDKs are aligned with the native packages from:
 
 ```text
-https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.7-beta.1
+https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.7
 ```
 
 Use `runtime/release_manifest.json` to resolve the platform archive, checksum,

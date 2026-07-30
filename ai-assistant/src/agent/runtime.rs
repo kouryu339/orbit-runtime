@@ -281,6 +281,10 @@ pub struct AgentPermissions {
 
 pub struct AgentRuntime {
     pub id: AgentId,
+    /// Stable registry entry used to construct this conversation-scoped instance.
+    /// Runtime snapshots persist this reference, not a copy of the registered
+    /// profile, permissions, tools, or model configuration.
+    pub definition_id: String,
     pub name: String,
     pub kind: AgentKind,
     pub sm: Arc<StateMachine>,
@@ -292,6 +296,18 @@ pub struct AgentRuntime {
 impl AgentRuntime {
     pub fn new(
         id: AgentId,
+        name: String,
+        kind: AgentKind,
+        sm: Arc<StateMachine>,
+        permissions: AgentPermissions,
+    ) -> Self {
+        let definition_id = id.clone();
+        Self::new_with_definition_id(id, definition_id, name, kind, sm, permissions)
+    }
+
+    pub fn new_with_definition_id(
+        id: AgentId,
+        definition_id: String,
         name: String,
         kind: AgentKind,
         sm: Arc<StateMachine>,
@@ -319,6 +335,7 @@ impl AgentRuntime {
         }
         Self {
             id,
+            definition_id,
             name,
             kind,
             sm,

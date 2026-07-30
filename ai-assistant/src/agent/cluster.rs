@@ -9,13 +9,13 @@ use tokio::task::JoinHandle;
 use super::runtime::{AgentId, AgentRuntime};
 use crate::state::{events, states};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRuntimeSnapshot {
     pub agent_id: AgentId,
+    #[serde(default)]
+    pub definition_id: String,
     pub agent_name: String,
-    pub kind: String,
     pub state: String,
-    pub permissions: super::runtime::AgentPermissions,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -206,10 +206,9 @@ impl AgentCluster {
                 .values()
                 .map(|agent| AgentRuntimeSnapshot {
                     agent_id: agent.id.clone(),
+                    definition_id: agent.definition_id.clone(),
                     agent_name: agent.name.clone(),
-                    kind: format!("{:?}", agent.kind),
                     state: agent.sm.current_state(),
-                    permissions: agent.permissions.clone(),
                 })
                 .collect(),
         }
@@ -342,6 +341,7 @@ impl AgentCluster {
         let driver_state = Arc::clone(&self.drivers);
         let retiring_agents = Arc::clone(&self.retiring_agents);
         let agents = Arc::clone(&self.agents);
+        let event_bus = Arc::clone(&self.event_bus);
         let llm_request_headers = llm_gateway::request_context::current_request_headers();
         let allow_insecure_llm_request_headers =
             llm_gateway::request_context::allow_insecure_request_headers();
@@ -382,7 +382,27 @@ impl AgentCluster {
                 state.running_agents.remove(&driver.id);
                 drop(state);
                 if retiring_agents.lock().await.remove(&driver.id) {
-                    agents.write().await.remove(&driver.id);
+                    let retired = agents.write().await.remove(&driver.id);
+                    if let Some(retired) = retired {
+                        if let Err(error) = event_bus
+                            .publish(corework::event::BaseEvent::new(
+                                crate::events::types::AGENT_RETIRED,
+                                serde_json::json!({
+                                    "agent_id": retired.id,
+                                    "definition_id": retired.definition_id,
+                                    "agent_name": retired.name,
+                                    "state": "retired",
+                                }),
+                            ))
+                            .await
+                        {
+                            tracing::warn!(
+                                agent_id = %driver.id,
+                                error = %error,
+                                "publish retired agent event failed"
+                            );
+                        }
+                    }
                 }
                 break;
             }
@@ -439,8 +459,21 @@ impl AgentCluster {
         if !self.agent_driver_is_running(agent_id).await
             && agent.sm.current_state() == states::SUSPENDED
         {
-            self.agents.write().await.remove(agent_id);
+            let retired = self.agents.write().await.remove(agent_id);
             self.retiring_agents.lock().await.remove(agent_id);
+            if let Some(retired) = retired {
+                self.event_bus
+                    .publish(corework::event::BaseEvent::new(
+                        crate::events::types::AGENT_RETIRED,
+                        serde_json::json!({
+                            "agent_id": retired.id,
+                            "definition_id": retired.definition_id,
+                            "agent_name": retired.name,
+                            "state": "retired",
+                        }),
+                    ))
+                    .await?;
+            }
             return Ok("retired");
         }
         Ok("retirement_pending")

@@ -2933,6 +2933,19 @@ fn spawn_conversation_from_persisted_json_replays_state_deltas_and_repairs_open_
                     },
                     "created_at": "2026-06-23T10:00:00+08:00"
                 }],
+                "tasks": [{
+                    "task_id": "task-restore-1",
+                    "title": "Verify order mutation",
+                    "objective": "Check whether the interrupted write finished",
+                    "acceptance": ["order status is known"],
+                    "delegator_agent_id": "agent-a",
+                    "delegator_agent_name": "Agent A",
+                    "assignee_agent_id": "agent-a",
+                    "assignee_agent_name": "Agent A",
+                    "status": "pending",
+                    "created_at": "2026-06-23T10:00:01+08:00",
+                    "updated_at": "2026-06-23T10:00:01+08:00"
+                }],
                 "state_deltas": [{
                     "schema": "agent-runtime-state-delta/v1",
                     "op": "focus.set",
@@ -3548,6 +3561,23 @@ fn best_effort_conversation_snapshot_exports_ledger_when_not_waiting() {
 
     let manager = facade.manager().unwrap();
     facade.rt.block_on(async {
+        let task = serde_json::from_value(json!({
+            "task_id": "task-native-roundtrip",
+            "title": "Preserve delegation",
+            "objective": "Keep the task edge across export and import",
+            "delegator_agent_id": "agent-a",
+            "delegator_agent_name": "Agent A",
+            "assignee_agent_id": "agent-a",
+            "assignee_agent_name": "Agent A",
+            "status": "running",
+            "created_at": "2026-06-12T18:00:01+08:00",
+            "updated_at": "2026-06-12T18:00:02+08:00"
+        }))
+        .unwrap();
+        manager
+            .upsert_agent_task(&info.conversation_id, task)
+            .await
+            .unwrap();
         let cache = manager
             .default_agent_cache(&info.conversation_id)
             .await
@@ -3583,8 +3613,37 @@ fn best_effort_conversation_snapshot_exports_ledger_when_not_waiting() {
         "save this even while stopping"
     );
     assert_eq!(snapshot["runtime"]["agents"][0]["agent_id"], "agent-a");
+    assert_eq!(snapshot["runtime"]["agents"][0]["definition_id"], "agent-a");
+    assert!(snapshot["runtime"]["agents"][0]
+        .get("permissions")
+        .is_none());
+    assert_eq!(snapshot["tasks"][0]["task_id"], "task-native-roundtrip");
 
     facade.close_conversation(&info.conversation_id).unwrap();
+    let restored = facade
+        .spawn_conversation_from_snapshot(
+            &json!({
+                "schema": "agent-runtime-conversation-spawn/v1",
+                "cluster_id": "default-cluster"
+            })
+            .to_string(),
+            &snapshot.to_string(),
+        )
+        .unwrap();
+    let restored_tasks = facade
+        .rt
+        .block_on(manager.agent_tasks(&restored.conversation_id))
+        .unwrap();
+    assert_eq!(restored_tasks.len(), 1);
+    assert_eq!(restored_tasks[0].task_id, "task-native-roundtrip");
+    assert_eq!(restored_tasks[0].delegator_agent_id, "agent-a");
+    assert_eq!(
+        restored_tasks[0].assignee_agent_id.as_deref(),
+        Some("agent-a")
+    );
+    facade
+        .close_conversation(&restored.conversation_id)
+        .unwrap();
     let _ = fs::remove_dir_all(root);
 }
 
@@ -3676,6 +3735,24 @@ fn spawn_conversation_records_lifecycle_event_for_sse() {
     assert_eq!(event["payload"]["conversation_id"], info.conversation_id);
     assert_eq!(event["payload"]["cluster_id"], "default-cluster");
     assert_eq!(event["payload"]["cluster_description"], "Test cluster");
+
+    let agent_upsert = facade
+        .event_log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event["type"] == "conversation.state_delta" && event["payload"]["op"] == "agent.upsert"
+        })
+        .cloned()
+        .expect("initial agent.upsert state delta");
+    assert_eq!(agent_upsert["conversation_id"], info.conversation_id);
+    assert_eq!(agent_upsert["payload"]["agent_id"], "agent-a");
+    assert_eq!(agent_upsert["payload"]["agent"]["agent_id"], "agent-a");
+    assert_eq!(agent_upsert["payload"]["agent"]["definition_id"], "agent-a");
+    assert!(agent_upsert["payload"]["agent"]
+        .get("permissions")
+        .is_none());
 
     facade
         .rt

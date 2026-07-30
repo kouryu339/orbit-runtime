@@ -131,6 +131,25 @@ fn render_dynamic_context_message(content: &str) -> String {
     rendered.trim().to_string()
 }
 
+fn append_empty_response_retry_context(
+    messages: &mut Vec<llm_gateway::ChatMessage>,
+    response: &llm_gateway::LlmResponse,
+    retry_prompt: String,
+) {
+    if let Some(reasoning) = response
+        .reasoning_content
+        .as_deref()
+        .filter(|reasoning| !reasoning.trim().is_empty())
+    {
+        // Preserve provider reasoning for models that require it on the next
+        // turn, but never promote hidden reasoning into executable content.
+        let mut assistant = llm_gateway::ChatMessage::assistant(String::new());
+        assistant.reasoning_content = Some(reasoning.to_string());
+        messages.push(assistant);
+    }
+    messages.push(llm_gateway::ChatMessage::user(retry_prompt));
+}
+
 fn leading_system_message(content: String, prompt_cache_control: bool) -> llm_gateway::ChatMessage {
     if prompt_cache_control {
         llm_gateway::ChatMessage::system_cached(content)
@@ -942,9 +961,19 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 );
                 let content_empty = resp.content.trim().is_empty();
                 if content_empty {
+                    let reasoning_len = resp
+                        .reasoning_content
+                        .as_deref()
+                        .map(str::len)
+                        .unwrap_or_default();
+                    let tool_call_count =
+                        resp.tool_calls.as_ref().map(Vec::len).unwrap_or_default();
                     last_err = format!(
-                        "attempt {} returned an empty response without content or tool calls",
-                        attempt
+                        "attempt {} returned empty content (finish_reason={}, reasoning_len={}, tool_call_count={})",
+                        attempt,
+                        resp.finish_reason.as_deref().unwrap_or("unknown"),
+                        reasoning_len,
+                        tool_call_count
                     );
                     tracing::warn!(
                         conversation_id = %conversation_id,
@@ -970,7 +999,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                             messages_len_before_retry = messages.len(),
                             "injecting retry prompt after empty assistant response"
                         );
-                        messages.push(llm_gateway::ChatMessage::user(retry_prompt));
+                        append_empty_response_retry_context(&mut messages, &resp, retry_prompt);
                     }
                     continue;
                 }
@@ -2036,6 +2065,36 @@ fn runtime_context_probe_file() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_response_retry_preserves_reasoning_without_executing_it() {
+        let mut messages = vec![llm_gateway::ChatMessage::user("work")];
+        let response = llm_gateway::LlmResponse {
+            content: String::new(),
+            finish_reason: Some("length".to_string()),
+            tokens: None,
+            cached_tokens: 0,
+            tool_calls: None,
+            reasoning_content: Some("EXEC DangerousTool --value bad".to_string()),
+        };
+
+        append_empty_response_retry_context(
+            &mut messages,
+            &response,
+            "provide final output".to_string(),
+        );
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].role, "assistant");
+        assert!(messages[1].content.is_empty());
+        assert_eq!(
+            messages[1].reasoning_content.as_deref(),
+            Some("EXEC DangerousTool --value bad")
+        );
+        assert!(messages[1].tool_calls.is_none());
+        assert_eq!(messages[2].role, "user");
+        assert_eq!(messages[2].content, "provide final output");
+    }
     use corework::cache::{Cache, InMemoryCache};
     use corework::event::InMemoryEventBus;
 

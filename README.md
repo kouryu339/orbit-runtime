@@ -1,45 +1,137 @@
 # orbit-runtime
 
-`orbit-runtime` is an embeddable Rust Agent runtime for applications that need
-LLM conversations, skills, tool execution, runtime events, snapshots, and
-persistence behind a stable native boundary.
+**Build Agent products from composable roles, Skills, tools, retrieval, and
+runtime lifecycles—behind one embeddable Rust boundary.**
 
-The runtime is designed to be hosted by desktop apps, services, scripting
-bridges, or language SDKs. Host applications load the native library, register
-configuration, start conversations, and relay events without linking directly to
-the internal Rust crates.
+`orbit-runtime` is not a fixed supervisor/worker framework. It is a native
+runtime for assembling the Agent topology a product actually needs: one focused
+Agent, a persistent specialist team, delegated background workers, or a mixture
+of all three.
+
+Desktop apps, services, scripting bridges, and language SDKs can host the same
+runtime through `agent_runtime.dll` / `libagent_runtime.so` and a stable C ABI.
 
 ```text
-Host application
-  -> agent_runtime.dll / libagent_runtime.so
-  -> Agent Runtime
-  -> LLM Gateway
-  -> optional RPC Tool sidecars
+Product host
+  ├─ registers models, Agent profiles, Skills, and tool endpoints
+  ├─ starts conversations and consumes one event stream
+  └─ owns UI, approvals, archives, and recovery
+          │
+          ▼
+    orbit-runtime
+      ├─ Agent state machines and auditable ledgers
+      ├─ Skill-governed tool execution
+      ├─ delegated tasks and focus handoff
+      └─ LLM gateway + optional RPC Tool/RAG sidecars
 ```
 
-## Project Highlights
+## Why orbit-runtime
 
-- **Embeddable Agent runtime**: create and control conversations from a host
-  process while keeping the runtime implementation isolated behind an ABI.
-- **Stable C ABI boundary**: ship `agent_runtime.dll` or `libagent_runtime.so`
-  with `agent_runtime.h`, then build higher-level SDKs on top of that native
-  contract.
-- **Host-oriented event model**: hosts poll a single runtime event stream and
-  decide how to render UI state, persist archives, or fan out messages.
-- **Skills and tool governance**: role and feature Skills describe what an
-  Agent can see and which tools it may call, so product capability is explicit.
-- **RPC Tool sidecar protocol**: external tools run out of process and publish
-  descriptors through a language-neutral gRPC contract.
-- **LLM Gateway integration**: provider configuration and OpenAI-compatible
-  endpoints are handled through a dedicated gateway layer.
-- **Snapshots and persistence contracts**: conversations can export runtime
-  state for recovery, migration, and host-owned storage.
-- **Split SDK surface**: Runtime Host SDKs embed the runtime; RPC Tool SDKs
-  implement callable business tools.
+| Capability | Product-level result |
+| --- | --- |
+| **Composable Agent clusters** | Choose delegation, focus handoff, progressive capabilities, and retrieval per role instead of inheriting one topology. |
+| **Skills as capability boundaries** | Role, feature, and system Skills jointly define instructions and the enforced tool allowlist. |
+| **Reliable background work** | Task-scoped authorization, wait/wakeup, input requests, progress, revision, two-phase acceptance, pause, cancellation, and recovery. |
+| **Embeddable native runtime** | Keep Rust internals behind a stable ABI while hosts use C++, Python, Go, Rust, or another bridge. |
+| **Observable and recoverable state** | Consume ordered events and export snapshots without reconstructing truth from chat text. |
+| **Out-of-process business tools** | Implement tool sidecars through a language-neutral gRPC contract and keep product integrations isolated. |
 
-## 0.4.7 Beta Focus
+## Assemble The Cluster You Need
 
-The `0.4.7-beta.1` release candidate strengthens two Runtime boundaries:
+The cluster is assembled from small, independent contracts:
+
+| Layer | Responsibility |
+| --- | --- |
+| Agent profile | Reusable model, role, initial features, and retrieval binding. |
+| Role Skill | Identity, delegation policy, lifecycle rules, and minimum entry-point tools. |
+| Feature Skill | Optional domain capability loaded only when the current task needs it. |
+| System Skill | Cross-cutting behavior such as planning and progressive Skill discovery/loading. |
+| Runtime relation | The actual delegator/assignee or focus relationship that authorizes follow-up actions. |
+
+### Example: a lead that can hire a policy researcher
+
+Register `research.policy` as an Agent profile, grant the lead only the task
+publication entry point, and write the allowed worker profile into the lead's
+Role Skill:
+
+```markdown
+---
+name: research_lead
+description: "Plans research and accepts delegated results."
+kind: role
+tools: ["CreateBackgroundAgentTask"]
+---
+
+# Research lead
+
+- Delegate policy research with `CreateBackgroundAgentTask` using
+  `name="research.policy"`.
+- Treat `ReportAgentTask` as a candidate result. Accept it with
+  `CompleteAgentTask`, request another revision with `UpdateAgentTask`, or
+  abandon it with `CancelAgentTask`.
+```
+
+That small declaration produces a controlled lifecycle:
+
+```text
+lead publishes task for registered profile "research.policy"
+  -> Runtime creates a unique background Agent and task relation
+  -> worker may request input, report progress, and submit a candidate result
+  -> lead may wait, respond, revise, pause, accept, or cancel
+  -> Runtime retires the worker only after an explicit terminal decision
+```
+
+The lead does not receive arbitrary Agent control. Runtime derives every
+follow-up permission from the concrete task relation and rejects self-targeting
+or unrelated Agent IDs.
+
+### Add capabilities progressively
+
+```markdown
+---
+name: policy_recall
+description: "Run a narrower policy lookup when automatic retrieval is insufficient."
+kind: feature
+tools: ["RagRetrieve"]
+---
+
+Use `RagRetrieve` for a narrower second lookup when the automatically retrieved
+context is insufficient.
+```
+
+With the built-in `thinking` system Skill, an Agent can use `GetSkillsList` and
+`UpdateSkills` to discover and activate `policy_recall` only when needed.
+Instructions and tool schemas do not have to occupy every model request.
+
+Retrieval is independently bound per Agent. Runtime can perform automatic
+pre-thinking retrieval, while an active feature such as `policy_recall` exposes
+`RagRetrieve` for a narrower second pass. The call remains pinned to that
+Agent's configured endpoint.
+
+This is the core assembly model:
+
+```text
+Role Skill          = who the Agent is and what lifecycle it may initiate
+Feature Skills      = capabilities it can load now
+System Skills       = how it plans, reasons, and discovers capabilities
+Agent profile       = model + role + retrieval defaults
+Runtime relations   = who may control or report to whom
+```
+
+Change those inputs and the same runtime can become a research team, support
+desk, review pipeline, workflow author, or a single-purpose Agent—without
+forking the orchestration core.
+
+Full working configuration and lifecycle details:
+
+- [Write Skills](examples/guides/en/04-skills.md)
+- [Configure built-in tools and multi-Agent collaboration](examples/guides/en/06-builtin-tools-and-agents.md)
+- [Progressive Skills and per-Agent RAG](examples/guides/en/07-progressive-skills-and-rag.md)
+- [Connect an external RAG service](examples/guides/en/08-external-rag.md)
+
+## 0.4.7 Release
+
+The `0.4.7` release strengthens two Runtime boundaries:
 
 - **Reliable delegated background tasks**: parent/child authorization,
   task-specific waits, asynchronous input requests, durable progress,
@@ -88,6 +180,9 @@ Start here:
 - `examples/guides/en/03-external-tools.md`
 - `examples/guides/en/04-skills.md`
 - `examples/guides/en/05-host-runtime-frontend.md`
+- `examples/guides/en/06-builtin-tools-and-agents.md`
+- `examples/guides/en/07-progressive-skills-and-rag.md`
+- `examples/guides/en/08-external-rag.md`
 
 ### Desktop Reference App
 
@@ -191,8 +286,11 @@ Start with examples before reading implementation details:
 2. `examples/guides/en/03-external-tools.md`
 3. `examples/guides/en/04-skills.md`
 4. `examples/guides/en/05-host-runtime-frontend.md`
-5. `examples/guides/en/11-dynamic-workflows.md`
-6. `sdk/README.md`
+5. `examples/guides/en/06-builtin-tools-and-agents.md`
+6. `examples/guides/en/07-progressive-skills-and-rag.md`
+7. `examples/guides/en/08-external-rag.md`
+8. `examples/guides/en/11-dynamic-workflows.md`
+9. `sdk/README.md`
 
 Lower-level design documents live in:
 

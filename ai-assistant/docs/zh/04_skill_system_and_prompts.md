@@ -23,8 +23,9 @@ system tools + role tools + active feature tools
   -> EXEC validation
 ```
 
-只有被当前 Skill 集合引用的工具才对 Agent 可见。外部 RPC endpoint 可以暴露多个
-工具，但 Skill 引用的是具体工具名，不是 endpoint id。
+普通工具只有被当前 Skill 集合引用时才对 Agent 可见。外部 RPC endpoint 可以暴露多个
+工具，但 Skill 引用的是具体工具名，不是 endpoint id。后台委派任务建立后，Runtime
+会按已校验的任务关系动态加入委派者/执行者的任务生命周期工具；它们不能用于任意 Agent。
 
 ## 4.3 渐进加载
 

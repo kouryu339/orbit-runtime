@@ -118,7 +118,7 @@ fn setvar_rejects_loop_builtin_item_at_compile_time() {
         r#"
 input strings:Array[String]
 1: FOR input.strings
-    2.1: setvar item = "b"
+    1.1: setvar item = "b"
 END
 RETURN result=input.strings
 "#,
@@ -126,7 +126,10 @@ RETURN result=input.strings
     .expect_err("loop builtin item should not be writable by SetVar");
 
     let error_text = error.to_string();
-    assert!(error_text.contains("SetVarNode"));
+    assert!(
+        error_text.contains("SetVarNode"),
+        "unexpected compiler error: {error_text}"
+    );
 }
 
 #[test]

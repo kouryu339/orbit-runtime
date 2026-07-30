@@ -83,6 +83,10 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub async fn publish_current_state(&self) {
+        self.gateway.publish_current_state().await;
+    }
+
     pub async fn new(
         config: AIAssistantConfig,
         export_event_bus: Arc<dyn EventBus>,

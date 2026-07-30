@@ -163,6 +163,7 @@ pub async fn call_inner(
 
     Ok(LlmResponse {
         content: text_content,
+        finish_reason: resp["stop_reason"].as_str().map(str::to_string),
         tokens,
         cached_tokens: 0,
         tool_calls: if tool_calls.is_empty() {

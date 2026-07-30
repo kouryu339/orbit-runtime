@@ -8,7 +8,8 @@ handling live in `ai-assistant`; see
 ## 7.1 Event Surface
 
 FFI does not expose internal conversation events directly. `ai-assistant`
-AgentGateway normalizes ledger, focus, task, plan, skills, and dynamic snapshot
+AgentGateway normalizes ledger, Agent runtime instance, focus, task, plan,
+skills, and dynamic snapshot
 changes into stable export events. FFI wraps those events as
 `agent-runtime-event/v1` for the host.
 
@@ -43,8 +44,13 @@ conversation-level deltas continuously:
 - `conversation.ledger_delta`: idempotent ledger append keyed by
   `conversation_id + record_id`. This includes assistant/user/tool records and
   gateway facts such as LLM usage/error for background Agents.
-- `conversation.state_delta`: focus, agent task, agent skills, agent plan, and
-  dynamic snapshot mirrors.
+- `conversation.state_delta`: Agent runtime instance, focus, agent task, agent
+  skills, agent plan, and dynamic snapshot mirrors. In particular:
+  - `agent.upsert` persists only the conversation-scoped `agent_id`,
+    `definition_id`, display name, and runtime state;
+  - `agent.retired` removes the live instance mirror without deleting historical
+    task edges or ledger records;
+  - `agent_task.upsert` persists the complete task state and delegator/assignee edge.
 - `conversation:closed`: lifecycle end for that conversation.
 
 Hosts that need usage accounting, cost attribution, audit, or diagnostics
@@ -80,6 +86,19 @@ FFI passes the snapshot to `ai-assistant` recovery. The core runtime decides
 whether the restored entry is `thinking`, `executing`, or `suspended`; FFI does
 not synthesize history in the event layer.
 
+The cluster and every Agent definition referenced by the snapshot must be
+registered before recovery. Agent definitions, permissions, tools, Skills, and
+model policy remain registry-owned canonical configuration. A conversation
+snapshot neither duplicates nor overrides them; it stores only definition
+references, conversation-scoped instances, task edges, and runtime state.
+
+The top-level `tasks` emitted by `conversation.export_snapshot` is the task-board
+checkpoint. Import restores it before applying optional later `state_deltas`.
+Fixed Agent instances are recreated from the currently registered cluster.
+Continuing a live temporary worker requires its `definition_id` to remain
+resolvable; a host must never restore stale permissions or tool lists from a
+snapshot to bypass the current registry.
+
 ## 7.5 Shutdown and Event Drain
 
 Runtime shutdown closes conversations one by one:
@@ -104,6 +123,7 @@ Recommended idempotency keys:
 ```text
 ledger: conversation_id + record_id
 state delta: conversation_id + op + op-specific id/version
+agent instance: conversation_id + agent_id
 conversation lifecycle: conversation_id + lifecycle event type
 ```
 

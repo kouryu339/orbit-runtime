@@ -7,7 +7,7 @@
 ## 7.1 事件出口
 
 FFI 不直接暴露 conversation 内部事件。`ai-assistant` 的 AgentGateway 会把内部
-ledger、focus、task、plan、skills、动态快照等变化归一化为稳定 export 事件，FFI
+ledger、Agent 运行实例、focus、task、plan、skills、动态快照等变化归一化为稳定 export 事件，FFI
 再包装成 `agent-runtime-event/v1` 交给宿主。
 
 宿主需要依赖的稳定事件：
@@ -34,8 +34,11 @@ frontend:state_snapshot
 - `conversation:created`：记录 conversation manifest、cluster 信息、宿主路由和业务绑定。
 - `conversation.ledger_delta`：按 `conversation_id + record_id` 幂等追加 `LedgerRecord`；
   包含 user/assistant/tool 记录，也包含后台 Agent 的 LLM usage/error 等 gateway fact。
-- `conversation.state_delta`：按 delta 语义更新 focus、agent task、agent skills、agent plan、
-  dynamic snapshot 等镜像状态。
+- `conversation.state_delta`：按 delta 语义更新 Agent 运行实例、focus、agent task、
+  agent skills、agent plan、dynamic snapshot 等镜像状态。其中：
+  - `agent.upsert` 只保存 conversation 内的 `agent_id`、`definition_id`、显示名和运行状态；
+  - `agent.retired` 删除运行实例镜像，但不删除任务榜和 ledger 中的历史关系；
+  - `agent_task.upsert` 保存 delegator/assignee 关系和完整任务状态。
 - `conversation:closed`：标记该 conversation 生命周期已结束，并释放宿主侧业务绑定。
 
 需要用量统计、成本归因、审计或诊断的宿主，应从 `conversation.ledger_delta` 记录里派生这些事实；
@@ -66,6 +69,16 @@ host-owned 状态。
 导入时 FFI 会把 snapshot 交给 `ai-assistant` 恢复。恢复结果由核心运行时根据 ledger 尾部
 决定是进入 `thinking`、`executing` 还是 `suspended`；FFI 不在事件层伪造历史。
 
+恢复必须先注册 snapshot 所引用的 cluster 和 Agent definition。Agent definition、权限、
+工具、Skill、模型策略等静态配置以当前注册表为唯一真相源，不复制到 conversation snapshot，
+也不允许 snapshot 覆盖注册表。snapshot 只保存 `definition_id` 引用、conversation 内的
+Agent instance、任务关系和运行状态。
+
+原生 `conversation.export_snapshot` 输出的顶层 `tasks` 是任务榜 checkpoint；导入时会先
+恢复这些任务，再应用可选的后续 `state_deltas`。固定 Agent 实例由指定 cluster 的当前注册
+定义重新创建。仍在运行的临时后台实例只有在其 `definition_id` 仍可解析时才具备继续恢复的
+前提；宿主不得用快照中的旧权限或旧工具列表绕过当前注册表。
+
 ## 7.5 Shutdown 与事件 drain
 
 显式调用 runtime shutdown 或手动关闭 pod 时，关闭是 conversation 级别逐个发生的：
@@ -91,6 +104,7 @@ handle 已经结束。整个 handle 的关闭完成由 shutdown/destroy 调用�
 ```text
 ledger: conversation_id + record_id
 state delta: conversation_id + op + op-specific id/version
+agent instance: conversation_id + agent_id
 conversation lifecycle: conversation_id + lifecycle event type
 ```
 

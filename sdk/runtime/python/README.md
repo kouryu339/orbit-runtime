@@ -74,7 +74,7 @@ endpoint registration and startup verification without addresses, launch
 environment, or credentials.
 
 `RuntimeHostBuilder.from_release()` downloads the matching native Runtime
-package from `kouryu339/orbit-runtime` release `v0.4.7-beta.1`, verifies SHA256, and
+package from `kouryu339/orbit-runtime` release `v0.4.7`, verifies SHA256, and
 caches it under the user cache directory. To only fetch the native package:
 
 ```powershell

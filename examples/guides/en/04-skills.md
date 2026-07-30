@@ -40,12 +40,17 @@ tools: ["OrderList", "OrderGet", "ReturnCreate"]
 `tools` lists already registered tools that this Skill exposes to the AI.
 Declaring a name in `tools` does not implement or register that tool.
 
-This is an enforced Runtime allowlist, not merely a prompting hint. Tools that
-active Skills do not reference are omitted from the agent's tool context and
-rejected if the agent constructs a call directly. If one tool's `to_ai` result
-recommends a follow-up tool, that follow-up must also be listed by an active
-Skill. Keep strongly ordered tool chains in one role/feature Skill and document
-their prerequisites, order, and stopping conditions.
+This is an enforced Runtime allowlist, not merely a prompting hint. Ordinary
+tools that active Skills do not reference are omitted from the agent's tool
+context and rejected if the agent constructs a call directly. If one tool's
+`to_ai` result recommends a follow-up tool, that follow-up must also be listed
+by an active Skill. Keep strongly ordered tool chains in one role/feature Skill
+and document their prerequisites, order, and stopping conditions.
+
+Relation-scoped background-task controls are a deliberate lifecycle exception:
+after a Skill-authorized `CreateBackgroundAgentTask` succeeds, Runtime derives
+the delegator and assignee from the task and dynamically adds only their
+follow-up controls. See [multi-Agent collaboration](06-builtin-tools-and-agents.md).
 
 Bind Skills to a reusable agent profile in resources:
 
@@ -64,8 +69,9 @@ Bind Skills to a reusable agent profile in resources:
 
 Create concrete instances from that profile in an agent cluster. The profile
 identifies the agent type; `agents[].id` identifies one concrete instance.
-Collaboration, delegation, and reporting tools should be granted explicitly by
-the role Skill that knows when to use them.
+Collaboration and delegation entry points should be granted explicitly by the
+role Skill that knows when to use them. Task-bound reporting and control tools
+are then derived from the created task relation.
 
 See the full
 [`Runtime Skill Authoring Guide`](../../../agent_runtime_ffi/docs/en/10-runtime-skill-authoring-guide.md).

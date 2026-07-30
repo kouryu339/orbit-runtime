@@ -2,8 +2,9 @@
 
 Role Skills remain stable. Feature Skills can be loaded progressively with
 `GetSkillsList` and `UpdateSkills`. `UpdateSkills` replaces, rather than appends
-to, the imported feature set and rebuilds the active tool allowlist from main
-plus imported Skills.
+to, the imported feature set and rebuilds the active tool allowlist from stable
+main/role Skills, the selected feature Skills, and the active thinking system
+Skill. Replacing features does not remove the role or system layer.
 
 Resources may register multiple dedicated knowledge endpoints. Retrieval policy
 belongs to an agent profile or a concrete `cluster.agents[]` entry, not to the

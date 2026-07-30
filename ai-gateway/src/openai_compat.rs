@@ -352,6 +352,8 @@ pub async fn call_inner(
 
     Ok(LlmResponse {
         content,
+        finish_reason: (!finish_reason.is_empty() && finish_reason != "null")
+            .then(|| finish_reason.to_string()),
         tokens,
         cached_tokens,
         tool_calls,
@@ -752,6 +754,7 @@ where
     let mut stream = resp.bytes_stream();
     let mut full_content = String::new();
     let mut full_reasoning = String::new();
+    let mut finish_reason = None;
     let mut tc_map: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
     let mut buf = String::new();
     let mut arg_extractor = ArgsStreamExtractor::new();
@@ -791,6 +794,12 @@ where
             }
 
             let delta = &val["choices"][0]["delta"];
+            if let Some(reason) = val["choices"][0]["finish_reason"]
+                .as_str()
+                .filter(|reason| !reason.is_empty() && *reason != "null")
+            {
+                finish_reason = Some(reason.to_string());
+            }
 
             if let Some(s) = delta["content"].as_str() {
                 if !s.is_empty() {
@@ -852,6 +861,7 @@ where
     };
     Ok(LlmResponse {
         content: full_content,
+        finish_reason,
         tokens: None,
         cached_tokens: 0,
         tool_calls,

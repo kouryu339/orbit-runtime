@@ -35,7 +35,8 @@ UpdateSkills --skills excel,fileops
 ```
 
 调用后 Runtime 会更新 `IMPORTED_SKILLS`，加载 Skill 正文，并用 main + imported
-Skills 的 `tools` 重建 `ACTIVE_TOOLS`。被移除 Skill 的工具会立即离开白名单。
+Skills 与当前 thinking system Skill 的 `tools` 重建 `ACTIVE_TOOLS`。被移除 feature
+Skill 的工具会立即离开白名单，Role 和 system 层不会被 `UpdateSkills` 移除。
 
 Feature 的 `description` 要写清触发条件，因为 Agent 在加载正文前主要依靠名称和
 描述选择 Skill。不要把所有 feature 固定塞进 profile；否则渐进式加载失去意义。

@@ -20,7 +20,11 @@ conversation snapshots and to restore context after host restarts or event gaps.
 ## 5.3 Snapshot
 
 A snapshot is a host-friendly view of current runtime state, including
-conversation messages, active Agent metadata, and status information.
+conversation messages, Agent definition references, conversation-scoped Agent
+instances, the task board, and status information. Registered Agent
+definitions, permissions, tools, Skills, and model policy remain registry-owned
+canonical configuration; a conversation snapshot does not duplicate or
+override them.
 
 ## 5.4 Recovery Entry
 
@@ -54,3 +58,8 @@ agent keeps its own `tool_call_id`.
 
 Hosts should use snapshots for recovery and `frontend:state_snapshot` events for
 canonical transcript updates.
+
+`conversation.state_delta` operations `agent.upsert` and `agent.retired`
+describe the appearance, state change, and retirement of runtime instances.
+They carry only the instance id, registered definition reference, display name,
+and runtime state. They do not copy registered permissions or tool policy.

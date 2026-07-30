@@ -1575,6 +1575,15 @@ mod agent_control_tests {
         }
     }
 
+    #[test]
+    fn generated_task_ids_are_namespaced_for_agent_tasks() {
+        let task_id = generated_agent_task_id();
+        assert!(task_id.starts_with("agent_task_"));
+        assert!(task_id["agent_task_".len()..]
+            .chars()
+            .all(|character| character.is_ascii_digit()));
+    }
+
     #[tokio::test]
     async fn task_report_is_non_terminal_until_delegator_accepts_it() {
         let state = conversation_state();
@@ -2331,6 +2340,13 @@ impl SystemOperation for CancelAgentTaskSystem {
 // CreateBackgroundAgentTask
 // ============================================================================
 
+fn generated_agent_task_id() -> String {
+    format!(
+        "agent_task_{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    )
+}
+
 #[define_operation(
     name = "CreateBackgroundAgentTask",
     display_name = "为Agent {name}创建任务{task_id}，标题{title}、目标{objective}、验收{acceptance}",
@@ -2341,8 +2357,10 @@ impl SystemOperation for CancelAgentTaskSystem {
         name:       "Registered agent profile id or profile display name.",
         title:      "Short task title.",
         objective:  "Concrete task objective for the background agent.",
-        acceptance: "Optional comma-separated acceptance checklist.",
-        task_id:    "Optional caller-provided task id."
+        acceptance: "Optional comma-separated acceptance checklist."
+    },
+    outputs {
+        task_id: "Runtime-generated delegated task id in the agent_task_ namespace."
     },
     destructive = false,
     readonly = false,
@@ -2392,16 +2410,7 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| objective.chars().take(48).collect());
         let acceptance = split_csv(args.get("acceptance").unwrap_or(""));
-        let task_id = args
-            .get("task_id")
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                format!(
-                    "task_{}",
-                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-                )
-            });
+        let task_id = generated_agent_task_id();
 
         let feature_skills = profile.skill_refs();
         if feature_skills.is_empty() {
@@ -2518,8 +2527,9 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
             .await
             .map_err(|e| FrameworkError::SystemError(e.to_string()))?;
 
-        let runtime = Arc::new(crate::agent::AgentRuntime::new(
+        let runtime = Arc::new(crate::agent::AgentRuntime::new_with_definition_id(
             agent_id.clone(),
+            profile_id.clone(),
             name.clone(),
             crate::agent::AgentKind::OneShot,
             Arc::clone(&sm),
