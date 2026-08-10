@@ -46,6 +46,7 @@ pub mod ai_system; // AI 可调用系统
 pub mod cache;
 pub mod common_tools;
 pub mod data_type;
+pub mod diagnostics;
 pub mod ecs;
 pub mod error;
 pub mod event;

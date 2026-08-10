@@ -320,6 +320,64 @@ async fn trace_llm_error(
     .await;
 }
 
+fn log_protocol_rejection(
+    conversation_id: &str,
+    turn_id: u64,
+    model_uid: u32,
+    model_name: &str,
+    attempt: u32,
+    reason: &str,
+    raw_content: &str,
+    normalized_content: &str,
+    response: &llm_gateway::LlmResponse,
+) {
+    let record = protocol_rejection_record(
+        conversation_id,
+        turn_id,
+        model_uid,
+        model_name,
+        attempt,
+        reason,
+        raw_content,
+        normalized_content,
+        response,
+    );
+    corework::diagnostics::append_line(format!("[ai-assistant protocol-rejection] {record}"));
+}
+
+fn protocol_rejection_record(
+    conversation_id: &str,
+    turn_id: u64,
+    model_uid: u32,
+    model_name: &str,
+    attempt: u32,
+    reason: &str,
+    raw_content: &str,
+    normalized_content: &str,
+    response: &llm_gateway::LlmResponse,
+) -> serde_json::Value {
+    let normalized_changed = raw_content != normalized_content;
+    serde_json::json!({
+        "event": "tool_protocol_rejected",
+        "retry_layer": "thinking_protocol",
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "model_uid": model_uid,
+        "model_name": model_name,
+        "attempt": attempt,
+        "max_attempts": 3,
+        "will_retry": attempt < 3,
+        "reason": reason,
+        "finish_reason": response.finish_reason,
+        "native_tool_call_count": response.tool_calls.as_ref().map(Vec::len).unwrap_or_default(),
+        "raw_content_bytes": raw_content.len(),
+        "raw_content": raw_content,
+        "normalized_changed": normalized_changed,
+        "normalized_content_bytes": normalized_content.len(),
+        "normalized_content": normalized_changed.then_some(normalized_content),
+    })
+}
+
 fn emit_stream_reset(sm_ctx: &Arc<ExecutionUnit>) {
     // A retry or correction replaces the visible assistant stream, so clients
     // must clear partial tokens before the next attempt starts.
@@ -949,7 +1007,8 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
         match call_result {
             Ok(mut resp) => {
-                resp.content = crate::runtime::parser::normalize_response_for_ledger(&resp.content);
+                let raw_content = resp.content.clone();
+                resp.content = crate::runtime::parser::normalize_response_for_ledger(&raw_content);
                 trace_llm_response(&conversation_id, turn_id, attempt, &resp).await;
                 tracing::info!(
                     conversation_id = %conversation_id,
@@ -1007,6 +1066,17 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 if let Err(reason) = crate::runtime::parser::validate_response_shape(&resp.content)
                 {
                     last_err = format!("invalid assistant response protocol: {reason}");
+                    log_protocol_rejection(
+                        &conversation_id,
+                        turn_id,
+                        model_uid,
+                        model_name,
+                        attempt,
+                        &reason,
+                        &raw_content,
+                        &resp.content,
+                        &resp,
+                    );
                     tracing::warn!(
                         conversation_id = %conversation_id,
                         turn_id = turn_id,
@@ -2065,6 +2135,40 @@ fn runtime_context_probe_file() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocol_rejection_record_preserves_original_response_text() {
+        let response = llm_gateway::LlmResponse {
+            content: "EXEC ReadFile --path a.txt".to_string(),
+            finish_reason: Some("stop".to_string()),
+            tokens: None,
+            cached_tokens: 0,
+            tool_calls: None,
+            reasoning_content: None,
+        };
+        let raw_content = "```text\nEXEC ReadFile\n--path 文件.txt\n```";
+        let normalized_content = "EXEC ReadFile\n--path 文件.txt";
+        let record = protocol_rejection_record(
+            "conversation-1",
+            7,
+            42,
+            "test-model",
+            2,
+            "EXEC parameters must remain on the same line",
+            raw_content,
+            normalized_content,
+            &response,
+        );
+        let encoded = record.to_string();
+
+        assert!(encoded.contains(r#""raw_content":"```text\nEXEC ReadFile\n--path 文件.txt\n```""#));
+        assert_eq!(record["event"], "tool_protocol_rejected");
+        assert_eq!(record["retry_layer"], "thinking_protocol");
+        assert_eq!(record["attempt"], 2);
+        assert_eq!(record["will_retry"], true);
+        assert_eq!(record["raw_content"], raw_content);
+        assert_eq!(record["normalized_content"], normalized_content);
+    }
 
     #[test]
     fn empty_response_retry_preserves_reasoning_without_executing_it() {

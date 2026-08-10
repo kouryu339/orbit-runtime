@@ -18,7 +18,7 @@
 //! ```
 
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::classify::fatalize_retry_exhausted;
 use crate::error::{ApiError, Result};
@@ -85,12 +85,48 @@ where
     Fut: Future<Output = Result<T>>,
 {
     let mut attempt: u32 = 0;
+    let request_started = Instant::now();
     loop {
+        let attempt_started = Instant::now();
+        crate::diagnostics::append_line(format!(
+            "[ai-gateway retry] {}",
+            serde_json::json!({
+                "phase": "attempt_started",
+                "model": model,
+                "attempt": attempt + 1,
+                "max_attempts": policy.max_attempts,
+                "elapsed_ms": request_started.elapsed().as_millis() as u64,
+            })
+        ));
         match f(attempt).await {
-            Ok(v) => return Ok(v),
+            Ok(v) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway retry] {}",
+                    serde_json::json!({
+                        "phase": "attempt_succeeded",
+                        "model": model,
+                        "attempt": attempt + 1,
+                        "attempt_elapsed_ms": attempt_started.elapsed().as_millis() as u64,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                    })
+                ));
+                return Ok(v);
+            }
             Err(e) => {
                 // 致命 / 取消 / 旧 variant 立即返回
                 if !e.is_retryable() {
+                    crate::diagnostics::append_line(format!(
+                        "[ai-gateway retry] {}",
+                        serde_json::json!({
+                            "phase": "attempt_failed",
+                            "model": model,
+                            "attempt": attempt + 1,
+                            "retryable": false,
+                            "error_kind": e.kind_str(),
+                            "attempt_elapsed_ms": attempt_started.elapsed().as_millis() as u64,
+                            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        })
+                    ));
                     return Err(e);
                 }
                 let next_attempt = attempt + 1;
@@ -103,6 +139,18 @@ where
                     {
                         *attempts = next_attempt;
                     }
+                    crate::diagnostics::append_line(format!(
+                        "[ai-gateway retry] {}",
+                        serde_json::json!({
+                            "phase": "retry_exhausted",
+                            "model": model,
+                            "attempts": next_attempt,
+                            "status": retry_status(&e),
+                            "error_kind": e.kind_str(),
+                            "attempt_elapsed_ms": attempt_started.elapsed().as_millis() as u64,
+                            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        })
+                    ));
                     return Err(fatalize_retry_exhausted(e, model));
                 }
                 // 计算退避
@@ -115,6 +163,21 @@ where
                     _ => None,
                 };
                 let delay = backoff(&policy, attempt, retry_after);
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway retry] {}",
+                    serde_json::json!({
+                        "phase": "retry_scheduled",
+                        "model": model,
+                        "attempt": attempt + 1,
+                        "next_attempt": next_attempt + 1,
+                        "max_attempts": policy.max_attempts,
+                        "status": status,
+                        "error_kind": e.kind_str(),
+                        "attempt_elapsed_ms": attempt_started.elapsed().as_millis() as u64,
+                        "delay_ms": delay.as_millis() as u64,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                    })
+                ));
                 tracing::warn!(
                     target: "ai_gateway::retry",
                     attempt = attempt + 1,
@@ -130,5 +193,13 @@ where
                 attempt = next_attempt;
             }
         }
+    }
+}
+
+fn retry_status(error: &ApiError) -> Option<u16> {
+    match error {
+        ApiError::Retryable { status, .. } => *status,
+        ApiError::Fatal(error) => error.status,
+        _ => None,
     }
 }

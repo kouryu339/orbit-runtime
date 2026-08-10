@@ -129,20 +129,25 @@ Full working configuration and lifecycle details:
 - [Progressive Skills and per-Agent RAG](examples/guides/en/07-progressive-skills-and-rag.md)
 - [Connect an external RAG service](examples/guides/en/08-external-rag.md)
 
-## 0.4.7 Release
+## 0.4.8 Beta Focus
 
-The `0.4.7` release strengthens two Runtime boundaries:
+The `0.4.8-beta.1` release candidate adds bounded diagnostics for latency
+investigation without placing full logs, prompts, or tool payloads on the
+Runtime event path:
 
-- **Reliable delegated background tasks**: parent/child authorization,
-  task-specific waits, asynchronous input requests, durable progress,
-  two-phase report/accept completion, revision-driven continuation, explicit
-  cancellation, scoped pause, and worker retirement are represented as
-  auditable task and ledger transitions.
-- **Script-aware tool prompts**: complete tool output schemas remain registered
-  for Runtime, FFI, Workflow compilation, and Studio nodes, but ordinary
-  lightweight `thinking` prompts omit them. A thinking system Skill that grants
-  `executeWorkflowScript`, including built-in `thinking-pro`, receives the
-  output schemas needed to author named Workflow data dependencies.
+- **Model latency diagnostics**: every provider attempt records start, success,
+  failure, retry scheduling, backoff, exhaustion, response headers, streaming
+  first-event latency, and completion duration.
+- **Tool-protocol retry evidence**: responses rejected before ledger write record
+  the validation reason, thinking attempt, and complete pre-normalization model
+  content in the local Runtime diagnostic log so hidden syntax retries can be
+  reproduced. Treat this diagnostic file as sensitive data.
+- **RPC latency diagnostics**: JSON-lines and gRPC tools record request start,
+  first response, HostCall activity, completion, failure, and timeout using
+  stable call, conversation, Agent, and turn identifiers.
+- **Non-blocking log delivery**: diagnostics use a bounded background writer;
+  saturation drops diagnostic entries with an auditable drop count instead of
+  delaying model or tool execution.
 
 ## Repository Layout
 

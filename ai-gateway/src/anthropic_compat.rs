@@ -19,6 +19,7 @@ pub async fn call_inner(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
 ) -> crate::error::Result<LlmResponse> {
+    let request_started = std::time::Instant::now();
     let client = Client::new();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
@@ -160,6 +161,19 @@ pub async fn call_inner(
         input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
         output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
     });
+
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "completed",
+            "stream": false,
+            "provider_api": "anthropic_messages",
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+            "content_chars": text_content.chars().count(),
+            "tool_call_count": tool_calls.len(),
+        })
+    ));
 
     Ok(LlmResponse {
         content: text_content,

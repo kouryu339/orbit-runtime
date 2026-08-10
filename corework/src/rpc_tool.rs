@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -196,6 +196,38 @@ pub struct AgentToolRequest {
     pub permissions: Vec<String>,
     #[serde(default)]
     pub host_context: Value,
+}
+
+fn append_rpc_diagnostic(
+    phase: &str,
+    protocol: &str,
+    endpoint: &RpcEndpointInfo,
+    metadata: &RuntimeToolMetadata,
+    request: &AgentToolRequest,
+    started: Instant,
+    details: Value,
+) {
+    let mut entry = serde_json::json!({
+        "phase": phase,
+        "protocol": protocol,
+        "endpoint_id": endpoint.endpoint_id,
+        "tool": metadata.name,
+        "call_id": request.call_id,
+        "tool_call_id": request.tool_call_id,
+        "conversation_id": request.conversation_id,
+        "agent_id": request.agent_id,
+        "turn_id": request.turn_id,
+        "timeout_ms": endpoint.timeout_ms,
+        "elapsed_ms": started.elapsed().as_millis() as u64,
+    });
+    if let (Some(entry), Some(details)) = (entry.as_object_mut(), details.as_object()) {
+        entry.extend(details.clone());
+    }
+    crate::diagnostics::append_line(format!("[rpc-tool] {entry}"));
+}
+
+fn rpc_error_summary(error: &FrameworkError) -> String {
+    error.to_string().chars().take(240).collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1159,6 +1191,16 @@ impl RpcToolClient for JsonLineRpcToolClient {
         request: AgentToolRequest,
         ctx: &Context,
     ) -> Result<AIOutput> {
+        let started = Instant::now();
+        append_rpc_diagnostic(
+            "request_started",
+            "json-lines",
+            &endpoint,
+            &metadata,
+            &request,
+            started,
+            serde_json::json!({}),
+        );
         let timeout = Duration::from_millis(endpoint.timeout_ms.max(1));
         let fut = async {
             let stream = TcpStream::connect(&endpoint.address).await.map_err(|e| {
@@ -1173,12 +1215,14 @@ impl RpcToolClient for JsonLineRpcToolClient {
             write_wire(
                 &mut writer,
                 &WireMessage::Execute {
-                    request,
+                    request: request.clone(),
                     metadata: metadata.clone(),
                 },
             )
             .await?;
 
+            let mut first_message_received = false;
+            let mut host_call_count = 0u64;
             loop {
                 let mut line = String::new();
                 let read = reader.read_line(&mut line).await.map_err(|e| {
@@ -1192,8 +1236,34 @@ impl RpcToolClient for JsonLineRpcToolClient {
 
                 let msg: WireMessage = serde_json::from_str(line.trim_end())
                     .map_err(FrameworkError::SerializationError)?;
+                if !first_message_received {
+                    first_message_received = true;
+                    append_rpc_diagnostic(
+                        "first_response",
+                        "json-lines",
+                        &endpoint,
+                        &metadata,
+                        &request,
+                        started,
+                        serde_json::json!({}),
+                    );
+                }
                 match msg {
                     WireMessage::HostCall { id, op, args } => {
+                        host_call_count = host_call_count.saturating_add(1);
+                        append_rpc_diagnostic(
+                            "host_call",
+                            "json-lines",
+                            &endpoint,
+                            &metadata,
+                            &request,
+                            started,
+                            serde_json::json!({
+                                "host_call_id": &id,
+                                "host_call_op": &op,
+                                "host_call_count": host_call_count,
+                            }),
+                        );
                         let result = handle_host_call(ctx, &endpoint, &metadata, &op, args).await;
                         let (ok, value) = match result {
                             Ok(value) => (true, value),
@@ -1219,12 +1289,47 @@ impl RpcToolClient for JsonLineRpcToolClient {
             }
         };
 
-        tokio::time::timeout(timeout, fut).await.map_err(|_| {
-            FrameworkError::SystemError(format!(
-                "RPC endpoint '{}' timed out after {}ms",
-                endpoint.endpoint_id, endpoint.timeout_ms
-            ))
-        })?
+        match tokio::time::timeout(timeout, fut).await {
+            Ok(Ok(output)) => {
+                append_rpc_diagnostic(
+                    "completed",
+                    "json-lines",
+                    &endpoint,
+                    &metadata,
+                    &request,
+                    started,
+                    serde_json::json!({"success": output.error_code == 0}),
+                );
+                Ok(output)
+            }
+            Ok(Err(error)) => {
+                append_rpc_diagnostic(
+                    "failed",
+                    "json-lines",
+                    &endpoint,
+                    &metadata,
+                    &request,
+                    started,
+                    serde_json::json!({"error": rpc_error_summary(&error)}),
+                );
+                Err(error)
+            }
+            Err(_) => {
+                append_rpc_diagnostic(
+                    "timed_out",
+                    "json-lines",
+                    &endpoint,
+                    &metadata,
+                    &request,
+                    started,
+                    serde_json::json!({}),
+                );
+                Err(FrameworkError::SystemError(format!(
+                    "RPC endpoint '{}' timed out after {}ms",
+                    endpoint.endpoint_id, endpoint.timeout_ms
+                )))
+            }
+        }
     }
 }
 
@@ -1238,6 +1343,16 @@ impl RpcToolClient for GrpcRpcToolClient {
         ctx: &Context,
     ) -> Result<AIOutput> {
         validate_runtime_tool_for_endpoint(&endpoint, &metadata)?;
+        let started = Instant::now();
+        append_rpc_diagnostic(
+            "request_started",
+            "grpc",
+            &endpoint,
+            &metadata,
+            &request,
+            started,
+            serde_json::json!({}),
+        );
         let timeout = Duration::from_millis(endpoint.timeout_ms.max(1));
         let fut = async {
             let address = grpc_endpoint_uri(&endpoint.address);
@@ -1291,6 +1406,8 @@ impl RpcToolClient for GrpcRpcToolClient {
                 })?
                 .into_inner();
 
+            let mut first_message_received = false;
+            let mut host_call_count = 0u64;
             while let Some(message) = stream.message().await.map_err(|e| {
                 FrameworkError::SystemError(format!(
                     "Failed to read RPC stream for tool '{}': {}",
@@ -1304,6 +1421,19 @@ impl RpcToolClient for GrpcRpcToolClient {
                     )));
                 }
 
+                if !first_message_received {
+                    first_message_received = true;
+                    append_rpc_diagnostic(
+                        "first_response",
+                        "grpc",
+                        &endpoint,
+                        &metadata,
+                        &request,
+                        started,
+                        serde_json::json!({}),
+                    );
+                }
+
                 match message.message {
                     Some(tool_stream_message::Message::HostCall(host_call)) => {
                         if host_call.id.trim().is_empty() {
@@ -1312,6 +1442,20 @@ impl RpcToolClient for GrpcRpcToolClient {
                                 metadata.name
                             )));
                         }
+                        host_call_count = host_call_count.saturating_add(1);
+                        append_rpc_diagnostic(
+                            "host_call",
+                            "grpc",
+                            &endpoint,
+                            &metadata,
+                            &request,
+                            started,
+                            serde_json::json!({
+                                "host_call_id": &host_call.id,
+                                "host_call_op": &host_call.op,
+                                "host_call_count": host_call_count,
+                            }),
+                        );
                         let args: Value = serde_json::from_str(&host_call.args_json)
                             .map_err(FrameworkError::SerializationError)?;
                         let result =
@@ -1389,12 +1533,47 @@ impl RpcToolClient for GrpcRpcToolClient {
             )))
         };
 
-        tokio::time::timeout(timeout, fut).await.map_err(|_| {
-            FrameworkError::SystemError(format!(
-                "RPC endpoint '{}' timed out after {}ms",
-                endpoint.endpoint_id, endpoint.timeout_ms
-            ))
-        })?
+        match tokio::time::timeout(timeout, fut).await {
+            Ok(Ok(output)) => {
+                append_rpc_diagnostic(
+                    "completed",
+                    "grpc",
+                    &endpoint,
+                    &metadata,
+                    &request,
+                    started,
+                    serde_json::json!({"success": output.error_code == 0}),
+                );
+                Ok(output)
+            }
+            Ok(Err(error)) => {
+                append_rpc_diagnostic(
+                    "failed",
+                    "grpc",
+                    &endpoint,
+                    &metadata,
+                    &request,
+                    started,
+                    serde_json::json!({"error": rpc_error_summary(&error)}),
+                );
+                Err(error)
+            }
+            Err(_) => {
+                append_rpc_diagnostic(
+                    "timed_out",
+                    "grpc",
+                    &endpoint,
+                    &metadata,
+                    &request,
+                    started,
+                    serde_json::json!({}),
+                );
+                Err(FrameworkError::SystemError(format!(
+                    "RPC endpoint '{}' timed out after {}ms",
+                    endpoint.endpoint_id, endpoint.timeout_ms
+                )))
+            }
+        }
     }
 }
 

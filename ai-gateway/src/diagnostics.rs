@@ -1,16 +1,12 @@
 use std::collections::{hash_map::DefaultHasher, HashMap};
-use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use crate::types::ChatMessage;
 
-static LOG_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static CHAT_SIGNATURES: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 static PROVIDER_SIGNATURES: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 
@@ -23,24 +19,11 @@ enum DiagnosticsLevel {
 }
 
 pub fn set_log_file_path(path: impl AsRef<Path>) {
-    let _ = LOG_FILE_PATH.set(path.as_ref().to_path_buf());
+    corework::diagnostics::set_log_file_path(path);
 }
 
 pub fn append_line(line: impl AsRef<str>) {
-    let Some(path) = LOG_FILE_PATH.get() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-        return;
-    };
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    let _ = writeln!(file, "[{ts}] {}", line.as_ref());
+    corework::diagnostics::append_line(line);
 }
 
 pub fn log_chat_messages(

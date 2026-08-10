@@ -80,6 +80,7 @@ pub async fn call_inner(
     tool_choice_style: ToolChoiceStyle,
     force_json: bool,
 ) -> crate::error::Result<LlmResponse> {
+    let request_started = std::time::Instant::now();
     let client = http_client().clone();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
@@ -349,6 +350,19 @@ pub async fn call_inner(
     });
 
     let cached_tokens = 0u32;
+
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "completed",
+            "stream": false,
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+            "content_chars": content.chars().count(),
+            "reasoning_chars": reasoning_content.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            "tool_call_count": tool_calls.as_ref().map(Vec::len).unwrap_or(0),
+        })
+    ));
 
     Ok(LlmResponse {
         content,
@@ -620,6 +634,7 @@ where
     use futures_util::StreamExt;
     use std::collections::BTreeMap;
 
+    let request_started = std::time::Instant::now();
     let client = http_client().clone();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
@@ -751,6 +766,16 @@ where
     })
     .await?;
 
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "headers_received",
+            "stream": true,
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+        })
+    ));
+
     let mut stream = resp.bytes_stream();
     let mut full_content = String::new();
     let mut full_reasoning = String::new();
@@ -758,9 +783,14 @@ where
     let mut tc_map: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
     let mut buf = String::new();
     let mut arg_extractor = ArgsStreamExtractor::new();
+    let mut first_event_logged = false;
+    let mut chunk_count = 0u64;
+    let mut response_bytes = 0u64;
 
     'outer: while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| ApiError::LlmFailed(format!("stream chunk error: {e}")))?;
+        chunk_count = chunk_count.saturating_add(1);
+        response_bytes = response_bytes.saturating_add(bytes.len() as u64);
         buf.push_str(std::str::from_utf8(&bytes).unwrap_or(""));
 
         while let Some(pos) = buf.find('\n') {
@@ -781,6 +811,21 @@ where
             let Ok(val) = serde_json::from_str::<Value>(data) else {
                 continue;
             };
+
+            if !first_event_logged {
+                first_event_logged = true;
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "first_stream_event",
+                        "stream": true,
+                        "model": model,
+                        "ttft_ms": request_started.elapsed().as_millis() as u64,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                    })
+                ));
+            }
 
             if let Some(err) = val.get("error") {
                 let msg = err
@@ -859,6 +904,21 @@ where
     } else {
         Some(full_reasoning)
     };
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "completed",
+            "stream": true,
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+            "first_event_received": first_event_logged,
+            "chunk_count": chunk_count,
+            "response_bytes": response_bytes,
+            "content_chars": full_content.chars().count(),
+            "reasoning_chars": reasoning_content.as_ref().map(|value| value.chars().count()).unwrap_or(0),
+            "tool_call_count": tool_calls.as_ref().map(Vec::len).unwrap_or(0),
+        })
+    ));
     Ok(LlmResponse {
         content: full_content,
         finish_reason,
