@@ -326,6 +326,8 @@ pub struct AgentSection {
     pub system_prompt_constraints: SystemPromptConstraints,
     #[serde(default = "default_true")]
     pub frontend_widgets_enabled: bool,
+    #[serde(alias = "toolProtocol", default)]
+    pub tool_protocol: ai_assistant::ToolProtocol,
 }
 
 impl Default for AgentSection {
@@ -343,6 +345,7 @@ impl Default for AgentSection {
             retrieval: None,
             system_prompt_constraints: SystemPromptConstraints::default(),
             frontend_widgets_enabled: true,
+            tool_protocol: ai_assistant::ToolProtocol::default(),
         }
     }
 }

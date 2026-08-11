@@ -115,6 +115,9 @@ impl AIAssistant {
         cache
             .set(keys::SYSTEM_SKILLS, &self.config.system_skills, None)
             .await?;
+        cache
+            .set(keys::TOOL_PROTOCOL, &self.config.tool_protocol, None)
+            .await?;
         // Initialize host-owned dynamic text fields for this agent.
         cache
             .set(
@@ -608,9 +611,6 @@ impl AIAssistant {
         // 建立 chunk 通道，容量 256（写满时 try_send 丢弃，不阻塞 LLM）
         let (tx, mut rx) = mpsc::channel::<String>(256);
 
-        // 注册 sender 到 thinking 的全局静态（on_chunk 在 LLM streaming 回调中调用）
-        crate::state::thinking::set_stream_sender(Some(tx));
-
         // spawn 一个转发 task：从 rx 读 chunk，调用 on_chunk
         let forward = tokio::spawn(async move {
             while let Some(chunk) = rx.recv().await {
@@ -618,11 +618,8 @@ impl AIAssistant {
             }
         });
 
-        // 运行正常 process 逻辑（状态机自驱动）
-        let result = self.process(input).await;
-
-        // 清除 sender（停止流式）
-        crate::state::thinking::set_stream_sender(None);
+        // 回调只在本次 process 的任务作用域内有效，避免并发 Assistant 串流。
+        let result = crate::state::thinking::scope_stream_sender(tx, self.process(input)).await;
 
         // 等待 forward task 把所有 chunk 消费完
         let _ = forward.await;

@@ -6,6 +6,39 @@ import {
 } from '../src/protocol/index.js';
 
 describe('conversationReducer', () => {
+  it('projects and explicitly clears the focused assistant stream', () => {
+    let state = conversationReducer(createConversationState('c1'), {
+      type: 'snapshot',
+      payload: {
+        revision: 1,
+        conversation_state: 'thinking',
+        assistant_stream: {
+          agent_id: 'boss',
+          turn_id: 4,
+          attempt: 1,
+          sequence: 2,
+          content: 'partial answer',
+        },
+      },
+    });
+    expect(state.assistantStream?.content).toBe('partial answer');
+
+    state = conversationReducer(state, {
+      type: 'snapshot',
+      payload: {
+        revision: 2,
+        conversation_state: 'waiting',
+        assistant_stream: null,
+        ledger_delta: {
+          kind: 'append',
+          record: { record_id: 'a1', role: 'assistant', content: 'final answer' },
+        },
+      },
+    });
+    expect(state.assistantStream).toBeUndefined();
+    expect(state.records.at(-1)?.content).toBe('final answer');
+  });
+
   it('keeps the composer disabled until an authoritative waiting snapshot arrives', () => {
     let state = createConversationState();
     state = conversationReducer(state, {

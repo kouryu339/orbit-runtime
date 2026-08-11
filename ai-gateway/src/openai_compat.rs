@@ -29,6 +29,18 @@ fn http_client() -> &'static Client {
     })
 }
 
+fn openai_tool_json(tool: &ToolDefinition) -> Value {
+    let mut function = json!({
+        "name": tool.function.name,
+        "description": tool.function.description,
+        "parameters": tool.function.parameters,
+    });
+    if let Some(strict) = tool.function.strict {
+        function["strict"] = json!(strict);
+    }
+    json!({"type": "function", "function": function})
+}
+
 fn diagnostic_excerpt(text: &str, max_chars: usize) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= max_chars {
@@ -140,19 +152,7 @@ pub async fn call_inner(
     });
 
     if !tools.is_empty() {
-        let tools_json: Vec<Value> = tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.function.name,
-                        "description": t.function.description,
-                        "parameters": t.function.parameters,
-                    }
-                })
-            })
-            .collect();
+        let tools_json: Vec<Value> = tools.iter().map(openai_tool_json).collect();
         body["tools"] = json!(tools_json);
     }
 
@@ -372,6 +372,7 @@ pub async fn call_inner(
         cached_tokens,
         tool_calls,
         reasoning_content,
+        provider_items: None,
     })
 }
 
@@ -626,6 +627,7 @@ pub async fn call_inner_streaming<F>(
     force_tool_name: Option<&str>,
     tool_choice_style: ToolChoiceStyle,
     force_json: bool,
+    stream_argument_fields: bool,
     mut on_chunk: F,
 ) -> crate::error::Result<LlmResponse>
 where
@@ -677,10 +679,7 @@ where
     let mut body = json!({ "model": model, "messages": msgs, "stream": true });
 
     if !tools.is_empty() {
-        body["tools"] = json!(tools.iter().map(|t| json!({
-            "type": "function",
-            "function": { "name": t.function.name, "description": t.function.description, "parameters": t.function.parameters }
-        })).collect::<Vec<_>>());
+        body["tools"] = json!(tools.iter().map(openai_tool_json).collect::<Vec<_>>());
     }
 
     if let Some(name) = force_tool_name {
@@ -871,8 +870,10 @@ where
                     }
                     if let Some(a) = tc["function"]["arguments"].as_str() {
                         entry.2.push_str(a);
-                        if let Some(visible) = arg_extractor.feed(a) {
-                            on_chunk(visible);
+                        if stream_argument_fields {
+                            if let Some(visible) = arg_extractor.feed(a) {
+                                on_chunk(visible);
+                            }
                         }
                     }
                 }
@@ -926,6 +927,7 @@ where
         cached_tokens: 0,
         tool_calls,
         reasoning_content,
+        provider_items: None,
     })
 }
 

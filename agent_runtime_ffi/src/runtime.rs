@@ -202,6 +202,7 @@ pub struct RuntimeLlmRegistry {
     pub current_model_uid: Option<u32>,
     pub provider_count: usize,
     pub model_count: usize,
+    pub model_uids: Vec<u32>,
 }
 
 pub struct RuntimeFacade {
@@ -1526,6 +1527,7 @@ fn assistant_config_for_runtime(config: &RuntimeConfig, agent: &AgentSection) ->
             &agent.system_prompt_constraints,
         ),
         system_skills: agent.system_skills.clone(),
+        tool_protocol: agent.tool_protocol,
     }
 }
 

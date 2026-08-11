@@ -23,6 +23,41 @@ payload.ledger_delta.record
 
 is the optional message delta carried by the snapshot. When `ledger_delta` is absent, the event only means state, capability flags, or other snapshot fields changed.
 
+### 6.2.1 Focused Assistant Stream
+
+Native function-calling model requests run in streaming mode. The runtime does
+not introduce a separate public stream event; the current focused Agent's
+ephemeral text is projected through the existing snapshot field:
+
+```json
+{
+  "assistant_stream": {
+    "agent_id": "boss",
+    "turn_id": 12,
+    "attempt": 1,
+    "sequence": 8,
+    "content": "Partial assistant text"
+  }
+}
+```
+
+`assistant_stream` is either this object or `null`. It has the following
+contract:
+
+- only the current focused Agent is projected; background Agents still stream
+  internally but do not produce frontend rendering updates;
+- it is ephemeral display state and must not be persisted or replayed during
+  conversation recovery;
+- `sequence` increases as chunks are coalesced, so hosts should replace the
+  previous temporary bubble rather than append a new message;
+- a retry or failure clears it with `null`;
+- after a successful response, the final canonical `assistant` ledger record
+  replaces the temporary stream. Stream chunks never enter the ledger.
+
+Hosts should therefore keep consuming only `frontend:state_snapshot`: render
+`assistant_stream` as the current temporary assistant bubble, and reconcile it
+with the final ledger record when that record arrives.
+
 ## 6.3 Message Roles
 
 | `record.role` | Frontend use |
@@ -45,6 +80,12 @@ For `assistant` records, `record.content` is the frontend display text. Runtime 
 - Each visible tool-call position is projected into a tool status placeholder.
 - Widget tags may remain as standalone lines for the frontend to render as input controls.
 - LLM natural-language content may use Markdown; the frontend should render it with the unified content-block rules in this document.
+
+In native FC mode an `assistant` record may contain structured `tool_calls`
+without visible text; the frontend should not create an empty bubble for that
+record. Tool status is still driven by `gateway_message` / `tool` records with
+the same `call_id`. Persisted tool results keep canonical `role: "tool"` and are
+not user messages.
 
 Tool status placeholder syntax:
 

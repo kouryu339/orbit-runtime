@@ -9,8 +9,9 @@ use crate::events::{
 };
 use crate::skills::systems::mgr;
 use crate::systems::prompt::{
-    build_env_context_section, build_system_prompt_text, format_immutable_cache_entries_section,
-    format_tools_section, format_workflows_section, select_history,
+    build_env_context_section, build_system_prompt_text_for_protocol,
+    format_immutable_cache_entries_section, format_tools_section, format_workflows_section,
+    select_history,
 };
 use corework::cache::{Cache, CacheExt};
 use corework::event::{BaseEvent, EventBus};
@@ -33,18 +34,15 @@ const DEFAULT_MAX_HISTORY_MESSAGES: usize = 200;
 //
 // ============================================================================
 
-static SYNC_STREAM_TX: std::sync::OnceLock<
-    std::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
-> = std::sync::OnceLock::new();
-
-fn sync_stream_tx() -> &'static std::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>> {
-    SYNC_STREAM_TX.get_or_init(|| std::sync::Mutex::new(None))
+tokio::task_local! {
+    static LEGACY_STREAM_TX: tokio::sync::mpsc::Sender<String>;
 }
 
-pub fn set_stream_sender(tx: Option<tokio::sync::mpsc::Sender<String>>) {
-    if let Ok(mut guard) = sync_stream_tx().lock() {
-        *guard = tx;
-    }
+pub async fn scope_stream_sender<F>(tx: tokio::sync::mpsc::Sender<String>, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    LEGACY_STREAM_TX.scope(tx, future).await
 }
 
 // ============================================================================
@@ -388,6 +386,121 @@ fn emit_stream_reset(sm_ctx: &Arc<ExecutionUnit>) {
     });
 }
 
+async fn start_assistant_stream(
+    cache: &Arc<dyn Cache>,
+    event_bus: &Arc<dyn EventBus>,
+    conversation_state: &Arc<crate::conversation_state::ConversationState>,
+    agent_id: &str,
+    turn_id: u64,
+    attempt: u32,
+) -> corework::error::Result<()> {
+    cache
+        .set(
+            keys::ASSISTANT_STREAM,
+            &crate::snapshot::AssistantStreamView {
+                agent_id: agent_id.to_string(),
+                turn_id,
+                attempt,
+                sequence: 0,
+                content: String::new(),
+            },
+            None,
+        )
+        .await?;
+    if conversation_state.focus().await == agent_id {
+        event_bus
+            .publish(BaseEvent::new(
+                ev_types::STREAM_UPDATED,
+                serde_json::json!({"agent_id": agent_id, "turn_id": turn_id, "attempt": attempt}),
+            ))
+            .await?;
+    }
+    Ok(())
+}
+
+async fn clear_assistant_stream(
+    cache: &Arc<dyn Cache>,
+    event_bus: &Arc<dyn EventBus>,
+    conversation_state: &Arc<crate::conversation_state::ConversationState>,
+    agent_id: &str,
+    publish: bool,
+) -> corework::error::Result<()> {
+    cache.delete(keys::ASSISTANT_STREAM).await?;
+    if publish && conversation_state.focus().await == agent_id {
+        event_bus
+            .publish(BaseEvent::new(
+                ev_types::STREAM_RESET,
+                serde_json::json!({}),
+            ))
+            .await?;
+    }
+    Ok(())
+}
+
+fn spawn_assistant_stream_projector(
+    cache: Arc<dyn Cache>,
+    event_bus: Arc<dyn EventBus>,
+    conversation_state: Arc<crate::conversation_state::ConversationState>,
+    agent_id: String,
+    turn_id: u64,
+    attempt: u32,
+) -> (
+    tokio::sync::mpsc::UnboundedSender<String>,
+    tokio::task::JoinHandle<corework::error::Result<()>>,
+) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let task = tokio::spawn(async move {
+        let mut content = String::new();
+        let mut sequence = 0u64;
+        while let Some(delta) = rx.recv().await {
+            if delta.is_empty() {
+                continue;
+            }
+            content.push_str(&delta);
+            sequence = sequence.saturating_add(1);
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+            while let Ok(delta) = rx.try_recv() {
+                if !delta.is_empty() {
+                    content.push_str(&delta);
+                    sequence = sequence.saturating_add(1);
+                }
+            }
+            cache
+                .set(
+                    keys::ASSISTANT_STREAM,
+                    &crate::snapshot::AssistantStreamView {
+                        agent_id: agent_id.clone(),
+                        turn_id,
+                        attempt,
+                        sequence,
+                        content: content.clone(),
+                    },
+                    None,
+                )
+                .await?;
+            if conversation_state.focus().await == agent_id {
+                event_bus
+                    .publish(BaseEvent::new(
+                        ev_types::STREAM_UPDATED,
+                        serde_json::json!({
+                            "agent_id": agent_id,
+                            "turn_id": turn_id,
+                            "attempt": attempt,
+                            "sequence": sequence,
+                        }),
+                    ))
+                    .await?;
+            }
+        }
+        Ok(())
+    });
+    (tx, task)
+}
+
+fn forward_legacy_stream_chunk(chunk: &str) {
+    let _ = LEGACY_STREAM_TX.try_with(|sender| sender.try_send(chunk.to_string()));
+}
+
 pub fn build() -> FnState {
     FnState::new(states::THINKING)
         .with_description("prepare and call the LLM")
@@ -583,21 +696,33 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
     let system_skills: BTreeMap<String, String> =
         cache.get(keys::SYSTEM_SKILLS).await?.unwrap_or_default();
-    let thinking_skill = system_skills
+    let tool_protocol: crate::ToolProtocol =
+        cache.get(keys::TOOL_PROTOCOL).await?.unwrap_or_default();
+    let configured_thinking_skill = system_skills
         .get(states::THINKING)
         .map(String::as_str)
         .filter(|name| !name.trim().is_empty())
         .unwrap_or(states::THINKING);
-
-    let (all_tools, include_tool_outputs) = {
+    let thinking_skill = match (tool_protocol, configured_thinking_skill) {
+        (crate::ToolProtocol::NativeFc, "thinking") => "thinking-fc",
+        (crate::ToolProtocol::NativeFc, "thinking-pro") => "thinking-pro-fc",
+        (_, configured) => configured,
+    };
+    let (mut all_tools, include_tool_outputs) = {
         let mut tools = AssistantContext::all_active_tools(&cache).await?;
         let m = mgr().read().await;
         tools = m.filtered_tools_for_state(thinking_skill, tools);
         let include_outputs = m.system_skill_declares_tool(thinking_skill, "executeWorkflowScript");
         (tools, include_outputs)
     };
-    let tools_section = format_tools_section(&all_tools, include_tool_outputs);
-
+    if tool_protocol == crate::ToolProtocol::Disabled {
+        all_tools.clear();
+    }
+    let tools_section = if tool_protocol == crate::ToolProtocol::ExecLegacy {
+        format_tools_section(&all_tools, include_tool_outputs)
+    } else {
+        String::new()
+    };
     tracing::debug!("built {} tool descriptions", all_tools.len());
 
     // Host-published dynamic text fields for the current agent.
@@ -652,11 +777,25 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
             )
         })?;
     let model_entry = llm_gateway::key_store::get(model_uid);
-    let prompt_cache_control = model_entry
+    let provider_runtime = model_entry
         .as_ref()
-        .and_then(|entry| llm_gateway::key_store::resolve_provider_runtime(entry.provider_uid))
+        .and_then(|entry| llm_gateway::key_store::resolve_provider_runtime(entry.provider_uid));
+    let prompt_cache_control = provider_runtime
+        .as_ref()
         .map(|provider| provider.prompt_cache_control)
         .unwrap_or(false);
+    let native_tool_definitions = if tool_protocol == crate::ToolProtocol::NativeFc {
+        crate::tool_schema::definitions_for_active_tools(
+            &all_tools,
+            provider_runtime
+                .as_ref()
+                .map(|provider| provider.strict_tool_schema)
+                .unwrap_or(false),
+        )
+        .map_err(corework::error::FrameworkError::InvalidOperation)?
+    } else {
+        Vec::new()
+    };
     tracing::info!(
         conversation_id = %conversation_id,
         turn_id = turn_id,
@@ -690,7 +829,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         .get(keys::FRONTEND_WIDGETS_ENABLED)
         .await?
         .unwrap_or(true);
-    let mut system_text = build_system_prompt_text(
+    let mut system_text = build_system_prompt_text_for_protocol(
         &persona,
         "",
         &render_active_skills_message(&active_prompt),
@@ -700,6 +839,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         states::THINKING,
         Some(thinking_skill),
         frontend_widgets_enabled,
+        tool_protocol,
     );
 
     #[cfg(debug_assertions)]
@@ -820,6 +960,24 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
         match msg.role.as_str() {
             "tool" => {
+                if tool_protocol == crate::ToolProtocol::NativeFc {
+                    if let Some(call_id) = msg.tool_call_id.clone() {
+                        let mut projected = llm_gateway::ChatMessage::tool_with_id(
+                            msg.content.clone(),
+                            call_id,
+                            msg.name.clone().unwrap_or_default(),
+                        );
+                        projected.provider_items = msg.provider_items.clone();
+                        messages.push(projected);
+                    } else {
+                        tracing::warn!(
+                            conversation_id = %conversation_id,
+                            turn_id,
+                            "skipping orphan tool history record without tool_call_id"
+                        );
+                    }
+                    continue;
+                }
                 let tool_prefix = crate::prompt_assets::template("tool_execution_result.md")
                     .split("{{COMMAND}}")
                     .next()
@@ -839,6 +997,28 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 messages.push(llm_gateway::ChatMessage::user(content));
             }
             "assistant" => {
+                if tool_protocol == crate::ToolProtocol::NativeFc
+                    && (msg
+                        .tool_calls
+                        .as_ref()
+                        .is_some_and(|calls| !calls.is_empty())
+                        || msg
+                            .provider_items
+                            .as_ref()
+                            .is_some_and(|items| !items.is_empty()))
+                {
+                    messages.push(llm_gateway::ChatMessage {
+                        role: "assistant".to_string(),
+                        content: msg.content.clone(),
+                        cache_control: msg.cache_control,
+                        tool_call_id: None,
+                        name: None,
+                        tool_calls: msg.tool_calls.clone(),
+                        reasoning_content: msg.reasoning_content.clone(),
+                        provider_items: msg.provider_items.clone(),
+                    });
+                    continue;
+                }
                 let content = if msg.content.trim().is_empty() {
                     summarize_legacy_tool_calls(&msg)
                 } else {
@@ -952,9 +1132,28 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     let mut llm_response: Option<llm_gateway::LlmResponse> = None;
     let mut last_err = String::new();
     let mut last_retryable_status: Option<u16> = None;
+    let stream_conversation_state = sm_ctx
+        .resolve_shared_component::<crate::conversation_state::ConversationState>()
+        .ok_or_else(|| {
+            corework::error::FrameworkError::InvalidOperation(
+                "conversation state is unavailable from the agent hierarchy".to_string(),
+            )
+        })?;
 
     for attempt in 1..=3u32 {
-        emit_stream_reset(&sm_ctx);
+        if tool_protocol == crate::ToolProtocol::NativeFc {
+            start_assistant_stream(
+                &cache,
+                &event_bus,
+                &stream_conversation_state,
+                &agent_id,
+                turn_id,
+                attempt,
+            )
+            .await?;
+        } else {
+            emit_stream_reset(&sm_ctx);
+        }
         let thinking_lease = sm_ctx
             .resolve_shared_component::<crate::agent::runtime::AgentExecutionControl>()
             .map(|control| control.begin_thinking_request());
@@ -998,12 +1197,67 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
             })?
             .request_headers()
             .await;
-        let call_result = llm_gateway::request_context::scope_request_headers(
-            request_headers.headers,
-            request_headers.allow_insecure,
-            llm_gateway::call_llm_cancellable(model_uid, &messages, None, None, None, cancel),
-        )
-        .await;
+        let call_result = if tool_protocol == crate::ToolProtocol::NativeFc {
+            let (stream_tx, stream_task) = spawn_assistant_stream_projector(
+                Arc::clone(&cache),
+                Arc::clone(&event_bus),
+                Arc::clone(&stream_conversation_state),
+                agent_id.clone(),
+                turn_id,
+                attempt,
+            );
+            let call = llm_gateway::call_llm_with_tools_streaming_cancellable(
+                model_uid,
+                &messages,
+                &native_tool_definitions,
+                None,
+                None,
+                None,
+                cancel,
+                move |chunk| {
+                    forward_legacy_stream_chunk(&chunk);
+                    let _ = stream_tx.send(chunk);
+                },
+            );
+            let result = llm_gateway::request_context::scope_request_headers(
+                request_headers.headers,
+                request_headers.allow_insecure,
+                call,
+            )
+            .await;
+            match stream_task.await {
+                Ok(Ok(())) => result,
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        conversation_id = %conversation_id,
+                        agent_id = %agent_id,
+                        turn_id,
+                        attempt,
+                        error = %error,
+                        "assistant stream snapshot projection failed"
+                    );
+                    result
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        conversation_id = %conversation_id,
+                        agent_id = %agent_id,
+                        turn_id,
+                        attempt,
+                        error = %error,
+                        "assistant stream snapshot task failed"
+                    );
+                    result
+                }
+            }
+        } else {
+            llm_gateway::request_context::scope_request_headers(
+                request_headers.headers,
+                request_headers.allow_insecure,
+                llm_gateway::call_llm_cancellable(model_uid, &messages, None, None, None, cancel),
+            )
+            .await
+        };
 
         match call_result {
             Ok(mut resp) => {
@@ -1018,7 +1272,11 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     tool_call_count = resp.tool_calls.as_ref().map(|calls| calls.len()).unwrap_or(0),
                     "thinking llm call ok"
                 );
-                let content_empty = resp.content.trim().is_empty();
+                let has_tool_calls = resp
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty());
+                let content_empty = resp.content.trim().is_empty() && !has_tool_calls;
                 if content_empty {
                     let reasoning_len = resp
                         .reasoning_content
@@ -1041,7 +1299,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         "llm returned empty response; retrying"
                     );
                     if attempt < 3 {
-                        emit_stream_reset(&sm_ctx);
+                        if tool_protocol == crate::ToolProtocol::NativeFc {
+                            clear_assistant_stream(
+                                &cache,
+                                &event_bus,
+                                &stream_conversation_state,
+                                &agent_id,
+                                true,
+                            )
+                            .await?;
+                        } else {
+                            emit_stream_reset(&sm_ctx);
+                        }
                         let retry_prompt =
                             crate::prompt_assets::template("retry_empty_response.md")
                                 .trim()
@@ -1063,8 +1332,16 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     continue;
                 }
 
-                if let Err(reason) = crate::runtime::parser::validate_response_shape(&resp.content)
-                {
+                let protocol_error = match tool_protocol {
+                    crate::ToolProtocol::ExecLegacy => {
+                        crate::runtime::parser::validate_response_shape(&resp.content).err()
+                    }
+                    crate::ToolProtocol::NativeFc => {
+                        validate_native_fc_response(&resp, &native_tool_definitions).err()
+                    }
+                    crate::ToolProtocol::Disabled => None,
+                };
+                if let Some(reason) = protocol_error {
                     last_err = format!("invalid assistant response protocol: {reason}");
                     log_protocol_rejection(
                         &conversation_id,
@@ -1085,7 +1362,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         "LLM response rejected before ledger write; retrying with protocol correction"
                     );
                     if attempt < 3 {
-                        emit_stream_reset(&sm_ctx);
+                        if tool_protocol == crate::ToolProtocol::NativeFc {
+                            clear_assistant_stream(
+                                &cache,
+                                &event_bus,
+                                &stream_conversation_state,
+                                &agent_id,
+                                true,
+                            )
+                            .await?;
+                        } else {
+                            emit_stream_reset(&sm_ctx);
+                        }
                         let correction = crate::prompt_assets::render(
                             "retry_invalid_response.md",
                             &[("{{REASON}}", &reason)],
@@ -1105,12 +1393,27 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                             messages_len_before_retry = messages.len(),
                             "injecting retry prompt after invalid assistant response"
                         );
-                        messages.push(llm_gateway::ChatMessage::assistant(resp.content.clone()));
-                        messages.push(llm_gateway::ChatMessage::user(correction));
+                        if tool_protocol == crate::ToolProtocol::NativeFc {
+                            append_native_fc_retry_context(&mut messages, &resp, &reason);
+                        } else {
+                            messages
+                                .push(llm_gateway::ChatMessage::assistant(resp.content.clone()));
+                            messages.push(llm_gateway::ChatMessage::user(correction));
+                        }
                     }
                     continue;
                 }
 
+                if tool_protocol == crate::ToolProtocol::NativeFc {
+                    clear_assistant_stream(
+                        &cache,
+                        &event_bus,
+                        &stream_conversation_state,
+                        &agent_id,
+                        false,
+                    )
+                    .await?;
+                }
                 llm_response = Some(resp);
                 break;
             }
@@ -1133,7 +1436,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         attempt,
                         "llm request cancelled; suspending thinking flow"
                     );
-                    emit_stream_reset(&sm_ctx);
+                    if tool_protocol == crate::ToolProtocol::NativeFc {
+                        clear_assistant_stream(
+                            &cache,
+                            &event_bus,
+                            &stream_conversation_state,
+                            &agent_id,
+                            true,
+                        )
+                        .await?;
+                    } else {
+                        emit_stream_reset(&sm_ctx);
+                    }
                     let event = BaseEvent::new(
                         ev_types::INTERRUPTED,
                         serde_json::to_value(&InterruptedPayload { turn_id })
@@ -1182,7 +1496,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         "fatal llm error; stop retrying"
                     );
 
-                    emit_stream_reset(&sm_ctx);
+                    if tool_protocol == crate::ToolProtocol::NativeFc {
+                        clear_assistant_stream(
+                            &cache,
+                            &event_bus,
+                            &stream_conversation_state,
+                            &agent_id,
+                            true,
+                        )
+                        .await?;
+                    } else {
+                        emit_stream_reset(&sm_ctx);
+                    }
                     let agent_id = crate::agent::source_id_from_cache(&*cache).await;
                     let payload = LlmErrorPayload {
                         conversation_id: conversation_id.clone(),
@@ -1271,7 +1596,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     "llm call failed; retry may follow"
                 );
                 if attempt < 3 {
-                    emit_stream_reset(&sm_ctx);
+                    if tool_protocol == crate::ToolProtocol::NativeFc {
+                        clear_assistant_stream(
+                            &cache,
+                            &event_bus,
+                            &stream_conversation_state,
+                            &agent_id,
+                            true,
+                        )
+                        .await?;
+                    } else {
+                        emit_stream_reset(&sm_ctx);
+                    }
                     let wait_ms = 500u64 * attempt as u64;
                     tracing::debug!(
                         conversation_id = %conversation_id,
@@ -1289,6 +1625,16 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     let llm_response = match llm_response {
         Some(r) => r,
         None => {
+            if tool_protocol == crate::ToolProtocol::NativeFc {
+                clear_assistant_stream(
+                    &cache,
+                    &event_bus,
+                    &stream_conversation_state,
+                    &agent_id,
+                    true,
+                )
+                .await?;
+            }
             let agent_id = crate::agent::source_id_from_cache(&*cache).await;
             let user_msg = if last_err.trim().is_empty() {
                 "The model request failed after all retry attempts.".to_string()
@@ -1399,8 +1745,32 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     }
 
     let event_bus = sm_ctx.event_bus();
-    let thinking_payload =
-        build_thinking_payload_from_response(&cache, &event_bus, &llm_response, turn_id).await?;
+    let thinking_payload = match tool_protocol {
+        crate::ToolProtocol::NativeFc => {
+            build_thinking_payload_from_native_fc(
+                &cache,
+                &event_bus,
+                &llm_response,
+                &native_tool_definitions,
+                turn_id,
+            )
+            .await?
+        }
+        crate::ToolProtocol::ExecLegacy => {
+            build_thinking_payload_from_response(&cache, &event_bus, &llm_response, turn_id).await?
+        }
+        crate::ToolProtocol::Disabled => {
+            build_thinking_payload_from_plain_content(
+                &cache,
+                &event_bus,
+                &llm_response.content,
+                llm_response.reasoning_content.clone(),
+                llm_response.provider_items.clone(),
+                turn_id,
+            )
+            .await?
+        }
+    };
 
     if let Ok(mut payload_json) = serde_json::to_value(&thinking_payload) {
         let src = crate::agent::source_id_from_cache(&*cache).await;
@@ -1558,6 +1928,164 @@ async fn record_gateway_fact_for_cache(
     }
 }
 
+fn validate_native_fc_response(
+    response: &llm_gateway::LlmResponse,
+    definitions: &[llm_gateway::ToolDefinition],
+) -> Result<(), String> {
+    let Some(calls) = response.tool_calls.as_ref() else {
+        return Ok(());
+    };
+    if calls.is_empty() {
+        return Err("native FC response contains an empty tool_calls list".to_string());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for call in calls {
+        if call.id.trim().is_empty() {
+            return Err(format!(
+                "native FC tool '{}' is missing call_id",
+                call.function.name
+            ));
+        }
+        if !ids.insert(call.id.as_str()) {
+            return Err(format!("native FC response repeats call_id '{}'", call.id));
+        }
+        crate::tool_schema::validate_and_project_call(call, definitions)?;
+    }
+    Ok(())
+}
+
+fn append_native_fc_retry_context(
+    messages: &mut Vec<llm_gateway::ChatMessage>,
+    response: &llm_gateway::LlmResponse,
+    reason: &str,
+) {
+    let Some(calls) = response
+        .tool_calls
+        .as_ref()
+        .filter(|calls| !calls.is_empty())
+    else {
+        messages.push(llm_gateway::ChatMessage::user(format!(
+            "The previous native tool response was invalid: {reason}. Return a valid tool call or a normal answer."
+        )));
+        return;
+    };
+    let mut assistant = llm_gateway::ChatMessage::assistant_with_content_and_tool_calls(
+        response.content.clone(),
+        calls.clone(),
+    );
+    assistant.reasoning_content = response.reasoning_content.clone();
+    assistant.provider_items = response.provider_items.clone();
+    messages.push(assistant);
+    for call in calls {
+        messages.push(llm_gateway::ChatMessage::tool_with_id(
+            format!(
+                "The runtime rejected this tool call before execution: {reason}. Correct the arguments; no operation was performed."
+            ),
+            call.id.clone(),
+            call.function.name.clone(),
+        ));
+    }
+}
+
+async fn build_thinking_payload_from_native_fc(
+    cache: &Arc<dyn corework::cache::Cache>,
+    event_bus: &Arc<dyn EventBus>,
+    response: &llm_gateway::LlmResponse,
+    definitions: &[llm_gateway::ToolDefinition],
+    turn_id: u64,
+) -> corework::error::Result<ThinkingDonePayload> {
+    let Some(tool_calls) = response
+        .tool_calls
+        .as_ref()
+        .filter(|calls| !calls.is_empty())
+    else {
+        return build_thinking_payload_from_plain_content(
+            cache,
+            event_bus,
+            &response.content,
+            response.reasoning_content.clone(),
+            response.provider_items.clone(),
+            turn_id,
+        )
+        .await;
+    };
+    if !reserve_auto_continue_step(cache).await? {
+        return stop_for_max_auto_steps(cache, event_bus, turn_id).await;
+    }
+    let structured_tools = tool_calls
+        .iter()
+        .map(|call| crate::tool_schema::validate_and_project_call(call, definitions))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(corework::error::FrameworkError::SystemError)?;
+    let cli_cmds = structured_tools
+        .iter()
+        .map(crate::decision_line::ParsedToolCall::to_legacy_command)
+        .collect::<Vec<_>>();
+    let call_ids = tool_calls
+        .iter()
+        .map(|call| call.id.clone())
+        .collect::<Vec<_>>();
+    let tool_call_refs = tool_calls
+        .iter()
+        .map(|call| crate::context::ToolCallRef {
+            id: call.id.clone(),
+            name: call.function.name.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut metadata = crate::ledger::LedgerMessageMeta::default();
+    if !response.content.trim().is_empty() {
+        metadata.display_content = Some(response.content.clone());
+    }
+    metadata
+        .extra
+        .insert("tool_call_ids".to_string(), serde_json::json!(call_ids));
+    metadata
+        .extra
+        .insert("tool_protocol".to_string(), serde_json::json!("native_fc"));
+    metadata
+        .extra
+        .insert("turn_id".to_string(), serde_json::json!(turn_id));
+    let assistant = crate::context::Message {
+        role: crate::context::roles::ASSISTANT.to_string(),
+        content: response.content.clone(),
+        cache_control: false,
+        tool_call_id: None,
+        name: None,
+        tool_calls: Some(tool_calls.clone()),
+        reasoning_content: response.reasoning_content.clone(),
+        provider_items: response.provider_items.clone(),
+    };
+    AssistantContext::push_message_with_metadata_and_display_on_event_bus(
+        cache, event_bus, assistant, metadata, None,
+    )
+    .await?;
+    cache.set(keys::PENDING_TOOLS, &cli_cmds, None).await?;
+    cache
+        .set(keys::PENDING_STRUCTURED_TOOLS, &structured_tools, None)
+        .await?;
+    cache
+        .set(keys::PENDING_TOOL_CALLS, &tool_call_refs, None)
+        .await?;
+    cache
+        .set(keys::PENDING_TOOL_CALL_IDS, &call_ids, None)
+        .await?;
+    cache
+        .set(keys::PENDING_TOOL_DISPLAY_COMMANDS, &cli_cmds, None)
+        .await?;
+    cache
+        .set(keys::PENDING_TOOLS_WAIT_FOR_INPUT, &false, None)
+        .await?;
+    cache
+        .set(keys::NEXT_STATE, &states::EXECUTING.to_string(), None)
+        .await?;
+    Ok(ThinkingDonePayload {
+        reasoning: None,
+        decision: "executing".to_string(),
+        tools: cli_cmds,
+        turn_id,
+    })
+}
+
 async fn build_thinking_payload_from_response(
     cache: &Arc<dyn corework::cache::Cache>,
     event_bus: &Arc<dyn EventBus>,
@@ -1603,6 +2131,7 @@ async fn build_thinking_payload_from_response(
         event_bus,
         &response.content,
         reasoning_content,
+        response.provider_items.clone(),
         turn_id,
     )
     .await
@@ -1724,6 +2253,7 @@ async fn build_thinking_payload_from_parsed_tool_calls(
         name: None,
         tool_calls: None,
         reasoning_content,
+        provider_items: None,
     };
     AssistantContext::push_message_with_metadata_and_display_on_event_bus(
         cache,
@@ -1773,6 +2303,7 @@ async fn build_thinking_payload_from_plain_content(
     event_bus: &Arc<dyn EventBus>,
     raw_reply: &str,
     reasoning_content: Option<String>,
+    provider_items: Option<Vec<serde_json::Value>>,
     turn_id: u64,
 ) -> corework::error::Result<ThinkingDonePayload> {
     let empty_model_response = crate::prompt_assets::template("empty_model_response.md")
@@ -1812,6 +2343,7 @@ async fn build_thinking_payload_from_plain_content(
         name: None,
         tool_calls: None,
         reasoning_content,
+        provider_items,
     };
     AssistantContext::push_message_with_metadata_and_display_on_event_bus(
         cache,
@@ -2145,6 +2677,7 @@ mod tests {
             cached_tokens: 0,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         };
         let raw_content = "```text\nEXEC ReadFile\n--path 文件.txt\n```";
         let normalized_content = "EXEC ReadFile\n--path 文件.txt";
@@ -2180,6 +2713,7 @@ mod tests {
             cached_tokens: 0,
             tool_calls: None,
             reasoning_content: Some("EXEC DangerousTool --value bad".to_string()),
+            provider_items: None,
         };
 
         append_empty_response_retry_context(
@@ -2200,7 +2734,18 @@ mod tests {
         assert_eq!(messages[2].content, "provide final output");
     }
     use corework::cache::{Cache, InMemoryCache};
-    use corework::event::InMemoryEventBus;
+    use corework::event::{EventHandler, InMemoryEventBus};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct StreamEventCounter(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl EventHandler for StreamEventCounter {
+        async fn handle(&self, _event: &BaseEvent) -> corework::error::Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     #[test]
     fn leading_system_cache_marker_is_configurable() {
@@ -2278,6 +2823,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_stream_only_publishes_for_the_focused_agent() {
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        let event_bus: Arc<dyn EventBus> = Arc::new(InMemoryEventBus::new());
+        let conversation_state = Arc::new(crate::conversation_state::ConversationState::new(
+            "conversation",
+            crate::conversation_state::ConversationRequestHeaders::default(),
+            "boss",
+        ));
+        let event_count = Arc::new(AtomicUsize::new(0));
+        let handler = Arc::new(StreamEventCounter(Arc::clone(&event_count)));
+        event_bus
+            .subscribe(ev_types::STREAM_UPDATED.to_string(), handler.clone())
+            .await
+            .unwrap();
+        event_bus
+            .subscribe(ev_types::STREAM_RESET.to_string(), handler)
+            .await
+            .unwrap();
+
+        start_assistant_stream(&cache, &event_bus, &conversation_state, "worker", 7, 1)
+            .await
+            .unwrap();
+        let (tx, task) = spawn_assistant_stream_projector(
+            Arc::clone(&cache),
+            Arc::clone(&event_bus),
+            Arc::clone(&conversation_state),
+            "worker".to_string(),
+            7,
+            1,
+        );
+        tx.send("background".to_string()).unwrap();
+        drop(tx);
+        task.await.unwrap().unwrap();
+
+        let stream: crate::snapshot::AssistantStreamView =
+            cache.get(keys::ASSISTANT_STREAM).await.unwrap().unwrap();
+        assert_eq!(stream.content, "background");
+        assert_eq!(event_count.load(Ordering::SeqCst), 0);
+
+        conversation_state.set_focus("worker").await;
+        start_assistant_stream(&cache, &event_bus, &conversation_state, "worker", 8, 1)
+            .await
+            .unwrap();
+        let (tx, task) = spawn_assistant_stream_projector(
+            Arc::clone(&cache),
+            Arc::clone(&event_bus),
+            Arc::clone(&conversation_state),
+            "worker".to_string(),
+            8,
+            1,
+        );
+        tx.send("foreground".to_string()).unwrap();
+        drop(tx);
+        task.await.unwrap().unwrap();
+        clear_assistant_stream(&cache, &event_bus, &conversation_state, "worker", true)
+            .await
+            .unwrap();
+
+        assert_eq!(event_count.load(Ordering::SeqCst), 3);
+        assert!(cache
+            .get::<crate::snapshot::AssistantStreamView>(keys::ASSISTANT_STREAM)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn legacy_stream_callbacks_are_isolated_per_process_task() {
+        let (first_tx, mut first_rx) = tokio::sync::mpsc::channel(4);
+        let (second_tx, mut second_rx) = tokio::sync::mpsc::channel(4);
+
+        let first = tokio::spawn(scope_stream_sender(first_tx, async {
+            forward_legacy_stream_chunk("first-1");
+            tokio::task::yield_now().await;
+            forward_legacy_stream_chunk("first-2");
+        }));
+        let second = tokio::spawn(scope_stream_sender(second_tx, async {
+            forward_legacy_stream_chunk("second-1");
+            tokio::task::yield_now().await;
+            forward_legacy_stream_chunk("second-2");
+        }));
+
+        first.await.unwrap();
+        second.await.unwrap();
+
+        let mut first_chunks = Vec::new();
+        while let Some(chunk) = first_rx.recv().await {
+            first_chunks.push(chunk);
+        }
+        let mut second_chunks = Vec::new();
+        while let Some(chunk) = second_rx.recv().await {
+            second_chunks.push(chunk);
+        }
+
+        assert_eq!(first_chunks, ["first-1", "first-2"]);
+        assert_eq!(second_chunks, ["second-1", "second-2"]);
+    }
+
+    #[tokio::test]
     async fn plain_content_without_stop_marker_defaults_to_done() {
         let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
         let event_bus: Arc<dyn EventBus> = Arc::new(InMemoryEventBus::new());
@@ -2287,6 +2931,7 @@ mod tests {
             &event_bus,
             "The task is complete.",
             Some("checked final state".to_string()),
+            None,
             42,
         )
         .await
@@ -2307,6 +2952,58 @@ mod tests {
         let next_after_saying: Option<String> =
             cache.get(keys::NEXT_STATE_AFTER_SAYING).await.unwrap();
         assert_eq!(next_after_saying.as_deref(), Some(states::SUSPENDED));
+    }
+
+    #[tokio::test]
+    async fn native_fc_empty_content_routes_to_executing_with_provider_call_id() {
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        let event_bus: Arc<dyn EventBus> = Arc::new(InMemoryEventBus::new());
+        let definition = llm_gateway::ToolDefinition {
+            tool_type: "function".to_string(),
+            function: llm_gateway::FunctionDefinition {
+                name: "Read".to_string(),
+                description: "Read a value".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false
+                }),
+                strict: None,
+            },
+        };
+        let response = llm_gateway::LlmResponse {
+            content: String::new(),
+            finish_reason: Some("tool_calls".to_string()),
+            tokens: None,
+            cached_tokens: 0,
+            tool_calls: Some(vec![llm_gateway::ToolCall::function(
+                "provider-call-1",
+                "Read",
+                r#"{"path":"a.txt"}"#,
+            )]),
+            reasoning_content: None,
+            provider_items: Some(vec![serde_json::json!({
+                "type": "function_call",
+                "call_id": "provider-call-1",
+                "name": "Read",
+                "arguments": "{\"path\":\"a.txt\"}"
+            })]),
+        };
+
+        validate_native_fc_response(&response, std::slice::from_ref(&definition)).unwrap();
+        let payload =
+            build_thinking_payload_from_native_fc(&cache, &event_bus, &response, &[definition], 9)
+                .await
+                .unwrap();
+
+        assert_eq!(payload.decision, "executing");
+        let refs: Vec<crate::context::ToolCallRef> =
+            cache.get(keys::PENDING_TOOL_CALLS).await.unwrap().unwrap();
+        assert_eq!(refs[0].id, "provider-call-1");
+        assert_eq!(refs[0].name, "Read");
+        let next: String = cache.get(keys::NEXT_STATE).await.unwrap().unwrap();
+        assert_eq!(next, states::EXECUTING);
     }
 
     #[test]

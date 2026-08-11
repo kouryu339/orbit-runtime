@@ -89,6 +89,8 @@ pub mod types {
     pub const AGENT_RETIRED: &str = "agent:retired";
     /// 流式重置：通知前端丢弃当前 running 的 assistant 气泡（FC 重试时使用）
     pub const STREAM_RESET: &str = "ai:stream-reset";
+    /// Internal signal that the focused Agent's ephemeral stream projection changed.
+    pub const STREAM_UPDATED: &str = "ai:stream-updated";
     /// 草稿已锁定：焦点 Agent 进入 thinking / executing，前端应进入只读模式
     pub const DRAFT_LOCKED: &str = "draft:locked";
     pub const DRAFT_UNLOCKED: &str = "draft:unlocked";

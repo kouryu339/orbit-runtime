@@ -32,6 +32,8 @@ pub struct Message {
     pub tool_calls: Option<Vec<llm_gateway::ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_items: Option<Vec<serde_json::Value>>,
 }
 
 impl Message {
@@ -71,6 +73,7 @@ impl Message {
             name: None,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
 }
@@ -105,6 +108,7 @@ pub mod keys {
     // ---- Tools ----
 
     pub const ACTIVE_TOOLS: &str = "active_tools";
+    pub const TOOL_PROTOCOL: &str = "tool_protocol";
 
     pub const CONVERSATION: &str = "conversation";
 
@@ -197,6 +201,8 @@ pub mod keys {
 
     /// Host-owned dynamic text fields for this agent in this conversation.
     pub const HOST_DYNAMIC_SNAPSHOTS: &str = "host_dynamic_snapshots";
+    /// Ephemeral current response projection. Never persist into the Ledger.
+    pub const ASSISTANT_STREAM: &str = "assistant_stream";
 
     /// Workflow recorder draft chain; this is internal state, not host context.
     pub const RECORDER_CHAIN: &str = "recorder_chain";
@@ -388,11 +394,12 @@ impl AssistantContext {
         cache: &Arc<dyn Cache>,
         event_bus: &Arc<dyn EventBus>,
         message: Message,
-        metadata: crate::ledger::LedgerMessageMeta,
+        mut metadata: crate::ledger::LedgerMessageMeta,
         display: Option<crate::persistence::DisplayMeta>,
     ) -> Result<()> {
         let (source_id, source_name) = crate::agent::source_meta_from_cache(&**cache).await;
         let role = crate::ledger::LedgerRole::from_message_role(&message.role, display.as_ref());
+        metadata.preserve_message_protocol(&message);
         event_bus
             .publish(corework::event::BaseEvent::new(
                 crate::events::types::AGENT_MESSAGE_PRODUCED,

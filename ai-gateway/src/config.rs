@@ -220,6 +220,10 @@ pub struct UserProviderConfig {
     pub api_paradigm: Option<ApiParadigm>,
     #[serde(alias = "promptCacheControl", alias = "prompt_cache_control", default)]
     pub prompt_cache_control: bool,
+    /// Emit provider-native strict function schemas. Keep disabled for
+    /// OpenAI-compatible services that do not implement the strict subset.
+    #[serde(alias = "strictToolSchema", alias = "strict_tool_schema", default)]
+    pub strict_tool_schema: bool,
     /// 该厂商实例下已启用的模型
     #[serde(alias = "enabledModels", alias = "enabled_models", default)]
     pub enabled_models: Vec<EnabledModel>,
@@ -339,6 +343,7 @@ pub fn build_index_and_resolver(config: LlmConfig) {
                 base_url: p.base_url.clone(),
                 api_paradigm: p.api_paradigm,
                 prompt_cache_control: p.prompt_cache_control,
+                strict_tool_schema: p.strict_tool_schema,
             })
     });
 }

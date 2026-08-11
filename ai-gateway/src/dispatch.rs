@@ -57,6 +57,7 @@ async fn dispatch(
     let api_format_label = match api_format {
         ApiFormat::OpenAI => "openai_chat_completions",
         ApiFormat::Anthropic => "anthropic_messages",
+        ApiFormat::OpenAIResponses => "openai_responses",
     };
 
     tracing::debug!(
@@ -65,6 +66,7 @@ async fn dispatch(
         match api_format {
             ApiFormat::OpenAI => "OpenAI",
             ApiFormat::Anthropic => "Anthropic",
+            ApiFormat::OpenAIResponses => "OpenAI Responses",
         },
         entry.model_name
     );
@@ -108,6 +110,20 @@ async fn dispatch(
             )
             .await
         }
+        ApiFormat::OpenAIResponses => {
+            crate::openai_responses::call_inner(
+                messages,
+                tools,
+                &entry.model_name,
+                &base_url,
+                &api_key,
+                temperature,
+                top_p,
+                max_tokens,
+                force_tool_name,
+            )
+            .await
+        }
     }
 }
 
@@ -119,9 +135,7 @@ fn effective_api_format(
         None => Ok(builtin_format),
         Some(ApiParadigm::AnthropicMessages) => Ok(ApiFormat::Anthropic),
         Some(ApiParadigm::OpenAiChatCompletions) => Ok(ApiFormat::OpenAI),
-        Some(ApiParadigm::OpenAiResponses) => Err(ApiError::Fatal(FatalError::config_error(
-            "api_paradigm=openai_responses is reserved but not supported by ai-gateway yet",
-        ))),
+        Some(ApiParadigm::OpenAiResponses) => Ok(ApiFormat::OpenAIResponses),
     }
 }
 
@@ -240,6 +254,119 @@ pub async fn call_llm_with_tools_cancellable(
     }
 }
 
+/// Stream visible assistant text while aggregating native function calls.
+/// Tool argument deltas are never exposed through `on_chunk`; callers receive
+/// complete validated JSON arguments in the returned `LlmResponse`.
+pub async fn call_llm_with_tools_streaming_cancellable<F>(
+    model_id: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    cancel: tokio_util::sync::CancellationToken,
+    on_chunk: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(String) + Send,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(crate::error::ApiError::Cancelled),
+        result = dispatch_streaming_with_tools(
+            model_id,
+            messages,
+            tools,
+            temperature,
+            top_p,
+            max_tokens,
+            on_chunk,
+        ) => result,
+    }
+}
+
+async fn dispatch_streaming_with_tools<F>(
+    model_id: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    on_chunk: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(String) + Send,
+{
+    let entry = crate::key_store::get(model_id).ok_or_else(|| {
+        ApiError::Fatal(FatalError::config_error(format!(
+            "model_id={model_id} is not registered"
+        )))
+    })?;
+    let provider = providers::resolve(&entry.model_name);
+    let runtime =
+        crate::key_store::resolve_provider_runtime(entry.provider_uid).ok_or_else(|| {
+            ApiError::Fatal(FatalError::config_error(format!(
+                "model_uid={model_id} has no provider runtime configuration"
+            )))
+        })?;
+    let base_url = if runtime.base_url.is_empty() {
+        provider.base_url.clone()
+    } else {
+        runtime.base_url
+    };
+    let format = effective_api_format(provider.format, runtime.api_paradigm)?;
+    match format {
+        ApiFormat::OpenAI => {
+            crate::openai_compat::call_inner_streaming(
+                messages,
+                tools,
+                &entry.model_name,
+                &base_url,
+                &runtime.api_key,
+                temperature,
+                top_p,
+                max_tokens,
+                None,
+                provider.tool_choice_style,
+                false,
+                false,
+                on_chunk,
+            )
+            .await
+        }
+        ApiFormat::OpenAIResponses => {
+            crate::openai_responses::call_inner_streaming(
+                messages,
+                tools,
+                &entry.model_name,
+                &base_url,
+                &runtime.api_key,
+                temperature,
+                top_p,
+                max_tokens,
+                None,
+                on_chunk,
+            )
+            .await
+        }
+        ApiFormat::Anthropic => {
+            crate::anthropic_compat::call_inner_streaming(
+                messages,
+                tools,
+                &entry.model_name,
+                &base_url,
+                &runtime.api_key,
+                temperature,
+                top_p,
+                max_tokens,
+                None,
+                on_chunk,
+            )
+            .await
+        }
+    }
+}
+
 // ============================================================================
 // 接口级保底：FC arguments 合法性校验 + 自动重试
 //
@@ -280,6 +407,7 @@ fn correction_message(bad_args: &str) -> ChatMessage {
         name: None,
         tool_calls: None,
         reasoning_content: None,
+        provider_items: None,
     }
 }
 
@@ -440,7 +568,23 @@ where
                 Some(&force_name),
                 provider.tool_choice_style,
                 force_json,
+                true,
                 on_chunk,
+            )
+            .await?
+        }
+        ApiFormat::OpenAIResponses => {
+            tracing::warn!("OpenAI Responses streaming is not implemented; using the same native Responses protocol without incremental chunks");
+            crate::openai_responses::call_inner(
+                messages,
+                std::slice::from_ref(tool),
+                &entry.model_name,
+                &base_url,
+                &api_key,
+                temperature,
+                top_p,
+                max_tokens,
+                Some(&force_name),
             )
             .await?
         }

@@ -182,6 +182,10 @@ function applySnapshot(
     agents: payload.agents ?? state.agents,
     plan: payload.plan ?? state.plan,
     pendingPermissions: payload.pending_permissions ?? payload.pendingPermissions ?? state.pendingPermissions,
+    assistantStream:
+      payload.assistant_stream === undefined
+        ? state.assistantStream
+        : payload.assistant_stream ?? undefined,
     lastError: payload.error ?? state.lastError,
   };
 }

@@ -22,6 +22,7 @@ pub struct RuntimeAgentDefinition {
     pub retrieval: Option<RetrievalConfig>,
     pub system_prompt_constraints: SystemPromptConstraints,
     pub frontend_widgets_enabled: bool,
+    pub tool_protocol: ai_assistant::ToolProtocol,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +77,8 @@ struct AgentClusterAgentRegistration {
     system_prompt_constraints: SystemPromptConstraints,
     #[serde(alias = "frontendWidgetsEnabled", default = "default_true")]
     frontend_widgets_enabled: bool,
+    #[serde(alias = "toolProtocol", default)]
+    tool_protocol: Option<ai_assistant::ToolProtocol>,
 }
 
 impl Default for AgentClusterAgentRegistration {
@@ -91,6 +94,7 @@ impl Default for AgentClusterAgentRegistration {
             retrieval: None,
             system_prompt_constraints: SystemPromptConstraints::default(),
             frontend_widgets_enabled: true,
+            tool_protocol: None,
         }
     }
 }
@@ -169,7 +173,11 @@ pub(super) fn build_agent_cluster_registry(
             )));
         }
         let model_uid = agent.model_uid.or(default_model_uid).unwrap_or(0);
-        if model_uid != 0 && key_store::get(model_uid).is_none() {
+        let model_is_registered = registries
+            .llm
+            .as_ref()
+            .is_some_and(|llm| llm.model_uids.contains(&model_uid));
+        if model_uid != 0 && !model_is_registered {
             return Err(RuntimeError::InvalidConfig(format!(
                 "agent cluster '{}' agent '{}' model_uid {} is not registered",
                 registration.id, id, model_uid
@@ -217,6 +225,7 @@ pub(super) fn build_agent_cluster_registry(
                 agent.frontend_widgets_enabled,
                 &agent.system_prompt_constraints,
             ),
+            tool_protocol: agent.tool_protocol.unwrap_or_default(),
         });
     }
     let requested_focus_agent_id = requested_focus_agent_id
@@ -343,6 +352,9 @@ fn apply_registered_agent_profile(
     if agent.frontend_widgets_enabled {
         agent.frontend_widgets_enabled = profile.frontend_widgets_enabled;
     }
+    if agent.tool_protocol.is_none() {
+        agent.tool_protocol = Some(profile.tool_protocol);
+    }
     let _ = cluster_id;
     Ok(())
 }
@@ -396,6 +408,7 @@ pub(super) fn build_builtin_cluster_configs(
                         frontend_widgets_enabled: Some(true),
                     },
                     frontend_widgets_enabled: true,
+                    tool_protocol: ai_assistant::ToolProtocol::default(),
                 }],
                 max_thinking_rounds: 0,
                 permissions: registration.permissions,
@@ -527,6 +540,7 @@ pub(super) fn runtime_agent_definition_to_agent_section(
         retrieval: agent.retrieval.clone(),
         system_prompt_constraints: agent.system_prompt_constraints.clone(),
         frontend_widgets_enabled: agent.frontend_widgets_enabled,
+        tool_protocol: agent.tool_protocol,
     }
 }
 

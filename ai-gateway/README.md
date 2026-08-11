@@ -10,9 +10,15 @@ Anthropic-compatible transports, retry classification, multimodal calls, and
 request-scoped headers. Start with [`docs/en/01_architecture.md`](docs/en/01_architecture.md)
 or [`docs/01_架构设计.md`](docs/01_架构设计.md).
 
-Supported API paradigms are OpenAI Chat Completions and Anthropic Messages.
-`openai_responses` is reserved in configuration but currently rejected with a
-configuration error; it must not be advertised as an available transport.
+Supported API paradigms are OpenAI Chat Completions, OpenAI Responses, and
+Anthropic Messages. Native function calls are normalized to stable tool names,
+JSON arguments, and provider call IDs. Responses output items are retained for
+the next turn instead of being flattened into chat text.
+
+Compatible providers use non-strict tool schemas by default. Set
+`strictToolSchema` (or `strict_tool_schema`) on a provider only when the
+endpoint supports strict function schemas. This changes schema generation; it
+does not enable protocol fallback.
 
 ```text
 cargo test -p llm-gateway

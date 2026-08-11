@@ -543,6 +543,29 @@ describe('AgentRuntimeConversationElement', () => {
       payload: {
         revision: 3,
         conversation_state: 'thinking',
+        assistant_stream: {
+          agent_id: 'boss',
+          turn_id: 2,
+          attempt: 1,
+          sequence: 1,
+          content: 'Streaming reply',
+        },
+      },
+    });
+    await element.updateComplete;
+    const streamContent = [...(element.shadowRoot?.querySelectorAll(
+      'agent-conversation-rich-content',
+    ) ?? [])].at(-1) as HTMLElement & { updateComplete: Promise<boolean> };
+    await streamContent.updateComplete;
+    expect(streamContent.shadowRoot?.textContent).toContain('Streaming reply');
+    expect(element.shadowRoot?.querySelector('.waiting')).toBeNull();
+
+    element.state = conversationReducer(element.state, {
+      type: 'snapshot',
+      payload: {
+        revision: 4,
+        conversation_state: 'thinking',
+        assistant_stream: null,
         ledger_delta: {
           kind: 'append',
           record: {

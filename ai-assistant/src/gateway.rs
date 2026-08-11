@@ -394,6 +394,9 @@ impl EventHandler for AgentGateway {
                     .await;
                 self.publish_frontend_snapshot(None).await;
             }
+            crate::events::types::STREAM_UPDATED | crate::events::types::STREAM_RESET => {
+                self.publish_frontend_snapshot(None).await;
+            }
             _ => {}
         }
         Ok(())
@@ -556,6 +559,8 @@ impl AgentGateway {
         for event_type in [
             crate::events::types::TOOL_PERMISSION_REQUESTED,
             crate::events::types::TOOL_PERMISSION_RESOLVED,
+            crate::events::types::STREAM_UPDATED,
+            crate::events::types::STREAM_RESET,
         ] {
             bus.subscribe(event_type.to_string(), Arc::clone(&handler))
                 .await?;

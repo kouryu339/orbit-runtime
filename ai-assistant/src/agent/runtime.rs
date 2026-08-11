@@ -626,6 +626,7 @@ impl AgentRuntime {
                 name: None,
                 tool_calls: None,
                 reasoning_content: None,
+                provider_items: None,
             },
             metadata,
             Some(display),

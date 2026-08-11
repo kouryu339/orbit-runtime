@@ -181,6 +181,31 @@ impl LedgerMessageMeta {
         self.extra.extend(other.extra);
         self
     }
+
+    pub fn preserve_message_protocol(&mut self, message: &Message) {
+        if let Some(call_id) = message.tool_call_id.as_ref() {
+            self.extra
+                .insert("tool_call_id".to_string(), serde_json::json!(call_id));
+        }
+        if let Some(name) = message.name.as_ref() {
+            self.extra
+                .insert("tool_protocol_name".to_string(), serde_json::json!(name));
+        }
+        if let Some(tool_calls) = message.tool_calls.as_ref() {
+            self.extra
+                .insert("tool_calls".to_string(), serde_json::json!(tool_calls));
+        }
+        if let Some(reasoning) = message.reasoning_content.as_ref() {
+            self.extra.insert(
+                "reasoning_content".to_string(),
+                serde_json::json!(reasoning),
+            );
+        }
+        if let Some(items) = message.provider_items.as_ref() {
+            self.extra
+                .insert("provider_items".to_string(), serde_json::json!(items));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,9 +231,10 @@ impl LedgerRecord {
         display: Option<DisplayMeta>,
     ) -> Self {
         let role = LedgerRole::from_message_role(&message.role, display.as_ref());
-        let metadata = display
+        let mut metadata = display
             .map(LedgerMessageMeta::from_display)
             .unwrap_or_default();
+        metadata.preserve_message_protocol(&message);
         Self {
             record_id,
             conversation_id: conversation_id.into(),
@@ -241,6 +267,26 @@ impl LedgerRecord {
     }
 
     pub fn to_frontend_message(&self) -> Option<GatewayMessage> {
+        // A native function-call assistant record can intentionally have no text.
+        // Keep the record in the Ledger for replay/recovery, but do not emit an
+        // empty chat bubble to presentation clients.
+        if self.role == LedgerRole::Assistant
+            && self
+                .metadata
+                .display_content
+                .as_deref()
+                .unwrap_or(&self.content)
+                .trim()
+                .is_empty()
+            && self
+                .metadata
+                .extra
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|calls| !calls.is_empty())
+        {
+            return None;
+        }
         match self.role {
             LedgerRole::User
             | LedgerRole::Assistant
@@ -351,13 +397,61 @@ impl LedgerRecord {
         match self.role {
             LedgerRole::User => Some(Message::user(&self.content)),
             LedgerRole::Assistant => {
-                if self.content.trim().is_empty() {
+                let tool_calls = self
+                    .metadata
+                    .extra
+                    .get("tool_calls")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok());
+                let provider_items = self
+                    .metadata
+                    .extra
+                    .get("provider_items")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok());
+                if self.content.trim().is_empty()
+                    && tool_calls.as_ref().map(Vec::is_empty).unwrap_or(true)
+                    && provider_items.as_ref().map(Vec::is_empty).unwrap_or(true)
+                {
                     None
                 } else {
-                    Some(Message::assistant(&self.content))
+                    Some(Message {
+                        role: crate::context::roles::ASSISTANT.to_string(),
+                        content: self.content.clone(),
+                        cache_control: false,
+                        tool_call_id: None,
+                        name: None,
+                        tool_calls,
+                        reasoning_content: self
+                            .metadata
+                            .extra
+                            .get("reasoning_content")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                        provider_items,
+                    })
                 }
             }
-            LedgerRole::Tool => Some(Message::user(format_tool_content(&self.content))),
+            LedgerRole::Tool => {
+                let call_id = self
+                    .metadata
+                    .extra
+                    .get("tool_call_id")
+                    .or_else(|| self.metadata.extra.get("call_id"))
+                    .and_then(serde_json::Value::as_str);
+                let name = self
+                    .metadata
+                    .extra
+                    .get("tool_protocol_name")
+                    .and_then(serde_json::Value::as_str)
+                    .or(self.metadata.tool_name.as_deref());
+                Some(match (call_id, name) {
+                    (Some(call_id), Some(name)) => {
+                        Message::tool_with_id(&self.content, call_id, name)
+                    }
+                    _ => Message::tool(&self.content),
+                })
+            }
             LedgerRole::AgentReport => Some(Message::user(format_agent_report_content(self))),
             LedgerRole::Summary => Some(Message::user(crate::prompt_assets::render(
                 "conversation_summary_context.md",
@@ -437,22 +531,6 @@ pub fn gateway_message_record(
         content: content.into(),
         metadata,
         created_at: chrono::Local::now().to_rfc3339(),
-    }
-}
-
-fn format_tool_content(content: &str) -> String {
-    let tool_prefix = crate::prompt_assets::template("tool_execution_result.md")
-        .split("{{COMMAND}}")
-        .next()
-        .unwrap_or("工具执行：")
-        .trim_start()
-        .to_string();
-    if content.trim_start().starts_with(&tool_prefix)
-        || content.trim_start().starts_with("工具执行：")
-    {
-        content.to_string()
-    } else {
-        crate::prompt_assets::render("tool_result_context.md", &[("{{CONTENT}}", content)])
     }
 }
 
@@ -557,7 +635,7 @@ mod tests {
         assert_eq!(context.len(), 3);
         assert_eq!(context[0].role, "user");
         assert!(context[0].content.contains("agent summary"));
-        assert_eq!(context[1].role, "user");
+        assert_eq!(context[1].role, "tool");
         assert!(context[1].content.contains("tool result"));
         assert_eq!(context[2].role, "assistant");
     }
@@ -613,5 +691,45 @@ mod tests {
         let context = assistant.to_context_message().unwrap();
         assert!(context.content.contains("$path"));
         assert!(context.content.contains("EXEC ReadFile"));
+    }
+
+    #[test]
+    fn native_tool_protocol_roundtrips_through_ledger_context() {
+        let calls = vec![llm_gateway::ToolCall::function(
+            "call-1",
+            "Read",
+            r#"{"path":"a.txt"}"#,
+        )];
+        let mut assistant = Message::assistant("");
+        assistant.tool_calls = Some(calls.clone());
+        assistant.provider_items = Some(vec![serde_json::json!({
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "Read",
+            "arguments": "{\"path\":\"a.txt\"}"
+        })]);
+        let assistant_record =
+            LedgerRecord::from_message(1, "conversation", "agent", "Agent", assistant, None);
+        assert!(assistant_record.to_frontend_message().is_none());
+        let restored_assistant = assistant_record.to_context_message().unwrap();
+        let restored_calls = restored_assistant.tool_calls.unwrap();
+        assert_eq!(restored_calls.len(), 1);
+        assert_eq!(restored_calls[0].id, calls[0].id);
+        assert_eq!(restored_calls[0].function.name, calls[0].function.name);
+        assert!(restored_assistant.provider_items.is_some());
+
+        let tool_record = LedgerRecord::from_message(
+            2,
+            "conversation",
+            "agent",
+            "Agent",
+            Message::tool_with_id("ok", "call-1", "Read"),
+            None,
+        );
+        assert_eq!(tool_record.role, LedgerRole::Tool);
+        let restored_tool = tool_record.to_context_message().unwrap();
+        assert_eq!(restored_tool.role, "tool");
+        assert_eq!(restored_tool.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(restored_tool.name.as_deref(), Some("Read"));
     }
 }

@@ -187,6 +187,7 @@ impl AgentTestRuntimeHost {
                     agent.frontend_widgets_enabled,
                     &agent.system_prompt_constraints,
                 ),
+                tool_protocol: agent.tool_protocol,
             }],
             max_thinking_rounds: 0,
             permissions: ai_assistant::ToolPermissionPolicy::default(),

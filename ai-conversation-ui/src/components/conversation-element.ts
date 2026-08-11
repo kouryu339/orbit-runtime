@@ -1341,7 +1341,9 @@ export class AgentRuntimeConversationElement
   protected override render() {
     const displayItems = this.createDisplayItems();
     const scheme = this.resolvedColorScheme();
-    const activityLabel = this.activityLabel();
+    const activityLabel = this.state.assistantStream?.content
+      ? ''
+      : this.activityLabel();
     return html`<section class="shell" part="shell">
       <header class="header" part="header">
         <slot name="header">
@@ -2415,6 +2417,18 @@ export class AgentRuntimeConversationElement
           content: pending.state === 'failed'
             ? `${pending.content}\n${pending.error ?? ''}`
             : pending.content,
+        },
+      });
+    }
+    const stream = this.state.assistantStream;
+    if (stream?.content) {
+      items.push({
+        kind: 'record',
+        key: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
+        record: {
+          record_id: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
+          role: 'assistant',
+          content: stream.content,
         },
       });
     }

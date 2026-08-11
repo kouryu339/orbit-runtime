@@ -3,7 +3,7 @@
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use crate::classify::{classify_network_error, json_response_or_error};
+use crate::classify::{classify_http_error, classify_network_error, json_response_or_error};
 use crate::error::ApiError;
 use crate::retry::{retry_with_backoff, RetryPolicy};
 use crate::types::{ChatMessage, FunctionCall, LlmResponse, TokenUsage, ToolCall, ToolDefinition};
@@ -186,6 +186,246 @@ pub async fn call_inner(
             Some(tool_calls)
         },
         reasoning_content: None,
+        provider_items: None,
+    })
+}
+
+pub async fn call_inner_streaming<F>(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+    mut on_chunk: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(String) + Send,
+{
+    use futures_util::StreamExt;
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct ToolBlock {
+        id: String,
+        name: String,
+        arguments: String,
+    }
+
+    let client = Client::new();
+    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+    let system = build_anthropic_system(messages);
+    let msgs = build_anthropic_messages(messages);
+    let mut body = json!({
+        "model": model,
+        "max_tokens": max_tokens.unwrap_or(4096),
+        "messages": msgs,
+        "stream": true,
+    });
+    if let Some(system) = system {
+        body["system"] = system;
+    }
+    if let Some(value) = temperature {
+        body["temperature"] = json!(value);
+    }
+    if let Some(value) = top_p {
+        body["top_p"] = json!(value);
+    }
+    if !tools.is_empty() {
+        body["tools"] = json!(tools
+            .iter()
+            .map(|tool| json!({
+                "name": tool.function.name,
+                "description": tool.function.description,
+                "input_schema": tool.function.parameters,
+            }))
+            .collect::<Vec<_>>());
+    }
+    if let Some(name) = force_tool_name {
+        body["tool_choice"] = json!({"type": "tool", "name": name});
+    }
+    let body = std::sync::Arc::new(body);
+    let url = std::sync::Arc::new(url);
+    let key = std::sync::Arc::new(api_key.to_string());
+    let model_owned = std::sync::Arc::new(model.to_string());
+    let runtime_headers = std::sync::Arc::new(crate::request_context::current_request_headers());
+    crate::request_context::validate_header_transport(url.as_ref(), runtime_headers.as_ref())?;
+    let response = retry_with_backoff(RetryPolicy::default(), model, |attempt| {
+        let client = client.clone();
+        let body = body.clone();
+        let url = url.clone();
+        let key = key.clone();
+        let model = model_owned.clone();
+        let runtime_headers = runtime_headers.clone();
+        async move {
+            let request = client
+                .post(url.as_str())
+                .header("x-api-key", key.as_str())
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(body.as_ref());
+            let request = crate::request_context::apply_request_headers(request, &runtime_headers);
+            let response = request
+                .send()
+                .await
+                .map_err(|error| classify_network_error(&error))?;
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+            let headers = response.headers().clone();
+            let text = response.text().await.unwrap_or_default();
+            tracing::warn!(
+                attempt = attempt + 1,
+                status = status.as_u16(),
+                model = %model,
+                error_summary = %text.chars().take(200).collect::<String>(),
+                "Anthropic streaming request failed"
+            );
+            Err(classify_http_error(status, &text, &headers, &model))
+        }
+    })
+    .await?;
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut content = String::new();
+    let mut tool_blocks = BTreeMap::<u64, ToolBlock>::new();
+    let mut finish_reason = None;
+    let mut input_tokens = 0u32;
+    let mut output_tokens = 0u32;
+    while let Some(chunk) = stream.next().await {
+        let bytes =
+            chunk.map_err(|error| ApiError::LlmFailed(format!("stream chunk error: {error}")))?;
+        buffer.push_str(std::str::from_utf8(&bytes).unwrap_or_default());
+        while let Some(pos) = buffer.find('\n') {
+            let line = buffer[..pos].trim_end_matches('\r').to_string();
+            buffer = buffer[pos + 1..].to_string();
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() {
+                continue;
+            }
+            let event: Value = serde_json::from_str(data).map_err(|error| {
+                ApiError::LlmFailed(format!("invalid Anthropic stream event: {error}"))
+            })?;
+            match event
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
+                "message_start" => {
+                    input_tokens = event
+                        .pointer("/message/usage/input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default() as u32;
+                }
+                "content_block_start" => {
+                    if event.pointer("/content_block/type").and_then(Value::as_str)
+                        == Some("tool_use")
+                    {
+                        let index = event
+                            .get("index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default();
+                        tool_blocks.insert(
+                            index,
+                            ToolBlock {
+                                id: event
+                                    .pointer("/content_block/id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                name: event
+                                    .pointer("/content_block/name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                arguments: String::new(),
+                            },
+                        );
+                    }
+                }
+                "content_block_delta" => match event.pointer("/delta/type").and_then(Value::as_str)
+                {
+                    Some("text_delta") => {
+                        if let Some(delta) = event.pointer("/delta/text").and_then(Value::as_str) {
+                            content.push_str(delta);
+                            if !delta.is_empty() {
+                                on_chunk(delta.to_string());
+                            }
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        let index = event
+                            .get("index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default();
+                        if let Some(delta) =
+                            event.pointer("/delta/partial_json").and_then(Value::as_str)
+                        {
+                            tool_blocks
+                                .entry(index)
+                                .or_default()
+                                .arguments
+                                .push_str(delta);
+                        }
+                    }
+                    _ => {}
+                },
+                "message_delta" => {
+                    finish_reason = event
+                        .pointer("/delta/stop_reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    output_tokens = event
+                        .pointer("/usage/output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(output_tokens as u64) as u32;
+                }
+                "error" => {
+                    let message = event
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Anthropic stream failed");
+                    return Err(ApiError::LlmFailed(message.to_string()));
+                }
+                _ => {}
+            }
+        }
+    }
+    let tool_calls = tool_blocks
+        .into_values()
+        .filter(|block| !block.id.is_empty() && !block.name.is_empty())
+        .map(|block| ToolCall {
+            id: block.id,
+            call_type: Some("function".to_string()),
+            function: FunctionCall {
+                name: block.name,
+                arguments: if block.arguments.is_empty() {
+                    "{}".to_string()
+                } else {
+                    block.arguments
+                },
+            },
+        })
+        .collect::<Vec<_>>();
+    Ok(LlmResponse {
+        content,
+        finish_reason,
+        tokens: (input_tokens > 0 || output_tokens > 0).then_some(TokenUsage {
+            input_tokens,
+            output_tokens,
+        }),
+        cached_tokens: 0,
+        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+        reasoning_content: None,
+        provider_items: None,
     })
 }
 

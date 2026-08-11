@@ -102,6 +102,43 @@ two feature Skills. The target must load as a non-role Skill with
 access; hosts still expose those tools through role/feature Skill allowlists.
 State keys other than `thinking` are currently rejected.
 
+The tool-call transport also belongs to an Agent profile or concrete cluster
+Agent:
+
+```json
+{
+  "id": "service.researcher",
+  "toolProtocol": "native_fc",
+  "systemSkills": { "thinking": "thinking-pro" }
+}
+```
+
+`toolProtocol` is one of:
+
+- `native_fc`: use the upstream API's native function calling. This is the
+  default when `toolProtocol` is omitted. Runtime selects the `thinking-fc` or
+  `thinking-pro-fc` transport profile automatically;
+- `exec_legacy`: explicitly enable the compatible textual `EXEC` interpreter;
+- `disabled`: expose no tools and do not interpret tool syntax in model text.
+
+The modes are mutually exclusive. A `native_fc` failure is surfaced or retried
+within the same FC protocol and never silently falls back to `exec_legacy`.
+Native `assistant(tool_calls)`, provider `call_id`, and `tool(tool_call_id)`
+records are canonical Ledger facts and remain native after restoration rather
+than being converted into synthetic user messages.
+
+This default change is intentional: configurations that omit `toolProtocol`
+now use `native_fc`. A deployment that must retain textual `EXEC` behavior must
+set `"toolProtocol": "exec_legacy"` explicitly.
+
+Provider registration may opt into strict function schemas with
+`"strictToolSchema": true`. The default is `false` for compatible endpoints.
+When enabled, optional arguments are represented as nullable required fields,
+defaults are omitted, and every object is closed with
+`additionalProperties: false`. Runtime rejects an active tool whose metadata
+cannot produce a closed schema; this is a configuration error, not a reason to
+fall back to textual `EXEC`.
+
 ## 2.2 Ownership of Removed Runtime Config Fields
 
 | Old field | Current owner |

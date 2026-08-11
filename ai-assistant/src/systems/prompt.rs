@@ -724,6 +724,32 @@ pub fn build_system_prompt_text(
     state_skill: Option<&str>,
     frontend_widgets_enabled: bool,
 ) -> String {
+    build_system_prompt_text_for_protocol(
+        persona,
+        _skills_catalog,
+        active_skills_prompt,
+        tools_section,
+        workflows_section,
+        _page_structures_section,
+        current_state,
+        state_skill,
+        frontend_widgets_enabled,
+        crate::ToolProtocol::ExecLegacy,
+    )
+}
+
+pub fn build_system_prompt_text_for_protocol(
+    persona: &str,
+    _skills_catalog: &str,
+    active_skills_prompt: &str,
+    tools_section: &str,
+    workflows_section: &str,
+    _page_structures_section: &str,
+    current_state: &str,
+    state_skill: Option<&str>,
+    frontend_widgets_enabled: bool,
+    tool_protocol: crate::ToolProtocol,
+) -> String {
     let mut sections: Vec<PromptSection> = Vec::new();
 
     sections.push(PromptSection::new(persona));
@@ -746,7 +772,10 @@ pub fn build_system_prompt_text(
     // Host-published dynamic context is intentionally omitted from system prompt.
     // Callers append it at the request tail to preserve reusable prompt prefixes.
 
-    sections.push(PromptSection::new(build_response_protocol_instruction()));
+    let response_protocol = build_response_protocol_instruction_for(tool_protocol);
+    if !response_protocol.is_empty() {
+        sections.push(PromptSection::new(response_protocol));
+    }
     if frontend_widgets_enabled {
         let widget_protocol = crate::prompt_assets::template("frontend_widget_protocol.md")
             .trim()
@@ -774,6 +803,16 @@ pub fn build_response_protocol_instruction() -> String {
     crate::prompt_assets::template("function_calling.md")
         .trim()
         .to_string()
+}
+
+pub fn build_response_protocol_instruction_for(protocol: crate::ToolProtocol) -> String {
+    match protocol {
+        crate::ToolProtocol::ExecLegacy => build_response_protocol_instruction(),
+        crate::ToolProtocol::NativeFc => crate::prompt_assets::template("function_calling_fc.md")
+            .trim()
+            .to_string(),
+        crate::ToolProtocol::Disabled => String::new(),
+    }
 }
 
 // ============================================================================
@@ -1178,5 +1217,14 @@ mod tests {
         assert!(!result3.contains("### Open Pages"));
         assert!(!result3.contains("page2"));
         assert!(!result3.contains("https://google.com"));
+    }
+
+    #[test]
+    fn native_fc_protocol_does_not_teach_exec_syntax() {
+        let native = build_response_protocol_instruction_for(crate::ToolProtocol::NativeFc);
+        assert!(native.contains("API"));
+        assert!(!native.contains("EXEC ToolName"));
+        let disabled = build_response_protocol_instruction_for(crate::ToolProtocol::Disabled);
+        assert!(disabled.is_empty());
     }
 }

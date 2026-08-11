@@ -19,6 +19,7 @@ pub(super) struct RestoredExecutionPlan {
     pub(super) tools: Vec<String>,
     pub(super) call_ids: Vec<String>,
     pub(super) recovery_results: BTreeMap<String, ai_assistant::ToolResult>,
+    pub(super) tool_call_refs: Vec<ai_assistant::context::ToolCallRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ struct OpenToolCall {
     agent_id: String,
     turn_id: Option<u64>,
     source: OpenToolCallSource,
+    native_fc: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +119,7 @@ pub(super) fn restored_execution_plans(
                     tools,
                     call_ids,
                     recovery_results: BTreeMap::new(),
+                    tool_call_refs: Vec::new(),
                 }];
             }
         }
@@ -140,9 +143,20 @@ fn execution_plans_from_open_calls(
                 tools: Vec::new(),
                 call_ids: Vec::new(),
                 recovery_results: BTreeMap::new(),
+                tool_call_refs: Vec::new(),
             });
         entry.tools.push(command.clone());
         entry.call_ids.push(open_call.call_id.clone());
+        if open_call.native_fc {
+            if let Some(name) = open_call.tool_name.clone() {
+                entry
+                    .tool_call_refs
+                    .push(ai_assistant::context::ToolCallRef {
+                        id: open_call.call_id.clone(),
+                        name,
+                    });
+            }
+        }
         if recovery_tool_effect(open_call.tool_name.as_deref()) != "read_only" {
             entry.recovery_results.insert(
                 open_call.call_id.clone(),
@@ -184,6 +198,7 @@ pub(super) fn repair_restored_ledger(
                             agent_id: plan.agent_id.clone(),
                             turn_id: None,
                             source: OpenToolCallSource::AssistantDeclared,
+                            native_fc: false,
                         },
                         &command,
                     )
@@ -230,6 +245,28 @@ fn remember_assistant_declared_tool_calls(
     if record.role != ai_assistant::ledger::LedgerRole::Assistant {
         return;
     }
+    if let Some(tool_calls) = record
+        .metadata
+        .extra
+        .get("tool_calls")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<llm_gateway::ToolCall>>(value).ok())
+        .filter(|calls| !calls.is_empty())
+    {
+        for call in tool_calls {
+            let command = native_tool_command(&call);
+            open_calls.entry(call.id.clone()).or_insert(OpenToolCall {
+                call_id: call.id,
+                tool_name: Some(call.function.name),
+                tool_command: command,
+                agent_id: record.agent_id.clone(),
+                turn_id: record.metadata.extra.get("turn_id").and_then(Value::as_u64),
+                source: OpenToolCallSource::AssistantDeclared,
+                native_fc: true,
+            });
+        }
+        return;
+    }
     let Some(call_ids) = record
         .metadata
         .extra
@@ -261,8 +298,50 @@ fn remember_assistant_declared_tool_calls(
                 agent_id: record.agent_id.clone(),
                 turn_id: record.metadata.extra.get("turn_id").and_then(Value::as_u64),
                 source: OpenToolCallSource::AssistantDeclared,
+                native_fc: record
+                    .metadata
+                    .extra
+                    .get("tool_protocol")
+                    .and_then(Value::as_str)
+                    == Some("native_fc"),
             });
     }
+}
+
+fn native_tool_command(call: &llm_gateway::ToolCall) -> Option<String> {
+    let arguments = serde_json::from_str::<Value>(&call.function.arguments)
+        .ok()?
+        .as_object()?
+        .clone();
+    let mut params = Vec::new();
+    for (name, value) in arguments {
+        if value.is_null() {
+            continue;
+        }
+        if name == "inputs" {
+            for item in value.as_array().into_iter().flatten() {
+                let object = item.as_object()?;
+                let input_name = object.get("name")?.as_str()?;
+                let input_value = object.get("value")?.as_str()?;
+                params.push((format!("input.{input_name}"), input_value.to_string()));
+            }
+            continue;
+        }
+        params.push((
+            name,
+            value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string()),
+        ));
+    }
+    Some(
+        ai_assistant::runtime::parser::ParsedToolCall {
+            name: call.function.name.clone(),
+            params,
+        }
+        .to_legacy_command(),
+    )
 }
 
 fn update_open_tool_calls(
@@ -283,6 +362,10 @@ fn update_open_tool_calls(
         return;
     }
     if is_started_tool_record(record) {
+        let native_fc = open_calls
+            .get(&call_id)
+            .map(|call| call.native_fc)
+            .unwrap_or(false);
         open_calls.insert(
             call_id.clone(),
             OpenToolCall {
@@ -292,6 +375,7 @@ fn update_open_tool_calls(
                 agent_id: record.agent_id.clone(),
                 turn_id: record.metadata.extra.get("turn_id").and_then(Value::as_u64),
                 source: OpenToolCallSource::Started,
+                native_fc,
             },
         );
     }
@@ -820,6 +904,7 @@ impl RuntimeFacade {
                         plan.tools,
                         plan.call_ids,
                         plan.recovery_results,
+                        plan.tool_call_refs,
                     )
                     .await
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;

@@ -147,6 +147,7 @@ impl SystemOperation for AppendLedgerMessageSystem {
                     name: input.tool_name,
                     tool_calls: None,
                     reasoning_content: None,
+                    provider_items: None,
                 };
                 if input.role == LedgerRole::GatewayMessage {
                     message.role = "gateway_message".to_string();
@@ -843,7 +844,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(context.len(), 1);
-        assert_eq!(context[0].role, "user");
+        assert_eq!(context[0].role, "tool");
         assert!(context[0].content.contains("legacy tool result"));
     }
 }

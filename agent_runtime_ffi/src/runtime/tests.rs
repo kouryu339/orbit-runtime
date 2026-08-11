@@ -744,6 +744,28 @@ fn agent_section_accepts_agent_level_retrieval_config() {
 }
 
 #[test]
+fn agent_tool_protocol_defaults_to_native_fc_and_honors_legacy_override() {
+    let default_agent: AgentSection = serde_json::from_value(json!({
+        "id": "default-agent"
+    }))
+    .unwrap();
+    assert_eq!(
+        default_agent.tool_protocol,
+        ai_assistant::ToolProtocol::NativeFc
+    );
+
+    let legacy_agent: AgentSection = serde_json::from_value(json!({
+        "id": "legacy-agent",
+        "toolProtocol": "exec_legacy"
+    }))
+    .unwrap();
+    assert_eq!(
+        legacy_agent.tool_protocol,
+        ai_assistant::ToolProtocol::ExecLegacy
+    );
+}
+
+#[test]
 fn resource_registration_rejects_external_prompts_field() {
     let error = serde_json::from_value::<ResourceRegistration>(json!({
         "schema": "agent-runtime-resource-registration/v1",
@@ -1805,6 +1827,7 @@ fn llm_registration_builds_gateway_config_and_registry() {
                     "base_url": "https://api.deepseek.com",
                     "api_key": "sk-test",
                     "api_paradigm": "openai_chat_completions",
+                    "strict_tool_schema": true,
                     "enabled_models": [{
                         "uid": 1001,
                         "model_id": "deepseek-v4-flash",
@@ -1823,13 +1846,18 @@ fn llm_registration_builds_gateway_config_and_registry() {
     assert_eq!(registry.model_count, 1);
     assert_eq!(facade.llm_config.current_model_uid, Some(1001));
     assert_eq!(facade.llm_config.providers[0].id, 1);
+    assert!(facade.llm_config.providers[0].strict_tool_schema);
     assert_eq!(facade.llm_config.providers[0].enabled_models[0].uid, 1001);
     assert!(key_store::get(1001).is_some());
+    assert!(
+        key_store::resolve_provider_runtime(1).is_some_and(|provider| provider.strict_tool_schema)
+    );
 
     let persisted = fs::read_to_string(root.join("llm_config.json")).unwrap();
     let persisted: llm_gateway::LlmConfig = serde_json::from_str(&persisted).unwrap();
     assert_eq!(persisted.current_model_uid, Some(1001));
     assert_eq!(persisted.providers[0].api_key, "sk-test");
+    assert!(persisted.providers[0].strict_tool_schema);
 
     let mut restarted = RuntimeFacade::create(&create_options).unwrap();
     restarted
@@ -2429,6 +2457,7 @@ fn studio_target_agent_resolves_runtime_cluster_focus_and_profile_ids() {
         retrieval: None,
         system_prompt_constraints: SystemPromptConstraints::default(),
         frontend_widgets_enabled: true,
+        tool_protocol: ai_assistant::ToolProtocol::default(),
     };
     let mut registries = RuntimeRegistries::default();
     registries.agent_clusters.insert(
@@ -3398,6 +3427,46 @@ fn restored_ledger_tail_assistant_tool_call_enters_executing() {
     );
     assert_eq!(
         recovery.execution_plans[0].tools,
+        vec!["QueryLedger --conversation_id current".to_string()]
+    );
+}
+
+#[test]
+fn restored_native_tool_call_preserves_provider_call_identity() {
+    let call = llm_gateway::ToolCall::function(
+        "provider-call-7",
+        "QueryLedger",
+        r#"{"conversation_id":"current"}"#,
+    );
+    let mut metadata = ai_assistant::ledger::LedgerMessageMeta::default();
+    metadata
+        .extra
+        .insert("tool_calls".to_string(), json!([call]));
+    metadata
+        .extra
+        .insert("tool_protocol".to_string(), json!("native_fc"));
+    let records = vec![ai_assistant::ledger::LedgerRecord {
+        record_id: 1,
+        conversation_id: "old-runtime-id".to_string(),
+        agent_id: "agent-a".to_string(),
+        agent_name: "Agent A".to_string(),
+        role: ai_assistant::ledger::LedgerRole::Assistant,
+        content: String::new(),
+        metadata,
+        created_at: "2026-06-23T10:00:00+08:00".to_string(),
+    }];
+
+    let recovery = restored_conversation_recovery(&records);
+
+    assert!(recovery.entry_states.is_empty());
+    assert_eq!(recovery.execution_plans.len(), 1);
+    let plan = &recovery.execution_plans[0];
+    assert_eq!(plan.call_ids, vec!["provider-call-7".to_string()]);
+    assert_eq!(plan.tool_call_refs.len(), 1);
+    assert_eq!(plan.tool_call_refs[0].id, "provider-call-7");
+    assert_eq!(plan.tool_call_refs[0].name, "QueryLedger");
+    assert_eq!(
+        plan.tools,
         vec!["QueryLedger --conversation_id current".to_string()]
     );
 }
@@ -4539,6 +4608,7 @@ fn provider_config_v1_accepts_api_paradigm() {
             "name": "OpenAI Responses",
             "type": "openai",
             "api_paradigm": "openai_responses",
+            "strictToolSchema": true,
             "api_key": "sk-test",
             "base_url": "https://api.openai.com",
             "enabled_models": [{
@@ -4556,6 +4626,7 @@ fn provider_config_v1_accepts_api_paradigm() {
         provider.api_paradigm,
         Some(llm_gateway::ApiParadigm::OpenAiResponses)
     );
+    assert!(provider.strict_tool_schema);
 }
 
 #[test]

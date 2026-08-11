@@ -49,6 +49,10 @@ pub struct ChatMessage {
     /// 思考模型返回的 reasoning_content（DeepSeek 等要求下一轮原样传回）
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reasoning_content: Option<String>,
+    /// Provider-native continuation items that must be replayed verbatim.
+    /// Currently used by OpenAI Responses for reasoning/function-call items.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub provider_items: Option<Vec<serde_json::Value>>,
 }
 
 impl ChatMessage {
@@ -61,6 +65,7 @@ impl ChatMessage {
             name: None,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
     pub fn system_cached(content: impl Into<String>) -> Self {
@@ -72,6 +77,7 @@ impl ChatMessage {
             name: None,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
     pub fn user(content: impl Into<String>) -> Self {
@@ -83,6 +89,7 @@ impl ChatMessage {
             name: None,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -94,6 +101,7 @@ impl ChatMessage {
             name: None,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
     /// 创建 assistant 消息，携带文本内容与 tool_calls（兼容需要保留少量说明文本的 FC 轮次）
@@ -109,6 +117,7 @@ impl ChatMessage {
             name: None,
             tool_calls: Some(tool_calls),
             reasoning_content: None,
+            provider_items: None,
         }
     }
     /// 创建 assistant 消息，携带 tool_calls（function calling 模式）
@@ -124,6 +133,7 @@ impl ChatMessage {
             name: None,
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
     /// 创建带配对 ID 的 tool 消息（function calling 模式）
@@ -140,6 +150,7 @@ impl ChatMessage {
             name: Some(name.into()),
             tool_calls: None,
             reasoning_content: None,
+            provider_items: None,
         }
     }
 }
@@ -256,6 +267,10 @@ pub struct LlmResponse {
     /// 思考模型返回的 reasoning_content（需要随下一轮 assistant 历史传回）
     #[serde(default)]
     pub reasoning_content: Option<String>,
+    /// Provider-native output items required to continue the conversation
+    /// without losing protocol state (notably OpenAI Responses reasoning).
+    #[serde(default)]
+    pub provider_items: Option<Vec<serde_json::Value>>,
 }
 
 // ============================================================================
@@ -279,6 +294,10 @@ pub struct FunctionDefinition {
     pub description: String,
     /// 参数 JSON Schema（type: "object", properties: {...}, required: [...]）
     pub parameters: serde_json::Value,
+    /// Request strict JSON-Schema adherence when the selected provider
+    /// supports it. Adapters that do not expose this flag ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 /// 模型返回的 tool_call

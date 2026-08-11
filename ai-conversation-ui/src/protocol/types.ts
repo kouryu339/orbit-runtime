@@ -51,6 +51,15 @@ export type FrontendSnapshotPayload = {
   error?: string;
   pending_permissions?: PendingToolPermission[];
   pendingPermissions?: PendingToolPermission[];
+  assistant_stream?: AssistantStreamView | null;
+};
+
+export type AssistantStreamView = {
+  agent_id: string;
+  turn_id: number;
+  attempt: number;
+  sequence: number;
+  content: string;
 };
 
 export type ToolEffect = 'read_only' | 'controlled_change' | 'destructive';
@@ -121,6 +130,7 @@ export type ConversationState = {
   agents: Array<Record<string, unknown>>;
   plan?: unknown;
   pendingPermissions: PendingToolPermission[];
+  assistantStream?: AssistantStreamView;
   lastError?: string;
 };
 

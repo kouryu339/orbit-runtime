@@ -41,7 +41,7 @@ static EMBEDDED_SYSTEM_SKILL_SOURCES: &[&str] = &[
 
 /// 构建所有内嵌 system skill 的 SkillEntry 列表（在 SkillManager::new_with_embedded 中调用）
 pub fn embedded_system_entries() -> Vec<(String, SkillEntry)> {
-    EMBEDDED_SYSTEM_SKILL_SOURCES
+    let mut entries = EMBEDDED_SYSTEM_SKILL_SOURCES
         .iter()
         .map(|src| {
             let skill = parse_embedded(src);
@@ -53,7 +53,25 @@ pub fn embedded_system_entries() -> Vec<(String, SkillEntry)> {
             };
             (name, entry)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for (source, alias) in [
+        ("thinking", "thinking-fc"),
+        ("thinking-pro", "thinking-pro-fc"),
+    ] {
+        if let Some((_, entry)) = entries.iter().find(|(name, _)| name == source) {
+            let mut alias_entry = entry.clone();
+            alias_entry.name = alias.to_string();
+            if let Some(skill) = alias_entry.skill.as_mut() {
+                skill.metadata.name = alias.to_string();
+                skill.metadata.description = format!(
+                    "{} Native function-calling transport profile.",
+                    skill.metadata.description
+                );
+            }
+            entries.push((alias.to_string(), alias_entry));
+        }
+    }
+    entries
 }
 
 #[cfg(test)]
@@ -130,7 +148,7 @@ mod tests {
         assert!(thinking_pro.instructions.contains("最内层循环"));
         assert!(thinking_pro
             .instructions
-            .contains("脚本内调用外部工具是 `N: EXEC Tool ...`"));
+            .contains("脚本内调用外部工具固定使用 `N: EXEC Tool ...`"));
         assert!(thinking_pro
             .instructions
             .contains("不得写成 `N: result = EXEC ToolName ...`"));
@@ -148,13 +166,11 @@ mod tests {
             .contains("正确：`--page_id 1.page_id`；错误：`--page_id \"1.page_id\"`"));
         assert!(thinking_pro
             .instructions
-            .contains("优先把完整脚本声明为多行 `$script` 变量"));
+            .contains("原生 FC 模式把脚本文本直接放入 `script` 字段"));
+        assert!(thinking_pro.instructions.contains("不要额外增加无关转义层"));
         assert!(thinking_pro
             .instructions
-            .contains("不要额外添加 JSON 或工具参数转义层"));
-        assert!(thinking_pro
-            .instructions
-            .contains("才需要为该最外层双引号字符串转义一次内部 `\\\"` 和换行"));
+            .contains("EXEC 兼容模式可把完整脚本声明为多行 `$script` 变量"));
         assert!(thinking_pro
             .instructions
             .contains("不得写成 `name:String(=value)`"));

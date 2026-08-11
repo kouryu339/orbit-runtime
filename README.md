@@ -34,6 +34,7 @@ Product host
 | **Reliable background work** | Task-scoped authorization, wait/wakeup, input requests, progress, revision, two-phase acceptance, pause, cancellation, and recovery. |
 | **Embeddable native runtime** | Keep Rust internals behind a stable ABI while hosts use C++, Python, Go, Rust, or another bridge. |
 | **Observable and recoverable state** | Consume ordered events and export snapshots without reconstructing truth from chat text. |
+| **Native or compatible tool protocols** | Select native function calling, legacy textual `EXEC`, or a tool-disabled Agent without hidden fallback between modes. |
 | **Out-of-process business tools** | Implement tool sidecars through a language-neutral gRPC contract and keep product integrations isolated. |
 
 ## Assemble The Cluster You Need
@@ -129,11 +130,41 @@ Full working configuration and lifecycle details:
 - [Progressive Skills and per-Agent RAG](examples/guides/en/07-progressive-skills-and-rag.md)
 - [Connect an external RAG service](examples/guides/en/08-external-rag.md)
 
+## Native Function Calling
+
+Each Agent uses one tool transport selected by `toolProtocol`: `native_fc`,
+`exec_legacy`, or `disabled`. Omitting the field defaults to `native_fc`;
+legacy textual `EXEC` behavior must be selected explicitly. Native FC is
+implemented across OpenAI Chat Completions, OpenAI Responses, and Anthropic
+Messages adapters.
+Tool names, JSON arguments, provider call IDs, Responses output items, and
+formal `tool` results remain structured in the Ledger and survive snapshot
+restoration. Runtime does not silently retry a native call through textual
+`EXEC`.
+
+Providers that implement the strict function-schema subset can additionally
+set `strictToolSchema: true`; compatible endpoints keep it disabled. See the
+[Runtime cluster configuration contract](agent_runtime_ffi/docs/en/02-runtime-cluster-config-contract.md)
+for the full configuration and recovery rules.
+
 ## 0.4.8 Beta Focus
 
-The `0.4.8-beta.1` release candidate adds bounded diagnostics for latency
-investigation without placing full logs, prompts, or tool payloads on the
-Runtime event path:
+The refreshed `0.4.8-beta.1` release candidate makes native function calling
+the default Agent tool transport, adds focused streaming projection, and keeps
+bounded diagnostics off the Runtime event payload path:
+
+- **Native FC by default**: Agents that omit `toolProtocol` use `native_fc`;
+  deployments that still need textual `EXEC` select `exec_legacy` explicitly.
+- **Three native provider paradigms**: OpenAI Chat Completions, OpenAI
+  Responses, and Anthropic Messages preserve structured tool calls, arguments,
+  provider call IDs, and formal tool results across Ledger recovery.
+- **Focused streaming snapshots**: all native FC requests stream internally,
+  while only the focused Agent's ephemeral text is projected through
+  `frontend:state_snapshot.assistant_stream`. Background Agent streams remain
+  internal and final content is committed once through the Ledger.
+- **Strict tool schemas**: compatible providers may enable closed strict
+  function schemas; invalid active tool metadata fails explicitly without
+  silently falling back to textual `EXEC`.
 
 - **Model latency diagnostics**: every provider attempt records start, success,
   failure, retry scheduling, backoff, exhaustion, response headers, streaming

@@ -215,15 +215,46 @@ pub struct PersistedMessage {
 
 impl PersistedMessage {
     pub fn from_ledger(ledger: LedgerRecord) -> Self {
+        let tool_call_id = ledger
+            .metadata
+            .extra
+            .get("tool_call_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let name = ledger
+            .metadata
+            .extra
+            .get("tool_protocol_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let tool_calls = ledger
+            .metadata
+            .extra
+            .get("tool_calls")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok());
+        let reasoning_content = ledger
+            .metadata
+            .extra
+            .get("reasoning_content")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let provider_items = ledger
+            .metadata
+            .extra
+            .get("provider_items")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok());
         Self {
             inner: Message {
                 role: ledger.role.as_str().to_string(),
                 content: ledger.content.clone(),
                 cache_control: false,
-                tool_call_id: None,
-                name: None,
-                tool_calls: None,
-                reasoning_content: None,
+                tool_call_id,
+                name,
+                tool_calls,
+                reasoning_content,
+                provider_items,
             },
             agent_id: Some(ledger.agent_id.clone()),
             display: None,
@@ -1067,6 +1098,7 @@ pub const RECOVERY_TRANSIENT_KEYS: &[&str] = &[
     "pause_requested",
     "pause_mode",
     "waiting_for_input",
+    "assistant_stream",
     // turn_id 是“当前 turn 的事件序号”，跨进程恢复后由新 thinking on_enter
     // 重新从 0 自增即可，前端凭 turn_id 过滤旧 turn 残余事件，恢复时本就需要清零。
     "turn_id",

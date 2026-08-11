@@ -77,6 +77,7 @@ impl RuntimeFacade {
                     base_url: provider.base_url.clone(),
                     api_paradigm: provider.api_paradigm,
                     prompt_cache_control: provider.prompt_cache_control,
+                    strict_tool_schema: provider.strict_tool_schema,
                 })
         });
 
@@ -118,6 +119,7 @@ impl RuntimeFacade {
                 }
                 existing.api_paradigm = provider.api_paradigm;
                 existing.prompt_cache_control = provider.prompt_cache_control;
+                existing.strict_tool_schema = provider.strict_tool_schema;
             } else {
                 self.llm_config.providers.push(provider);
             }
@@ -144,6 +146,7 @@ impl RuntimeFacade {
                 base_url: p.base_url.clone(),
                 api_paradigm: p.api_paradigm,
                 prompt_cache_control: p.prompt_cache_control,
+                strict_tool_schema: p.strict_tool_schema,
             })
             .collect();
         bundle.models = self
@@ -187,6 +190,7 @@ impl RuntimeFacade {
                     base_url: provider.base_url.clone(),
                     api_paradigm: provider.api_paradigm,
                     prompt_cache_control: provider.prompt_cache_control,
+                    strict_tool_schema: provider.strict_tool_schema,
                     api_key_set: !provider.api_key.is_empty(),
                 })
                 .collect(),

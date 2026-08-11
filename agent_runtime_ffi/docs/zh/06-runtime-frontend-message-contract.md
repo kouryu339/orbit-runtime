@@ -27,6 +27,34 @@ payload.ledger_delta.record
 是本次快照携带的可选消息增量。没有 `ledger_delta` 时，事件只表示状态、能力位或
 其他快照字段发生变化。
 
+### 6.2.1 焦点 Assistant 流
+
+原生函数调用模式的模型请求统一采用流式执行。Runtime 不新增独立的公开流事件，
+而是通过现有快照中的 `assistant_stream` 字段投影当前焦点 Agent 的临时正文：
+
+```json
+{
+  "assistant_stream": {
+    "agent_id": "boss",
+    "turn_id": 12,
+    "attempt": 1,
+    "sequence": 8,
+    "content": "正在生成的 Assistant 正文"
+  }
+}
+```
+
+`assistant_stream` 为上述对象或 `null`，其契约如下：
+
+- 只投影当前焦点 Agent；后台 Agent 仍在内部流式执行，但不会产生前端渲染更新；
+- 它是临时展示状态，不得持久化，也不得在会话恢复时重放；
+- Runtime 合并片段时递增 `sequence`，宿主应替换同一个临时气泡，而不是追加新消息；
+- 重试或失败时通过 `null` 清除；
+- 请求成功后，由最终规范化的 `assistant` Ledger 记录替换临时流。流片段本身不进入 Ledger。
+
+因此宿主仍然只消费 `frontend:state_snapshot`：把 `assistant_stream` 渲染为当前临时
+Assistant 气泡，并在最终 Ledger 记录到达时完成替换。
+
 ## 6.3 消息角色
 
 | `record.role` | 前端用途 |
@@ -51,6 +79,10 @@ payload.ledger_delta.record
 - 每个可见工具调用位置会投影成工具状态占位符；
 - Widget 控件标签可以保留为独占行，供前端渲染为输入控件；
 - LLM 自然语言正文可以使用 Markdown，前端应按本文档的统一内容块规则渲染。
+
+原生 FC 模式下，`assistant` 记录可以只有结构化 `tool_calls` 而没有可见正文；前端不应
+为这种记录创建空白气泡。工具状态仍由同一 `call_id` 的 `gateway_message` / `tool`
+记录驱动。Ledger 中的工具结果保持正式 `role: "tool"`，不是 user 消息。
 
 工具状态占位符语法：
 

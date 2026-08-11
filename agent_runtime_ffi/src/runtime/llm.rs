@@ -28,6 +28,7 @@ pub(crate) struct ProviderDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) api_paradigm: Option<llm_gateway::ApiParadigm>,
     pub(crate) prompt_cache_control: bool,
+    pub(crate) strict_tool_schema: bool,
     pub(crate) api_key_set: bool,
 }
 
@@ -43,6 +44,8 @@ pub(crate) struct ProviderConfig {
     pub(crate) api_paradigm: Option<llm_gateway::ApiParadigm>,
     #[serde(alias = "promptCacheControl", default)]
     pub(crate) prompt_cache_control: bool,
+    #[serde(alias = "strictToolSchema", default)]
+    pub(crate) strict_tool_schema: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -118,6 +121,8 @@ pub(crate) struct LlmRegistrationProvider {
     api_paradigm: Option<llm_gateway::ApiParadigm>,
     #[serde(alias = "promptCacheControl")]
     prompt_cache_control: bool,
+    #[serde(alias = "strictToolSchema")]
+    strict_tool_schema: bool,
     #[serde(alias = "enabledModels")]
     enabled_models: Vec<LlmRegistrationModel>,
 }
@@ -158,6 +163,8 @@ pub(crate) struct HostUserProviderConfig {
     api_paradigm: Option<llm_gateway::ApiParadigm>,
     #[serde(alias = "promptCacheControl", default)]
     prompt_cache_control: bool,
+    #[serde(alias = "strictToolSchema", default)]
+    strict_tool_schema: bool,
     #[serde(alias = "enabledModels", default)]
     enabled_models: Vec<HostEnabledModel>,
 }
@@ -182,6 +189,7 @@ impl From<HostUserProviderConfig> for llm_gateway::UserProviderConfig {
             base_url: provider.base_url,
             api_paradigm: provider.api_paradigm,
             prompt_cache_control: provider.prompt_cache_control,
+            strict_tool_schema: provider.strict_tool_schema,
             enabled_models: provider
                 .enabled_models
                 .into_iter()
@@ -229,11 +237,17 @@ pub(crate) fn build_llm_registry_and_config(
         current_model_uid,
     };
     validate_llm_config(&config)?;
+    let model_uids = config
+        .providers
+        .iter()
+        .flat_map(|provider| provider.enabled_models.iter().map(|model| model.uid))
+        .collect();
     let registry = RuntimeLlmRegistry {
         id: registration.id,
         current_model_uid,
         provider_count,
         model_count,
+        model_uids,
     };
     Ok((registry, config))
 }
@@ -269,6 +283,7 @@ fn llm_registration_provider_to_runtime(
         base_url: provider.base_url,
         api_paradigm: provider.api_paradigm,
         prompt_cache_control: provider.prompt_cache_control,
+        strict_tool_schema: provider.strict_tool_schema,
         enabled_models: provider
             .enabled_models
             .into_iter()

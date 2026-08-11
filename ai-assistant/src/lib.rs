@@ -62,6 +62,7 @@ pub mod state;
 pub mod state_machine;
 pub mod systems;
 pub mod tool_runner;
+pub mod tool_schema;
 pub mod views;
 
 // Tool crates are linked by the top-level binary crate through inventory
@@ -163,6 +164,24 @@ pub struct AIAssistantConfig {
     /// Maps logical state names to concrete system-layer skills.
     #[serde(alias = "systemSkills", default)]
     pub system_skills: std::collections::BTreeMap<String, String>,
+    /// Mutually exclusive model/tool transport. There is intentionally no
+    /// automatic fallback between native FC and the legacy EXEC parser.
+    #[serde(alias = "toolProtocol", default)]
+    pub tool_protocol: ToolProtocol,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolProtocol {
+    NativeFc,
+    ExecLegacy,
+    Disabled,
+}
+
+impl Default for ToolProtocol {
+    fn default() -> Self {
+        Self::NativeFc
+    }
 }
 
 fn default_language() -> String {
@@ -188,6 +207,7 @@ impl Default for AIAssistantConfig {
             system_prompt_constraints: SystemPromptConstraints::default(),
             frontend_widgets_enabled: true,
             system_skills: std::collections::BTreeMap::new(),
+            tool_protocol: ToolProtocol::default(),
         }
     }
 }
@@ -210,5 +230,6 @@ mod tests {
         assert_eq!(config.name, "AI助手");
         assert_eq!(config.max_tokens, 4096);
         assert!(config.effective_frontend_widgets_enabled());
+        assert_eq!(config.tool_protocol, ToolProtocol::NativeFc);
     }
 }

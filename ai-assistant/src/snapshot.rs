@@ -33,6 +33,17 @@ pub struct FrontendStateSnapshot {
     pub plan: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_permissions: Vec<crate::permission::PendingToolPermission>,
+    #[serde(default)]
+    pub assistant_stream: Option<AssistantStreamView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssistantStreamView {
+    pub agent_id: String,
+    pub turn_id: u64,
+    pub attempt: u32,
+    pub sequence: u64,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +174,15 @@ impl SnapshotBuilder {
                 .and_then(|plan| serde_json::to_value(plan).ok()),
             None => None,
         };
+        let assistant_stream = match active_cache.as_ref() {
+            Some(cache) => cache
+                .get::<AssistantStreamView>(keys::ASSISTANT_STREAM)
+                .await
+                .ok()
+                .flatten()
+                .filter(|stream| stream.agent_id == active_agent_id),
+            None => None,
+        };
         let mut agents = Vec::with_capacity(cluster_snapshot.agents.len());
         let mut conversation_state = ConversationState::Waiting;
         for agent in cluster_snapshot.agents {
@@ -229,6 +249,7 @@ impl SnapshotBuilder {
             conversation_state,
             plan,
             pending_permissions,
+            assistant_stream,
         }
     }
 }

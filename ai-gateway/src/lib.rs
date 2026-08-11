@@ -63,6 +63,7 @@ pub mod dispatch;
 pub mod key_store;
 pub mod ocr;
 pub mod openai_compat;
+pub mod openai_responses;
 pub mod providers;
 pub mod request_context;
 pub mod retry;
@@ -96,6 +97,6 @@ pub use vlm::{call_qwen_vl, call_video_vlm, call_vlm};
 pub use dispatch::{
     call_llm, call_llm_cancellable, call_llm_decide, call_llm_decide_cancellable,
     call_llm_decide_streaming, call_llm_decide_streaming_cancellable, call_llm_json_cancellable,
-    call_llm_with_tools, call_llm_with_tools_cancellable, model_supports_tool_choice,
-    model_tool_choice_style,
+    call_llm_with_tools, call_llm_with_tools_cancellable,
+    call_llm_with_tools_streaming_cancellable, model_supports_tool_choice, model_tool_choice_style,
 };

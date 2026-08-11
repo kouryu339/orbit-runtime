@@ -9,6 +9,8 @@ pub enum ApiFormat {
     OpenAI,
     /// Anthropic Messages 格式（/v1/messages）
     Anthropic,
+    /// OpenAI Responses format (`/v1/responses`).
+    OpenAIResponses,
 }
 
 /// `tool_choice` 强制调用方式

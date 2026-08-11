@@ -116,6 +116,8 @@ pub struct ResourceAgentProfileConfig {
     pub system_prompt_constraints: SystemPromptConstraints,
     #[serde(alias = "frontendWidgetsEnabled", default = "default_true")]
     pub frontend_widgets_enabled: bool,
+    #[serde(alias = "toolProtocol", default)]
+    pub tool_protocol: ai_assistant::ToolProtocol,
 }
 
 impl Default for ResourceAgentProfileConfig {
@@ -130,6 +132,7 @@ impl Default for ResourceAgentProfileConfig {
             retrieval: None,
             system_prompt_constraints: SystemPromptConstraints::default(),
             frontend_widgets_enabled: true,
+            tool_protocol: ai_assistant::ToolProtocol::default(),
         }
     }
 }

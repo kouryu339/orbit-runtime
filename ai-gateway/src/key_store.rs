@@ -38,6 +38,7 @@ pub struct ProviderRuntimeConfig {
     pub base_url: String,
     pub api_paradigm: Option<crate::config::ApiParadigm>,
     pub prompt_cache_control: bool,
+    pub strict_tool_schema: bool,
 }
 
 /// provider_uid → provider runtime config

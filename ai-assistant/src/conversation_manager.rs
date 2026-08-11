@@ -494,6 +494,7 @@ impl ConversationManager {
         tools: Vec<String>,
         call_ids: Vec<String>,
         recovery_results: BTreeMap<String, crate::decision::ToolResult>,
+        tool_call_refs: Vec<crate::context::ToolCallRef>,
     ) -> Result<()> {
         let runtime = self.require_runtime(conversation_id).await?;
         let _guard = runtime.lock_command().await?;
@@ -515,6 +516,13 @@ impl ConversationManager {
             .await?;
         cache
             .set(crate::context::keys::PENDING_TOOL_CALL_IDS, &call_ids, None)
+            .await?;
+        cache
+            .set(
+                crate::context::keys::PENDING_TOOL_CALLS,
+                &tool_call_refs,
+                None,
+            )
             .await?;
         cache
             .set(

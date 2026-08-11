@@ -127,6 +127,7 @@ async fn compact_with_summary(
         name: None,
         tool_calls: None,
         reasoning_content: None,
+        provider_items: None,
     };
 
     let mut compact: Vec<Message> = Vec::with_capacity(head_keep + 1 + tail_keep);
@@ -175,6 +176,7 @@ async fn summarize_with_llm(
         name: None,
         tool_calls: None,
         reasoning_content: None,
+        provider_items: None,
     };
 
     let mut msgs: Vec<llm_gateway::ChatMessage> = vec![system_msg];
@@ -191,6 +193,7 @@ async fn summarize_with_llm(
                         name: None,
                         tool_calls: None,
                         reasoning_content: None,
+                        provider_items: None,
                     });
                 }
             }
@@ -205,6 +208,7 @@ async fn summarize_with_llm(
                         name: None,
                         tool_calls: None,
                         reasoning_content: None,
+                        provider_items: None,
                     });
                 }
             }
@@ -223,6 +227,7 @@ async fn summarize_with_llm(
         name: None,
         tool_calls: None,
         reasoning_content: None,
+        provider_items: None,
     });
     llm_gateway::call_llm(model_uid, &msgs, None, None, None)
         .await

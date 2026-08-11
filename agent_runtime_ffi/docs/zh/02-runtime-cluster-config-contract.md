@@ -90,6 +90,36 @@ profile 提供默认映射，`cluster.agents[].systemSkills` 按键覆盖 profil
 非 role Skill。`thinking-pro` 不授予持久化 Workflow 目录权限；这类工具仍由宿主通过
 role/feature Skill 白名单开放。当前不接受除 `thinking` 外的状态键。
 
+工具调用传输协议也归属于 Agent profile 或具体 cluster Agent：
+
+```json
+{
+  "id": "service.researcher",
+  "toolProtocol": "native_fc",
+  "systemSkills": { "thinking": "thinking-pro" }
+}
+```
+
+`toolProtocol` 取值为：
+
+- `native_fc`：通过上游 API 原生 Function Calling 调用工具；省略 `toolProtocol` 时
+  默认使用此模式。Runtime 自动使用 `thinking-fc` 或 `thinking-pro-fc` 传输 profile；
+- `exec_legacy`：显式启用兼容的文本 `EXEC` 解释器；
+- `disabled`：不向模型提供工具，也不解释模型正文中的工具语法。
+
+三种模式互斥。`native_fc` 失败时会明确失败或在同一 FC 协议内重试，禁止静默回退到
+`exec_legacy`。原生调用会把 `assistant(tool_calls)`、Provider `call_id` 和
+`tool(tool_call_id)` 作为正式 Ledger 事实持久化；恢复后仍按原生协议回传，不转换成
+伪造的 user 消息。
+
+这次默认值切换是有意行为：未配置 `toolProtocol` 的配置现在会使用 `native_fc`。
+仍需保留文本 `EXEC` 行为的部署必须显式设置 `"toolProtocol": "exec_legacy"`。
+
+Provider 注册可通过 `"strictToolSchema": true` 显式启用严格函数 Schema，兼容端点默认值为
+`false`。启用后，可选参数会表达为允许 `null` 的必填字段，Schema 不携带默认值，并通过
+`additionalProperties: false` 关闭对象。若已激活工具的元数据不能生成封闭 Schema，Runtime
+会报告配置错误，不会因此回退到文本 `EXEC`。
+
 ## 2.2 已移除 Runtime Config 字段的归属
 
 | 旧字段 | 当前归属 |
