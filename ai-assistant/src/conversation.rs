@@ -370,8 +370,10 @@ impl Conversation {
     }
 
     pub async fn restore_session(&self) -> Result<crate::persistence::RestoreResult> {
-        let guard = self.default_agent.lock().await;
-        let restore = guard.restore_session().await?;
+        let restore = {
+            let guard = self.default_agent.lock().await;
+            guard.restore_session().await?
+        };
         let session_id = crate::persistence::current_session_id();
         if !session_id.is_empty() {
             match crate::persistence::load_full_session(&session_id).await {
@@ -389,6 +391,9 @@ impl Conversation {
                 tracing::warn!("restore agent runtimes failed: {}", e);
             }
             self.gateway.restore_focus_from_ledger().await;
+        }
+        for agent_id in self.cluster.list_agent_ids().await {
+            self.cluster.resume_recovered_agent(&agent_id).await?;
         }
         Ok(restore)
     }

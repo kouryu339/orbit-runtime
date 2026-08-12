@@ -3618,7 +3618,10 @@ fn best_effort_conversation_snapshot_exports_ledger_when_not_waiting() {
                     "conversation_id": "old-runtime-id",
                     "agent_id": "agent-a",
                     "agent_name": "Agent A",
-                    "role": "user",
+                    // Keep the restored conversation stable until this test
+                    // explicitly marks it as stopping. A user tail now resumes
+                    // automatically as part of the recovery contract.
+                    "role": "assistant",
                     "content": "save this even while stopping",
                     "metadata": {},
                     "created_at": "2026-06-12T18:00:00+08:00"

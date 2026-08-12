@@ -57,6 +57,44 @@ class TestTransport implements ConversationTransport {
   }
 }
 
+class ControlledTransport implements ConversationTransport {
+  readonly contract = TRANSPORT_CONTRACT;
+  readonly id = 'controlled';
+  private handlers: ConversationTransportHandlers | null = null;
+  readonly disconnect = vi.fn();
+  readonly send = vi.fn(async (request: SendMessageRequest) => ({
+    accepted: Boolean(request.content),
+  }));
+  readonly pause = vi.fn(async () => ({ accepted: true }));
+
+  async connect(
+    _context: unknown,
+    handlers: ConversationTransportHandlers,
+  ): Promise<ConversationConnection> {
+    this.handlers = handlers;
+    handlers.connection('connected');
+    handlers.event({
+      type: 'conversation-created',
+      conversationId: 'conversation-1',
+    });
+    return {
+      conversationId: 'conversation-1',
+      disconnect: this.disconnect,
+    };
+  }
+
+  snapshot(revision: number, conversationState: 'waiting' | 'thinking'): void {
+    this.handlers?.event({
+      type: 'state-snapshot',
+      conversationId: 'conversation-1',
+      payload: {
+        revision,
+        conversation_state: conversationState,
+      },
+    });
+  }
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -503,6 +541,47 @@ describe('AgentRuntimeConversationElement', () => {
     await element.updateComplete;
 
     expect(element.shadowRoot?.querySelector('textarea')?.disabled).toBe(false);
+  });
+
+  it('defers the first message after reconnect until the waiting snapshot arrives', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new ControlledTransport();
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+
+    const sendResult = element.send('first after restart');
+    expect(transport.send).not.toHaveBeenCalled();
+
+    transport.snapshot(1, 'waiting');
+
+    await expect(sendResult).resolves.toMatchObject({ accepted: true });
+    expect(transport.send).toHaveBeenCalledOnce();
+    expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'first after restart',
+    }));
+  });
+
+  it('defers the first message after pause until the waiting snapshot arrives', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new ControlledTransport();
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+    transport.snapshot(1, 'waiting');
+    transport.snapshot(2, 'thinking');
+
+    await element.pause();
+    const sendResult = element.send('first after pause');
+    expect(transport.send).not.toHaveBeenCalled();
+
+    transport.snapshot(3, 'waiting');
+
+    await expect(sendResult).resolves.toMatchObject({ accepted: true });
+    expect(transport.send).toHaveBeenCalledOnce();
+    expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'first after pause',
+    }));
   });
 
   it('shows loading while running before assistant output, even with a pending message', async () => {

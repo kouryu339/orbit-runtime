@@ -828,6 +828,8 @@ export class AgentRuntimeConversationElement extends LitElement {
     revealContentLengths = new Map();
     persistenceUnsubscribe = null;
     persistenceController = null;
+    sendDeferralReason = null;
+    deferredSend = null;
     constructor() {
         super();
         this.transport = null;
@@ -874,6 +876,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         if (!this.transport)
             throw new Error('Conversation transport is not configured.');
         this.disconnect();
+        this.sendDeferralReason = 'connecting';
         // A reconnect to the same conversation must not carry transient running
         // flags from the previous connection into the new authoritative snapshot.
         // openConversation() already resets, but the host also reconnects in place
@@ -897,6 +900,8 @@ export class AgentRuntimeConversationElement extends LitElement {
             });
         }
         catch (error) {
+            this.sendDeferralReason = null;
+            this.rejectDeferredSend('Conversation connection failed.');
             this.dispatch({ type: 'connection', state: 'disconnected' });
             this.emit('agent-conversation-error', {
                 code: 'transport-connect-failed',
@@ -918,6 +923,8 @@ export class AgentRuntimeConversationElement extends LitElement {
             this.dispatch({ type: 'connection', state: 'disconnected' });
             this.emitConnectionChange('disconnected');
         }
+        this.sendDeferralReason = null;
+        this.rejectDeferredSend('Conversation was disconnected before the message could be sent.');
     }
     async openConversation(conversationId) {
         this.disconnect();
@@ -1025,10 +1032,20 @@ export class AgentRuntimeConversationElement extends LitElement {
             return { accepted: false, rejectReason: 'Message is empty.' };
         if (!this.transport)
             return { accepted: false, rejectReason: 'Transport is not configured.' };
-        if (!this.state.conversationId)
-            return { accepted: false, rejectReason: 'Conversation is not ready.' };
         if (!this.canCompose()) {
+            if (this.sendDeferralReason) {
+                return this.deferSend(value, options);
+            }
+            if (!this.state.conversationId) {
+                return { accepted: false, rejectReason: 'Conversation is not ready.' };
+            }
             return { accepted: false, rejectReason: 'Conversation is still running.' };
+        }
+        return this.performSend(value, options);
+    }
+    async performSend(value, options) {
+        if (!this.transport || !this.state.conversationId) {
+            return { accepted: false, rejectReason: 'Conversation is not ready.' };
         }
         const clientMessageId = `local-user-${Date.now()}-${++this.localMessageSequence}`;
         this.dispatch({
@@ -1081,7 +1098,20 @@ export class AgentRuntimeConversationElement extends LitElement {
         if (!conversationId || !this.transport?.pause) {
             return { accepted: false, rejectReason: 'Pause is not supported.' };
         }
-        const result = await this.transport.pause({ conversationId });
+        this.sendDeferralReason = 'pausing';
+        let result;
+        try {
+            result = await this.transport.pause({ conversationId });
+        }
+        catch (error) {
+            this.sendDeferralReason = null;
+            this.rejectDeferredSend('Pause failed before the queued message could be sent.');
+            throw error;
+        }
+        if (!result.accepted) {
+            this.sendDeferralReason = null;
+            this.rejectDeferredSend(result.rejectReason ?? 'Pause was rejected before the queued message could be sent.');
+        }
         this.emit('agent-conversation-pause', { conversationId, result });
         return result;
     }
@@ -1224,7 +1254,9 @@ export class AgentRuntimeConversationElement extends LitElement {
     render() {
         const displayItems = this.createDisplayItems();
         const scheme = this.resolvedColorScheme();
-        const activityLabel = this.activityLabel();
+        const activityLabel = this.state.assistantStream?.content
+            ? ''
+            : this.activityLabel();
         return html `<section class="shell" part="shell">
       <header class="header" part="header">
         <slot name="header">
@@ -2241,6 +2273,18 @@ export class AgentRuntimeConversationElement extends LitElement {
                 },
             });
         }
+        const stream = this.state.assistantStream;
+        if (stream?.content) {
+            items.push({
+                kind: 'record',
+                key: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
+                record: {
+                    record_id: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
+                    role: 'assistant',
+                    content: stream.content,
+                },
+            });
+        }
         return items;
     }
     latestWidgetRecordKey(items) {
@@ -2299,6 +2343,7 @@ export class AgentRuntimeConversationElement extends LitElement {
                 event.payload.ledger_records) {
                 this.markRecordsRevealComplete(event.payload.ledger_records);
             }
+            this.releaseDeferredSendIfReady();
             return;
         }
         if (event.type === 'pending-user-message') {
@@ -2429,6 +2474,63 @@ export class AgentRuntimeConversationElement extends LitElement {
             this.state.snapshotReceived &&
             !this.state.awaitingAssistantResponse &&
             this.state.runtimeState === 'waiting';
+    }
+    deferSend(content, options) {
+        if (options.signal?.aborted) {
+            return Promise.resolve({
+                accepted: false,
+                rejectReason: 'Message send was aborted before the conversation became ready.',
+            });
+        }
+        if (this.deferredSend) {
+            return Promise.resolve({
+                accepted: false,
+                rejectReason: 'A message is already waiting for the conversation to become ready.',
+            });
+        }
+        return new Promise((resolve) => {
+            const deferred = { content, options, resolve };
+            if (options.signal) {
+                deferred.abortSignal = options.signal;
+                deferred.abortHandler = () => {
+                    if (this.deferredSend !== deferred)
+                        return;
+                    this.deferredSend = null;
+                    resolve({
+                        accepted: false,
+                        rejectReason: 'Message send was aborted before the conversation became ready.',
+                    });
+                };
+                options.signal.addEventListener('abort', deferred.abortHandler, { once: true });
+            }
+            this.deferredSend = deferred;
+            this.emit('agent-conversation-diagnostic', {
+                code: 'message-send-deferred',
+                message: 'Message send is waiting for an authoritative ready snapshot.',
+                reason: this.sendDeferralReason,
+            });
+        });
+    }
+    releaseDeferredSendIfReady() {
+        if (!this.sendDeferralReason || !this.canCompose())
+            return;
+        this.sendDeferralReason = null;
+        const deferred = this.takeDeferredSend();
+        if (!deferred)
+            return;
+        void this.performSend(deferred.content, deferred.options).then(deferred.resolve);
+    }
+    rejectDeferredSend(rejectReason) {
+        const deferred = this.takeDeferredSend();
+        deferred?.resolve({ accepted: false, rejectReason });
+    }
+    takeDeferredSend() {
+        const deferred = this.deferredSend;
+        this.deferredSend = null;
+        if (deferred?.abortSignal && deferred.abortHandler) {
+            deferred.abortSignal.removeEventListener('abort', deferred.abortHandler);
+        }
+        return deferred;
     }
     canSaveConversation() {
         return this.persistence.enabled &&

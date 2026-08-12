@@ -73,6 +73,16 @@ type ProviderRegistration = {
   enabled_models: ProviderRegistrationModel[];
 };
 
+type SendDeferralReason = 'connecting' | 'pausing';
+
+type DeferredSend = {
+  content: string;
+  options: SendOptions;
+  resolve: (result: SendResult) => void;
+  abortSignal?: AbortSignal;
+  abortHandler?: () => void;
+};
+
 export class AgentRuntimeConversationElement
   extends LitElement
   implements AgentRuntimeConversationPublicApi
@@ -930,6 +940,8 @@ export class AgentRuntimeConversationElement
   private readonly revealContentLengths = new Map<string, number>();
   private persistenceUnsubscribe: (() => void) | null = null;
   private persistenceController: object | null = null;
+  private sendDeferralReason: SendDeferralReason | null = null;
+  private deferredSend: DeferredSend | null = null;
 
   constructor() {
     super();
@@ -978,6 +990,7 @@ export class AgentRuntimeConversationElement
   async connect(): Promise<void> {
     if (!this.transport) throw new Error('Conversation transport is not configured.');
     this.disconnect();
+    this.sendDeferralReason = 'connecting';
     // A reconnect to the same conversation must not carry transient running
     // flags from the previous connection into the new authoritative snapshot.
     // openConversation() already resets, but the host also reconnects in place
@@ -1003,6 +1016,8 @@ export class AgentRuntimeConversationElement
         },
       );
     } catch (error) {
+      this.sendDeferralReason = null;
+      this.rejectDeferredSend('Conversation connection failed.');
       this.dispatch({ type: 'connection', state: 'disconnected' });
       this.emit('agent-conversation-error', {
         code: 'transport-connect-failed',
@@ -1024,6 +1039,8 @@ export class AgentRuntimeConversationElement
       this.dispatch({ type: 'connection', state: 'disconnected' });
       this.emitConnectionChange('disconnected');
     }
+    this.sendDeferralReason = null;
+    this.rejectDeferredSend('Conversation was disconnected before the message could be sent.');
   }
 
   async openConversation(conversationId: string): Promise<void> {
@@ -1123,9 +1140,22 @@ export class AgentRuntimeConversationElement
     const value = content.trim();
     if (!value) return { accepted: false, rejectReason: 'Message is empty.' };
     if (!this.transport) return { accepted: false, rejectReason: 'Transport is not configured.' };
-    if (!this.state.conversationId) return { accepted: false, rejectReason: 'Conversation is not ready.' };
     if (!this.canCompose()) {
+      if (this.sendDeferralReason) {
+        return this.deferSend(value, options);
+      }
+      if (!this.state.conversationId) {
+        return { accepted: false, rejectReason: 'Conversation is not ready.' };
+      }
       return { accepted: false, rejectReason: 'Conversation is still running.' };
+    }
+
+    return this.performSend(value, options);
+  }
+
+  private async performSend(value: string, options: SendOptions): Promise<SendResult> {
+    if (!this.transport || !this.state.conversationId) {
+      return { accepted: false, rejectReason: 'Conversation is not ready.' };
     }
 
     const clientMessageId =
@@ -1183,7 +1213,21 @@ export class AgentRuntimeConversationElement
     if (!conversationId || !this.transport?.pause) {
       return { accepted: false, rejectReason: 'Pause is not supported.' };
     }
-    const result = await this.transport.pause({ conversationId });
+    this.sendDeferralReason = 'pausing';
+    let result: CommandResult;
+    try {
+      result = await this.transport.pause({ conversationId });
+    } catch (error) {
+      this.sendDeferralReason = null;
+      this.rejectDeferredSend('Pause failed before the queued message could be sent.');
+      throw error;
+    }
+    if (!result.accepted) {
+      this.sendDeferralReason = null;
+      this.rejectDeferredSend(
+        result.rejectReason ?? 'Pause was rejected before the queued message could be sent.',
+      );
+    }
     this.emit('agent-conversation-pause', { conversationId, result });
     return result;
   }
@@ -2500,6 +2544,7 @@ export class AgentRuntimeConversationElement
       ) {
         this.markRecordsRevealComplete(event.payload.ledger_records);
       }
+      this.releaseDeferredSendIfReady();
       return;
     }
     if (event.type === 'pending-user-message') {
@@ -2640,6 +2685,65 @@ export class AgentRuntimeConversationElement
       this.state.snapshotReceived &&
       !this.state.awaitingAssistantResponse &&
       this.state.runtimeState === 'waiting';
+  }
+
+  private deferSend(content: string, options: SendOptions): Promise<SendResult> {
+    if (options.signal?.aborted) {
+      return Promise.resolve({
+        accepted: false,
+        rejectReason: 'Message send was aborted before the conversation became ready.',
+      });
+    }
+    if (this.deferredSend) {
+      return Promise.resolve({
+        accepted: false,
+        rejectReason: 'A message is already waiting for the conversation to become ready.',
+      });
+    }
+
+    return new Promise<SendResult>((resolve) => {
+      const deferred: DeferredSend = { content, options, resolve };
+      if (options.signal) {
+        deferred.abortSignal = options.signal;
+        deferred.abortHandler = () => {
+          if (this.deferredSend !== deferred) return;
+          this.deferredSend = null;
+          resolve({
+            accepted: false,
+            rejectReason: 'Message send was aborted before the conversation became ready.',
+          });
+        };
+        options.signal.addEventListener('abort', deferred.abortHandler, { once: true });
+      }
+      this.deferredSend = deferred;
+      this.emit('agent-conversation-diagnostic', {
+        code: 'message-send-deferred',
+        message: 'Message send is waiting for an authoritative ready snapshot.',
+        reason: this.sendDeferralReason,
+      });
+    });
+  }
+
+  private releaseDeferredSendIfReady(): void {
+    if (!this.sendDeferralReason || !this.canCompose()) return;
+    this.sendDeferralReason = null;
+    const deferred = this.takeDeferredSend();
+    if (!deferred) return;
+    void this.performSend(deferred.content, deferred.options).then(deferred.resolve);
+  }
+
+  private rejectDeferredSend(rejectReason: string): void {
+    const deferred = this.takeDeferredSend();
+    deferred?.resolve({ accepted: false, rejectReason });
+  }
+
+  private takeDeferredSend(): DeferredSend | null {
+    const deferred = this.deferredSend;
+    this.deferredSend = null;
+    if (deferred?.abortSignal && deferred.abortHandler) {
+      deferred.abortSignal.removeEventListener('abort', deferred.abortHandler);
+    }
+    return deferred;
   }
 
   private canSaveConversation(): boolean {

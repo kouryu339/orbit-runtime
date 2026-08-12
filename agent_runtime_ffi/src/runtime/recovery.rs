@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ai_assistant::{AssistantContext, ConversationManager};
 use corework::cache::CacheExt;
@@ -890,13 +890,16 @@ impl RuntimeFacade {
             non_empty_arg(target_conversation_id, "target_conversation_id")?;
         self.require_conversation_owner(&target_conversation_id)?;
         self.rt.block_on(async move {
+            let mut recovered_agent_ids = BTreeSet::new();
             for (agent_id, state) in recovery.entry_states {
                 manager
                     .restore_agent_state_entry(&target_conversation_id, &agent_id, &state)
                     .await
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                recovered_agent_ids.insert(agent_id);
             }
             for plan in recovery.execution_plans {
+                recovered_agent_ids.insert(plan.agent_id.clone());
                 manager
                     .restore_agent_execution_entry(
                         &target_conversation_id,
@@ -909,6 +912,13 @@ impl RuntimeFacade {
                     .await
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             }
+            manager
+                .resume_recovered_agents(
+                    &target_conversation_id,
+                    recovered_agent_ids.into_iter().collect(),
+                )
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             Ok(())
         })
     }
