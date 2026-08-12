@@ -591,23 +591,6 @@ impl ConversationManager {
         Ok(())
     }
 
-    pub async fn resume_recovered_agents(
-        &self,
-        conversation_id: &str,
-        agent_ids: Vec<String>,
-    ) -> Result<()> {
-        let runtime = self.require_runtime(conversation_id).await?;
-        let _guard = runtime.lock_command().await?;
-        for agent_id in agent_ids {
-            runtime
-                .conversation
-                .cluster()
-                .resume_recovered_agent(&agent_id)
-                .await?;
-        }
-        Ok(())
-    }
-
     pub async fn conversation_status(
         &self,
         conversation_id: &str,

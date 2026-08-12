@@ -155,8 +155,6 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private readonly revealContentLengths;
     private persistenceUnsubscribe;
     private persistenceController;
-    private sendDeferralReason;
-    private deferredSend;
     constructor();
     disconnectedCallback(): void;
     connect(): Promise<void>;
@@ -167,7 +165,6 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     restoreConversation(archiveId: string): Promise<void>;
     refreshConversationHistory(): Promise<void>;
     send(content: string, options?: SendOptions): Promise<SendResult>;
-    private performSend;
     pause(): Promise<CommandResult>;
     resolveToolPermission(toolCallId: string, decision: 'allow' | 'deny'): Promise<CommandResult>;
     closeConversation(): Promise<void>;
@@ -239,10 +236,6 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private refreshRevealTracking;
     private statusLabel;
     private canCompose;
-    private deferSend;
-    private releaseDeferredSendIfReady;
-    private rejectDeferredSend;
-    private takeDeferredSend;
     private canSaveConversation;
     private configurePersistenceController;
     private handlePersistenceEvent;

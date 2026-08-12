@@ -416,34 +416,6 @@ impl AgentCluster {
         Ok(AgentDriverSchedule::Started)
     }
 
-    pub(crate) async fn resume_recovered_agent(
-        &self,
-        agent_id: &str,
-    ) -> crate::Result<Option<AgentDriverSchedule>> {
-        let agent = self.get(agent_id).await.ok_or_else(|| {
-            crate::Error::Other(anyhow::anyhow!("recovered Agent not found: {}", agent_id))
-        })?;
-        let state = agent.sm.current_state();
-        if state != states::THINKING && state != states::EXECUTING {
-            tracing::debug!(
-                agent_id = %agent.id,
-                state = %state,
-                "recovered Agent does not require driver scheduling"
-            );
-            return Ok(None);
-        }
-        let schedule = self
-            .schedule_agent_driver(Arc::clone(&agent), false)
-            .await?;
-        tracing::info!(
-            agent_id = %agent.id,
-            state = %state,
-            schedule = ?schedule,
-            "recovered Agent driver scheduled"
-        );
-        Ok(Some(schedule))
-    }
-
     async fn agent_driver_is_running(&self, agent_id: &str) -> bool {
         self.drivers.lock().await.running_agents.contains(agent_id)
     }
@@ -921,84 +893,6 @@ mod tests {
         assert_eq!(drivers.running_agents.len(), 1);
         assert!(drivers.pending_followup_agents.contains("boss"));
         assert!(drivers.tasks.is_empty());
-    }
-
-    #[tokio::test]
-    async fn recovered_thinking_agent_is_driven_without_user_input() {
-        let _guard = crate::test_support::global_test_guard().await;
-        let thinking = FnState::new(crate::state::states::THINKING)
-            .with_description("recovered thinking")
-            .with_on_transition(|_| {
-                Box::pin(async { Ok(Some(crate::state::states::SUSPENDED.to_string())) })
-            });
-        let suspended =
-            FnState::new(crate::state::states::SUSPENDED).with_description("recovered suspended");
-        let sm = Arc::new(
-            StateMachine::builder("recovered_driver_test")
-                .add_state(Box::new(thinking))
-                .add_state(Box::new(suspended))
-                .initial_state(crate::state::states::THINKING)
-                .build()
-                .await
-                .unwrap(),
-        );
-        sm.start().await.unwrap();
-        let agent = Arc::new(AgentRuntime::new(
-            "boss".to_string(),
-            "Recovered Boss".to_string(),
-            AgentKind::Persistent,
-            sm,
-            AgentPermissions::default(),
-        ));
-        let state = Arc::new(crate::conversation_state::ConversationState::new(
-            "recovered-driver-test",
-            Default::default(),
-            "boss",
-        ));
-        agent
-            .sm
-            .unit()
-            .attach_shared_component(Arc::clone(&state))
-            .unwrap();
-        let cluster = AgentCluster::new(Arc::clone(&agent), agent.sm.unit().event_bus());
-
-        assert_eq!(
-            cluster.resume_recovered_agent("boss").await.unwrap(),
-            Some(AgentDriverSchedule::Started)
-        );
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if agent.sm.current_state() == crate::state::states::SUSPENDED
-                    && !cluster.agent_driver_is_running("boss").await
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("recovered Agent driver did not settle");
-    }
-
-    #[tokio::test]
-    async fn recovered_suspended_agent_does_not_start_a_driver() {
-        let _guard = crate::test_support::global_test_guard().await;
-        let agent = test_agent("boss").await;
-        let state = Arc::new(crate::conversation_state::ConversationState::new(
-            "recovered-waiting-test",
-            Default::default(),
-            "boss",
-        ));
-        agent
-            .sm
-            .unit()
-            .attach_shared_component(Arc::clone(&state))
-            .unwrap();
-        let cluster = AgentCluster::new(Arc::clone(&agent), agent.sm.unit().event_bus());
-
-        assert_eq!(cluster.resume_recovered_agent("boss").await.unwrap(), None);
-        assert!(!cluster.agent_driver_is_running("boss").await);
     }
 
     #[tokio::test]
