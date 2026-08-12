@@ -8,13 +8,13 @@
   "assets": {
     "windows-x86_64": {
       "archive": "orbit-runtime-runtime-v0.4.8-beta.1-windows-x86_64.zip",
-      "sha256": "700e896fadee2de440dc7c22d50a9b2a88f1f77897399f610b60c13d5b4eadcf",
+      "sha256": "0600a5d9b1f41fa41bda0f462af59d2948e3c9006875ce897f8fa6bd7608c9bf",
       "library": "bin/agent_runtime.dll",
       "header": "include/agent_runtime.h"
     },
     "linux-x86_64": {
       "archive": "orbit-runtime-runtime-v0.4.8-beta.1-linux-x86_64.zip",
-      "sha256": "f177e6f007fd467437cefdc6e3c311ea8c17c7e99ea7da41bacab7339998a807",
+      "sha256": "c99884f8744725744966e251410b3fd1edfa66cc3223d9c1e2c089f4e70bff76",
       "library": "lib/libagent_runtime.so",
       "header": "include/agent_runtime.h"
     }

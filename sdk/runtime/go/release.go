@@ -21,13 +21,13 @@ var runtimeArtifacts = map[string]RuntimeArtifact{
 	"windows-x86_64": {
 		PlatformID: "windows-x86_64",
 		Archive:    "orbit-runtime-runtime-v0.4.8-beta.1-windows-x86_64.zip",
-		SHA256:     "700e896fadee2de440dc7c22d50a9b2a88f1f77897399f610b60c13d5b4eadcf",
+		SHA256:     "0600a5d9b1f41fa41bda0f462af59d2948e3c9006875ce897f8fa6bd7608c9bf",
 		Library:    "bin/agent_runtime.dll",
 	},
 	"linux-x86_64": {
 		PlatformID: "linux-x86_64",
 		Archive:    "orbit-runtime-runtime-v0.4.8-beta.1-linux-x86_64.zip",
-		SHA256:     "f177e6f007fd467437cefdc6e3c311ea8c17c7e99ea7da41bacab7339998a807",
+		SHA256:     "c99884f8744725744966e251410b3fd1edfa66cc3223d9c1e2c089f4e70bff76",
 		Library:    "lib/libagent_runtime.so",
 	},
 }
