@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 ABI_VERSION = 1
 DEFAULT_RUNTIME_VERSION = "0.4.8-beta.1"
@@ -1062,8 +1062,10 @@ class RuntimeHostBuilder:
         self._resources_json: Mapping[str, Any] | None = None
         self._llm_path: str | None = None
         self._llm_json: Mapping[str, Any] | None = None
-        self._cluster_path: str | None = None
-        self._cluster_json: Mapping[str, Any] | None = None
+        self._agent_clusters: list[
+            tuple[Literal["path"], str]
+            | tuple[Literal["json"], Mapping[str, Any]]
+        ] = []
         self._public_events_only = True
         self._diagnostics: Any | None = None
         self._event_timeout_ms = 250
@@ -1115,11 +1117,11 @@ class RuntimeHostBuilder:
         return self
 
     def agent_cluster_path(self, path: str | Path) -> "RuntimeHostBuilder":
-        self._cluster_path = str(path)
+        self._agent_clusters.append(("path", str(path)))
         return self
 
     def agent_cluster_json(self, registration: Mapping[str, Any]) -> "RuntimeHostBuilder":
-        self._cluster_json = registration
+        self._agent_clusters.append(("json", registration))
         return self
 
     def public_events_only(self, enabled: bool) -> "RuntimeHostBuilder":
@@ -1149,10 +1151,11 @@ class RuntimeHostBuilder:
                 runtime.register_llm_file(self._llm_path)
             if self._llm_json is not None:
                 runtime.register_llm(self._llm_json)
-            if self._cluster_path is not None:
-                runtime.register_agent_cluster_file(self._cluster_path)
-            if self._cluster_json is not None:
-                runtime.register_agent_cluster(self._cluster_json)
+            for registration_kind, registration in self._agent_clusters:
+                if registration_kind == "path":
+                    runtime.register_agent_cluster_file(registration)
+                else:
+                    runtime.register_agent_cluster(registration)
             runtime.start()
             bus = RuntimeEventBus(public_only=self._public_events_only)
             pump = RuntimeEventPump(

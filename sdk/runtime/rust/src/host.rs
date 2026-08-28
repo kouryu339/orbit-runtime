@@ -57,7 +57,7 @@ pub struct RuntimeHostBuilder {
     resources: Option<RuntimeRegistration>,
     llm: Option<RuntimeRegistration>,
     empty_llm_registration_id: String,
-    agent_cluster: Option<RuntimeRegistration>,
+    agent_clusters: Vec<RuntimeRegistration>,
     start_event_pump: bool,
     event_pump_options: RuntimeEventPumpOptions,
     diagnostics: Option<mpsc::Sender<RuntimeDiagnostic>>,
@@ -72,7 +72,7 @@ impl RuntimeHostBuilder {
             resources: None,
             llm: None,
             empty_llm_registration_id: DEFAULT_EMPTY_LLM_REGISTRATION_ID.to_string(),
-            agent_cluster: None,
+            agent_clusters: Vec::new(),
             start_event_pump: true,
             event_pump_options: RuntimeEventPumpOptions::default(),
             diagnostics: None,
@@ -111,12 +111,14 @@ impl RuntimeHostBuilder {
     }
 
     pub fn agent_cluster_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.agent_cluster = Some(RuntimeRegistration::Path(path.into()));
+        self.agent_clusters
+            .push(RuntimeRegistration::Path(path.into()));
         self
     }
 
     pub fn agent_cluster(mut self, registration: Value) -> Self {
-        self.agent_cluster = Some(RuntimeRegistration::Value(registration));
+        self.agent_clusters
+            .push(RuntimeRegistration::Value(registration));
         self
     }
 
@@ -144,9 +146,11 @@ impl RuntimeHostBuilder {
         let resources = self
             .resources
             .ok_or_else(|| RuntimeError::new("runtime resources registration is required"))?;
-        let agent_cluster = self
-            .agent_cluster
-            .ok_or_else(|| RuntimeError::new("runtime agent cluster registration is required"))?;
+        if self.agent_clusters.is_empty() {
+            return Err(RuntimeError::new(
+                "runtime agent cluster registration is required",
+            ));
+        }
 
         let mut runtime = Runtime::load(&self.library_path)?;
         runtime.create_with_options(&self.create_options)?;
@@ -159,7 +163,9 @@ impl RuntimeHostBuilder {
                 runtime.register_llm(empty_llm_registration(&self.empty_llm_registration_id))?;
             }
         }
-        agent_cluster.register_agent_cluster(&mut runtime)?;
+        for agent_cluster in &self.agent_clusters {
+            agent_cluster.register_agent_cluster(&mut runtime)?;
+        }
         runtime.start()?;
 
         let event_bus = RuntimeEventBus::new();
@@ -776,5 +782,27 @@ mod tests {
             Some(42)
         );
         assert!(registration.get("currentModelUid").is_none());
+    }
+
+    #[test]
+    fn host_builder_accumulates_agent_clusters_in_call_order() {
+        let builder = RuntimeHostBuilder::new("agent_runtime.dll")
+            .agent_cluster_path("config/primary.json")
+            .agent_cluster(json!({ "id": "secondary" }))
+            .agent_cluster_path("config/tertiary.json");
+
+        assert_eq!(builder.agent_clusters.len(), 3);
+        assert!(matches!(
+            &builder.agent_clusters[0],
+            RuntimeRegistration::Path(path) if path == Path::new("config/primary.json")
+        ));
+        assert!(matches!(
+            &builder.agent_clusters[1],
+            RuntimeRegistration::Value(value) if value["id"] == "secondary"
+        ));
+        assert!(matches!(
+            &builder.agent_clusters[2],
+            RuntimeRegistration::Path(path) if path == Path::new("config/tertiary.json")
+        ));
     }
 }

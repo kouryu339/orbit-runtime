@@ -107,7 +107,8 @@ let app = RuntimeHostBuilder::new("path/to/agent_runtime.dll")
     })
     .resources_path("config/resources.json")
     .llm_path("config/llm-providers.json")
-    .agent_cluster_path("config/agent-cluster.json")
+    .agent_cluster_path("config/product-cluster.json")
+    .agent_cluster_path("config/editor-cluster.json")
     .start()?;
 
 let events = app.subscribe_events();
@@ -128,6 +129,11 @@ while let Ok(event) = events.recv() {
     }
 }
 ```
+
+Every `agent_cluster_path(...)` and `agent_cluster(...)` call appends one
+registration. `RuntimeHostBuilder::start()` registers them in call order before
+starting the Runtime, so hosts can load multiple independent cluster files
+without merging their JSON documents.
 
 Hosts should poll Runtime events once and fan them out through the SDK event
 bus. Per-conversation SSE is a filtered view over that bus, not a separate

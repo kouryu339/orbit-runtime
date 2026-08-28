@@ -18,7 +18,8 @@ with (
     .create_options(create_options)
     .resources_path("resources.json")
     .llm_path("llm.json")
-    .agent_cluster_path("cluster.json")
+    .agent_cluster_path("product-cluster.json")
+    .agent_cluster_path("editor-cluster.json")
     .start()
 ) as app:
     conversation = app.spawn_conversation(cluster_id="assistant")
@@ -29,6 +30,10 @@ with (
             # Relay event to the product frontend or persistence layer.
             ...
 ```
+
+Repeated `agent_cluster_path(...)` and `agent_cluster_json(...)` calls append
+registrations. `start()` registers each one in call order before starting the
+Runtime; later calls do not replace earlier cluster registrations.
 
 Cluster tool permissions are defaults. A trusted host can override selected
 categories for one conversation:
