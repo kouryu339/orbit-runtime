@@ -17,6 +17,7 @@ pub(super) struct RestoredConversationRecovery {
 pub(super) struct RestoredExecutionPlan {
     pub(super) agent_id: String,
     pub(super) tools: Vec<String>,
+    pub(super) structured_tools: Vec<ai_assistant::decision_line::ParsedToolCall>,
     pub(super) call_ids: Vec<String>,
     pub(super) recovery_results: BTreeMap<String, ai_assistant::ToolResult>,
     pub(super) tool_call_refs: Vec<ai_assistant::context::ToolCallRef>,
@@ -31,6 +32,7 @@ struct OpenToolCall {
     turn_id: Option<u64>,
     source: OpenToolCallSource,
     native_fc: bool,
+    structured_tool: Option<ai_assistant::decision_line::ParsedToolCall>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +119,7 @@ pub(super) fn restored_execution_plans(
                 return vec![RestoredExecutionPlan {
                     agent_id: last.agent_id.clone(),
                     tools,
+                    structured_tools: Vec::new(),
                     call_ids,
                     recovery_results: BTreeMap::new(),
                     tool_call_refs: Vec::new(),
@@ -141,11 +144,15 @@ fn execution_plans_from_open_calls(
             .or_insert_with(|| RestoredExecutionPlan {
                 agent_id: open_call.agent_id.clone(),
                 tools: Vec::new(),
+                structured_tools: Vec::new(),
                 call_ids: Vec::new(),
                 recovery_results: BTreeMap::new(),
                 tool_call_refs: Vec::new(),
             });
         entry.tools.push(command.clone());
+        if let Some(structured_tool) = open_call.structured_tool.clone() {
+            entry.structured_tools.push(structured_tool);
+        }
         entry.call_ids.push(open_call.call_id.clone());
         if open_call.native_fc {
             if let Some(name) = open_call.tool_name.clone() {
@@ -157,7 +164,12 @@ fn execution_plans_from_open_calls(
                     });
             }
         }
-        if recovery_tool_effect(open_call.tool_name.as_deref()) != "read_only" {
+        // An assistant-declared call has not entered the tool runner yet, so it
+        // is safe to execute after restore regardless of effect. Only a call
+        // with a persisted `started` fact can have indeterminate side effects.
+        if open_call.source == OpenToolCallSource::Started
+            && recovery_tool_effect(open_call.tool_name.as_deref()) != "read_only"
+        {
             entry.recovery_results.insert(
                 open_call.call_id.clone(),
                 recovery_tool_result(&open_call, &command),
@@ -166,6 +178,15 @@ fn execution_plans_from_open_calls(
     }
     grouped
         .into_values()
+        .map(|mut plan| {
+            // Indexed structured calls are only safe when the complete batch
+            // was recovered from native FC metadata. A mixed/legacy batch
+            // intentionally falls back to its compatibility commands.
+            if plan.structured_tools.len() != plan.tools.len() {
+                plan.structured_tools.clear();
+            }
+            plan
+        })
         .filter(|plan| !plan.tools.is_empty())
         .collect()
 }
@@ -182,27 +203,8 @@ pub(super) fn repair_restored_ledger(
         .unwrap_or(0)
         + 1;
     for plan in restored_execution_plans(records) {
-        for (index, call_id) in plan.call_ids.iter().enumerate() {
-            let command = plan.tools.get(index).cloned().unwrap_or_default();
-            let result = plan
-                .recovery_results
-                .get(call_id)
-                .cloned()
-                .unwrap_or_else(|| {
-                    let (tool_name, _) = ai_assistant::tool_runner::parse_tool_command(&command);
-                    recovery_tool_result(
-                        &OpenToolCall {
-                            call_id: call_id.clone(),
-                            tool_name: Some(tool_name.to_string()),
-                            tool_command: Some(command.clone()),
-                            agent_id: plan.agent_id.clone(),
-                            turn_id: None,
-                            source: OpenToolCallSource::AssistantDeclared,
-                            native_fc: false,
-                        },
-                        &command,
-                    )
-                });
+        for (call_id, result) in &plan.recovery_results {
+            let result = result.clone();
             let (tool_name, _) = ai_assistant::tool_runner::parse_tool_command(&result.command);
             let mut metadata = ai_assistant::ledger::LedgerMessageMeta::default();
             metadata.subtype =
@@ -254,7 +256,10 @@ fn remember_assistant_declared_tool_calls(
         .filter(|calls| !calls.is_empty())
     {
         for call in tool_calls {
-            let command = native_tool_command(&call);
+            let structured_tool = native_tool_call(&call);
+            let command = structured_tool
+                .as_ref()
+                .map(ai_assistant::decision_line::ParsedToolCall::to_legacy_command);
             open_calls.entry(call.id.clone()).or_insert(OpenToolCall {
                 call_id: call.id,
                 tool_name: Some(call.function.name),
@@ -263,6 +268,7 @@ fn remember_assistant_declared_tool_calls(
                 turn_id: record.metadata.extra.get("turn_id").and_then(Value::as_u64),
                 source: OpenToolCallSource::AssistantDeclared,
                 native_fc: true,
+                structured_tool,
             });
         }
         return;
@@ -304,11 +310,14 @@ fn remember_assistant_declared_tool_calls(
                     .get("tool_protocol")
                     .and_then(Value::as_str)
                     == Some("native_fc"),
+                structured_tool: None,
             });
     }
 }
 
-fn native_tool_command(call: &llm_gateway::ToolCall) -> Option<String> {
+fn native_tool_call(
+    call: &llm_gateway::ToolCall,
+) -> Option<ai_assistant::decision_line::ParsedToolCall> {
     let arguments = serde_json::from_str::<Value>(&call.function.arguments)
         .ok()?
         .as_object()?
@@ -335,13 +344,10 @@ fn native_tool_command(call: &llm_gateway::ToolCall) -> Option<String> {
                 .unwrap_or_else(|| value.to_string()),
         ));
     }
-    Some(
-        ai_assistant::runtime::parser::ParsedToolCall {
-            name: call.function.name.clone(),
-            params,
-        }
-        .to_legacy_command(),
-    )
+    Some(ai_assistant::decision_line::ParsedToolCall {
+        name: call.function.name.clone(),
+        params,
+    })
 }
 
 fn update_open_tool_calls(
@@ -362,20 +368,32 @@ fn update_open_tool_calls(
         return;
     }
     if is_started_tool_record(record) {
-        let native_fc = open_calls
-            .get(&call_id)
-            .map(|call| call.native_fc)
-            .unwrap_or(false);
+        let previous = open_calls.get(&call_id).cloned();
+        let native_fc = previous.as_ref().is_some_and(|call| call.native_fc);
+        let structured_tool = previous
+            .as_ref()
+            .and_then(|call| call.structured_tool.clone());
+        let tool_name = record
+            .metadata
+            .tool_name
+            .clone()
+            .or_else(|| previous.as_ref().and_then(|call| call.tool_name.clone()));
+        let tool_command = record
+            .metadata
+            .tool_command
+            .clone()
+            .or_else(|| previous.as_ref().and_then(|call| call.tool_command.clone()));
         open_calls.insert(
             call_id.clone(),
             OpenToolCall {
                 call_id,
-                tool_name: record.metadata.tool_name.clone(),
-                tool_command: record.metadata.tool_command.clone(),
+                tool_name,
+                tool_command,
                 agent_id: record.agent_id.clone(),
                 turn_id: record.metadata.extra.get("turn_id").and_then(Value::as_u64),
                 source: OpenToolCallSource::Started,
                 native_fc,
+                structured_tool,
             },
         );
     }
@@ -392,9 +410,15 @@ fn is_terminal_tool_record(record: &ai_assistant::ledger::LedgerRecord) -> bool 
         record.metadata.subtype.as_deref(),
         Some(ai_assistant::ledger::GATEWAY_SUBTYPE_TOOL_CALL_FINISHED)
             | Some(ai_assistant::ledger::GATEWAY_SUBTYPE_TOOL_CALL_FAILED)
+            | Some(ai_assistant::ledger::GATEWAY_SUBTYPE_TOOL_CALL_INTERRUPTED_UNKNOWN)
     ) || matches!(
         record.metadata.extra.get("status").and_then(Value::as_str),
-        Some("success") | Some("error") | Some("failed") | Some("canceled")
+        Some("success")
+            | Some("error")
+            | Some("failed")
+            | Some("canceled")
+            | Some("recovery_interrupted")
+            | Some("interrupted_unknown")
     )
 }
 
@@ -474,6 +498,10 @@ pub(super) struct ConversationSnapshotImport {
     pub(super) conversation_id: Option<String>,
     #[serde(default)]
     pub(super) ledger: Vec<ai_assistant::ledger::LedgerRecord>,
+    /// Protocol is conversation history, not a current registry default. A
+    /// missing map denotes the supported legacy EXEC snapshot format.
+    #[serde(default)]
+    pub(super) tool_protocols: Option<BTreeMap<String, ai_assistant::ToolProtocol>>,
     /// Conversation-owned delegation records. Registered Agent definitions are
     /// resolved from the current registry and are intentionally not embedded.
     #[serde(default)]
@@ -762,6 +790,10 @@ impl RuntimeFacade {
                 .cluster_snapshot(&conversation_id)
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+            let tool_protocols = manager
+                .agent_tool_protocols(&conversation_id)
+                .await
+                .map_err(|e| RuntimeError::Internal(e.to_string()))?;
             let tasks = manager
                 .agent_tasks(&conversation_id)
                 .await
@@ -787,6 +819,7 @@ impl RuntimeFacade {
                 "conversation_state": conversation_state,
                 "ledger": ledger,
                 "runtime": cluster,
+                "tool_protocols": tool_protocols,
                 "tasks": tasks,
                 "exported_at_unix_ms": std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -826,11 +859,30 @@ impl RuntimeFacade {
             "options.conversation_id",
         )?;
         let snapshot = parse_conversation_snapshot(snapshot_json)?;
+        let tool_protocols = snapshot.tool_protocols.clone();
         let state_deltas = snapshot_state_deltas(&snapshot);
+        self.apply_conversation_tool_protocols(&target_conversation_id, tool_protocols.as_ref())?;
         let recovery =
             self.replace_conversation_ledger(&target_conversation_id, snapshot.ledger)?;
         self.apply_conversation_state_deltas(&target_conversation_id, state_deltas)?;
         self.apply_conversation_recovery(&target_conversation_id, recovery)
+    }
+
+    pub(super) fn apply_conversation_tool_protocols(
+        &mut self,
+        target_conversation_id: &str,
+        protocols: Option<&BTreeMap<String, ai_assistant::ToolProtocol>>,
+    ) -> Result<(), RuntimeError> {
+        let manager = self.manager()?;
+        let target_conversation_id =
+            non_empty_arg(target_conversation_id, "target_conversation_id")?;
+        self.require_conversation_owner(&target_conversation_id)?;
+        self.rt.block_on(async move {
+            manager
+                .restore_agent_tool_protocols(&target_conversation_id, protocols)
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))
+        })
     }
 
     pub(super) fn replace_conversation_ledger(
@@ -905,6 +957,7 @@ impl RuntimeFacade {
                         &target_conversation_id,
                         &plan.agent_id,
                         plan.tools,
+                        plan.structured_tools,
                         plan.call_ids,
                         plan.recovery_results,
                         plan.tool_call_refs,

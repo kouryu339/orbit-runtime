@@ -27,10 +27,15 @@ payload.ledger_delta.record
 是本次快照携带的可选消息增量。没有 `ledger_delta` 时，事件只表示状态、能力位或
 其他快照字段发生变化。
 
+快照中的 `model` 和 `model_uid` 均表示当前 conversation 的推理模型。模型选择器的
+外层标签、弹层选中项和切换命令必须统一使用这两个会话字段；provider definitions 中的
+`current_model_uid` 是新会话默认值，不能用来覆盖当前会话回显。切换当前会话时调用
+`conversation.set_model`。
+
 ### 6.2.1 焦点 Assistant 流
 
 原生函数调用模式的模型请求统一采用流式执行。Runtime 不新增独立的公开流事件，
-而是通过现有快照中的 `assistant_stream` 字段投影当前焦点 Agent 的临时正文：
+而是通过现有快照中的 `assistant_stream` 字段投影当前焦点 Agent 的临时正文和工具身份：
 
 ```json
 {
@@ -39,7 +44,16 @@ payload.ledger_delta.record
     "turn_id": 12,
     "attempt": 1,
     "sequence": 8,
-    "content": "正在生成的 Assistant 正文"
+    "content": "正在生成的 Assistant 正文",
+    "provisional_tool_calls": [
+      {
+        "key": "boss:12:1:0",
+        "index": 0,
+        "call_id": "call_abc",
+        "tool_name": "ReadScene",
+        "status": "preparing"
+      }
+    ]
   }
 }
 ```
@@ -48,9 +62,16 @@ payload.ledger_delta.record
 
 - 只投影当前焦点 Agent；后台 Agent 仍在内部流式执行，但不会产生前端渲染更新；
 - 它是临时展示状态，不得持久化，也不得在会话恢复时重放；
+- 首次恢复得到的完整 Ledger 属于已经展示完毕的历史，前端不得对最后一条 Assistant
+  记录重新执行渐进式揭示；
 - Runtime 合并片段时递增 `sequence`，宿主应替换同一个临时气泡，而不是追加新消息；
+- `provisional_tool_calls` 只暴露调用索引、已知的 call id、工具名和
+  `preparing/ready` 状态；不暴露未闭合 JSON 参数，也不能作为可执行指令；
+- 前端用 `call_id`（尚未获得时用 `key`）显示临时工具气泡；正式 Ledger 工具事实到达后
+  用同一 `call_id` 原位替换，不得保留重复占位；
 - 重试或失败时通过 `null` 清除；
-- 请求成功后，由最终规范化的 `assistant` Ledger 记录替换临时流。流片段本身不进入 Ledger。
+- 请求成功后，Runtime 先写入最终规范化的 `assistant(tool_calls)` Ledger 记录，再清除
+  临时流，避免工具气泡闪烁。流片段本身不进入 Ledger。
 
 因此宿主仍然只消费 `frontend:state_snapshot`：把 `assistant_stream` 渲染为当前临时
 Assistant 气泡，并在最终 Ledger 记录到达时完成替换。

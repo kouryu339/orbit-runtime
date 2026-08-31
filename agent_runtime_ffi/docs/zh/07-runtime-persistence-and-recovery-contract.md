@@ -66,8 +66,24 @@ host-owned 状态。
 - `conversation.spawn_from_snapshot`：创建新的 conversation 并导入 snapshot。
 - `conversation.import_snapshot`：把 snapshot 导入指定 conversation。
 
+snapshot 必须保存顶层 `tool_protocols`，它描述各 Agent 产生当前历史时使用的工具协议。
+恢复必须先应用这个映射，再重放 ledger 和启动 Agent；不能用当前注册表默认协议重新解释
+旧历史。前两个受支持版本缺少该字段，Runtime 将其迁移为 `exec_legacy`。更早格式不在兼容
+承诺内。
+
 导入时 FFI 会把 snapshot 交给 `ai-assistant` 恢复。恢复结果由核心运行时根据 ledger 尾部
 决定是进入 `thinking`、`executing` 还是 `suspended`；FFI 不在事件层伪造历史。
+
+恢复会区分工具调用所处阶段：
+
+- 只有 `assistant(tool_calls)`、没有已持久化 started 事实，表示尚未进入工具执行器，可以继续执行；
+- 已 started 的只读工具可以重新观察；
+- 已 started 的非只读工具或 effect 未知工具会收敛为“结果不确定”的恢复结果，不会直接重放；
+  下一轮必须先验证外部状态或重新规划；
+- success、failure、canceled、interrupted-unknown 等终态事实保持终态，不会再次打开。
+
+原生 FC 调用通过已持久化的结构化参数和 provider call id 重建，不经过文本 `EXEC` 解析器。
+临时 `assistant_stream` 在恢复时丢弃，绝不重放。
 
 恢复必须先注册 snapshot 所引用的 cluster 和 Agent definition。Agent definition、权限、
 工具、Skill、模型策略等静态配置以当前注册表为唯一真相源，不复制到 conversation snapshot，

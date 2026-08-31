@@ -1,5 +1,6 @@
 //! Anthropic Messages API compatible backend.
 
+use once_cell::sync::OnceCell;
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -7,6 +8,30 @@ use crate::classify::{classify_http_error, classify_network_error, json_response
 use crate::error::ApiError;
 use crate::retry::{retry_with_backoff, RetryPolicy};
 use crate::types::{ChatMessage, FunctionCall, LlmResponse, TokenUsage, ToolCall, ToolDefinition};
+
+fn http_client() -> &'static Client {
+    static CLIENT: OnceCell<Client> = OnceCell::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .expect("build Anthropic HTTP client")
+    })
+}
+
+fn streaming_http_client() -> &'static Client {
+    static CLIENT: OnceCell<Client> = OnceCell::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(crate::stream_control::TOTAL_TIMEOUT)
+            .connect_timeout(crate::stream_control::CONNECT_TIMEOUT)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .expect("build Anthropic streaming HTTP client")
+    })
+}
 
 pub async fn call_inner(
     messages: &[ChatMessage],
@@ -20,7 +45,7 @@ pub async fn call_inner(
     force_tool_name: Option<&str>,
 ) -> crate::error::Result<LlmResponse> {
     let request_started = std::time::Instant::now();
-    let client = Client::new();
+    let client = http_client().clone();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
     let system = build_anthropic_system(messages);
@@ -200,13 +225,14 @@ pub async fn call_inner_streaming<F>(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
-    mut on_chunk: F,
+    mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
-    F: FnMut(String) + Send,
+    F: FnMut(crate::types::LlmStreamEvent) + Send,
 {
-    use futures_util::StreamExt;
     use std::collections::BTreeMap;
+
+    let request_started = std::time::Instant::now();
 
     #[derive(Default)]
     struct ToolBlock {
@@ -215,7 +241,7 @@ where
         arguments: String,
     }
 
-    let client = Client::new();
+    let client = streaming_http_client().clone();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let system = build_anthropic_system(messages);
     let msgs = build_anthropic_messages(messages);
@@ -290,6 +316,17 @@ where
     })
     .await?;
 
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "headers_received",
+            "stream": true,
+            "provider_api": "anthropic_messages",
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+        })
+    ));
+
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut content = String::new();
@@ -297,9 +334,62 @@ where
     let mut finish_reason = None;
     let mut input_tokens = 0u32;
     let mut output_tokens = 0u32;
-    while let Some(chunk) = stream.next().await {
-        let bytes =
-            chunk.map_err(|error| ApiError::LlmFailed(format!("stream chunk error: {error}")))?;
+    let mut first_event_logged = false;
+    let mut chunk_count = 0u64;
+    let mut response_bytes = 0u64;
+    let mut message_stopped = false;
+    loop {
+        let chunk = match crate::stream_control::next_with_idle_timeout(&mut stream).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(()) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "stream_idle_timeout",
+                        "stream": true,
+                        "provider_api": "anthropic_messages",
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "idle_timeout_ms": crate::stream_control::IDLE_TIMEOUT.as_millis() as u64,
+                        "first_event_received": first_event_logged,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "partial_content_chars": content.chars().count(),
+                        "partial_tool_call_count": tool_blocks.len(),
+                    })
+                ));
+                return Err(ApiError::LlmFailed(format!(
+                    "stream produced no data for {} seconds",
+                    crate::stream_control::IDLE_TIMEOUT.as_secs()
+                )));
+            }
+        };
+        let bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": if error.is_timeout() { "stream_total_timeout" } else { "stream_error" },
+                        "stream": true,
+                        "provider_api": "anthropic_messages",
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "first_event_received": first_event_logged,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "total_timeout_ms": crate::stream_control::TOTAL_TIMEOUT.as_millis() as u64,
+                        "partial_content_chars": content.chars().count(),
+                        "partial_tool_call_count": tool_blocks.len(),
+                        "error": error.to_string(),
+                    })
+                ));
+                return Err(ApiError::LlmFailed(format!("stream chunk error: {error}")));
+            }
+        };
+        chunk_count = chunk_count.saturating_add(1);
+        response_bytes = response_bytes.saturating_add(bytes.len() as u64);
         buffer.push_str(std::str::from_utf8(&bytes).unwrap_or_default());
         while let Some(pos) = buffer.find('\n') {
             let line = buffer[..pos].trim_end_matches('\r').to_string();
@@ -314,6 +404,21 @@ where
             let event: Value = serde_json::from_str(data).map_err(|error| {
                 ApiError::LlmFailed(format!("invalid Anthropic stream event: {error}"))
             })?;
+            if !first_event_logged {
+                first_event_logged = true;
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "first_stream_event",
+                        "stream": true,
+                        "provider_api": "anthropic_messages",
+                        "model": model,
+                        "ttft_ms": request_started.elapsed().as_millis() as u64,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                    })
+                ));
+            }
             match event
                 .get("type")
                 .and_then(Value::as_str)
@@ -349,6 +454,13 @@ where
                                 arguments: String::new(),
                             },
                         );
+                        let block = tool_blocks.get(&index).expect("inserted tool block");
+                        on_event(crate::types::LlmStreamEvent::ToolCallDelta {
+                            index,
+                            call_id: (!block.id.is_empty()).then(|| block.id.clone()),
+                            name: (!block.name.is_empty()).then(|| block.name.clone()),
+                            argument_bytes: 0,
+                        });
                     }
                 }
                 "content_block_delta" => match event.pointer("/delta/type").and_then(Value::as_str)
@@ -357,7 +469,9 @@ where
                         if let Some(delta) = event.pointer("/delta/text").and_then(Value::as_str) {
                             content.push_str(delta);
                             if !delta.is_empty() {
-                                on_chunk(delta.to_string());
+                                on_event(crate::types::LlmStreamEvent::TextDelta {
+                                    text: delta.to_string(),
+                                });
                             }
                         }
                     }
@@ -374,10 +488,30 @@ where
                                 .or_default()
                                 .arguments
                                 .push_str(delta);
+                            let block = tool_blocks.get(&index).expect("tool block exists");
+                            on_event(crate::types::LlmStreamEvent::ToolCallDelta {
+                                index,
+                                call_id: (!block.id.is_empty()).then(|| block.id.clone()),
+                                name: (!block.name.is_empty()).then(|| block.name.clone()),
+                                argument_bytes: delta.len(),
+                            });
                         }
                     }
                     _ => {}
                 },
+                "content_block_stop" => {
+                    let index = event
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    if let Some(block) = tool_blocks.get(&index) {
+                        on_event(crate::types::LlmStreamEvent::ToolCallCompleted {
+                            index,
+                            call_id: (!block.id.is_empty()).then(|| block.id.clone()),
+                            name: (!block.name.is_empty()).then(|| block.name.clone()),
+                        });
+                    }
+                }
                 "message_delta" => {
                     finish_reason = event
                         .pointer("/delta/stop_reason")
@@ -388,16 +522,48 @@ where
                         .and_then(Value::as_u64)
                         .unwrap_or(output_tokens as u64) as u32;
                 }
+                "message_stop" => message_stopped = true,
                 "error" => {
                     let message = event
                         .pointer("/error/message")
                         .and_then(Value::as_str)
                         .unwrap_or("Anthropic stream failed");
+                    crate::diagnostics::append_line(format!(
+                        "[ai-gateway response] {}",
+                        json!({
+                            "phase": "provider_stream_error",
+                            "stream": true,
+                            "provider_api": "anthropic_messages",
+                            "model": model,
+                            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                            "chunk_count": chunk_count,
+                            "response_bytes": response_bytes,
+                            "error": message,
+                        })
+                    ));
                     return Err(ApiError::LlmFailed(message.to_string()));
                 }
                 _ => {}
             }
         }
+    }
+    if !message_stopped {
+        crate::diagnostics::append_line(format!(
+            "[ai-gateway response] {}",
+            json!({
+                "phase": "stream_incomplete",
+                "stream": true,
+                "provider_api": "anthropic_messages",
+                "model": model,
+                "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                "chunk_count": chunk_count,
+                "response_bytes": response_bytes,
+                "partial_tool_call_count": tool_blocks.len(),
+            })
+        ));
+        return Err(ApiError::LlmFailed(
+            "Anthropic stream ended before message_stop".to_string(),
+        ));
     }
     let tool_calls = tool_blocks
         .into_values()
@@ -415,6 +581,21 @@ where
             },
         })
         .collect::<Vec<_>>();
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "completed",
+            "stream": true,
+            "provider_api": "anthropic_messages",
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+            "first_event_received": first_event_logged,
+            "chunk_count": chunk_count,
+            "response_bytes": response_bytes,
+            "content_chars": content.chars().count(),
+            "tool_call_count": tool_calls.len(),
+        })
+    ));
     Ok(LlmResponse {
         content,
         finish_reason,

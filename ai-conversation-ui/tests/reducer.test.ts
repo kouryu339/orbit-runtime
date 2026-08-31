@@ -39,6 +39,121 @@ describe('conversationReducer', () => {
     expect(state.records.at(-1)?.content).toBe('final answer');
   });
 
+  it('shows native function calls while they stream and replaces them with durable calls', () => {
+    let state = conversationReducer(createConversationState('c1'), {
+      type: 'snapshot',
+      payload: {
+        revision: 1,
+        conversation_state: 'thinking',
+        assistant_stream: {
+          agent_id: 'boss',
+          turn_id: 4,
+          attempt: 1,
+          sequence: 1,
+          content: '',
+          provisional_tool_calls: [{
+            key: 'boss:4:1:0',
+            index: 0,
+            call_id: 'call-1',
+            tool_name: 'ReadScene',
+            status: 'preparing',
+          }],
+        },
+      },
+    });
+
+    expect(state.toolCalls).toMatchObject([{
+      id: 'call-1',
+      toolName: 'ReadScene',
+      status: 'placeholder',
+    }]);
+
+    state = conversationReducer(state, {
+      type: 'snapshot',
+      payload: {
+        revision: 2,
+        conversation_state: 'thinking',
+        ledger_delta: {
+          kind: 'append',
+          record: {
+            record_id: 'assistant-call',
+            role: 'assistant',
+            content: '',
+            metadata: {
+              extra: {
+                tool_call_ids: ['call-1'],
+                tool_calls: [{
+                  id: 'call-1',
+                  function: { name: 'ReadScene', arguments: '{}' },
+                }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(state.toolCalls).toMatchObject([{
+      id: 'call-1',
+      toolName: 'ReadScene',
+      status: 'placeholder',
+    }]);
+
+    state = conversationReducer(state, {
+      type: 'snapshot',
+      payload: {
+        revision: 3,
+        conversation_state: 'executing',
+        assistant_stream: null,
+        ledger_delta: {
+          kind: 'append',
+          record: {
+            record_id: 'tool-start',
+            role: 'gateway_message',
+            content: 'running ReadScene',
+            metadata: {
+              subtype: 'tool_call_started',
+              tool_name: 'ReadScene',
+              extra: { call_id: 'call-1', status: 'running' },
+            },
+          },
+        },
+      },
+    });
+
+    expect(state.assistantStream).toBeUndefined();
+    expect(state.toolCalls).toMatchObject([{
+      id: 'call-1',
+      toolName: 'ReadScene',
+      status: 'running',
+    }]);
+  });
+
+  it('keeps an interrupted tool call visibly indeterminate', () => {
+    const state = conversationReducer(createConversationState('c1'), {
+      type: 'snapshot',
+      payload: {
+        revision: 1,
+        ledger_records: [{
+          record_id: 'uncertain-1',
+          role: 'tool',
+          content: 'The tool was interrupted; verify external state.',
+          metadata: {
+            subtype: 'tool_call_interrupted_unknown',
+            tool_name: 'UpdateScene',
+            extra: { call_id: 'call-uncertain', status: 'interrupted_unknown' },
+          },
+        }],
+      },
+    });
+
+    expect(state.toolCalls).toMatchObject([{
+      id: 'call-uncertain',
+      toolName: 'UpdateScene',
+      status: 'uncertain',
+    }]);
+  });
+
   it('keeps the composer disabled until an authoritative waiting snapshot arrives', () => {
     let state = createConversationState();
     state = conversationReducer(state, {

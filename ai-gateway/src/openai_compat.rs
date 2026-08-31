@@ -29,6 +29,19 @@ fn http_client() -> &'static Client {
     })
 }
 
+fn streaming_http_client() -> &'static Client {
+    use once_cell::sync::OnceCell;
+    static CLIENT: OnceCell<Client> = OnceCell::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(crate::stream_control::TOTAL_TIMEOUT)
+            .connect_timeout(crate::stream_control::CONNECT_TIMEOUT)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()
+            .expect("build OpenAI-compatible streaming HTTP client")
+    })
+}
+
 fn openai_tool_json(tool: &ToolDefinition) -> Value {
     let mut function = json!({
         "name": tool.function.name,
@@ -628,16 +641,15 @@ pub async fn call_inner_streaming<F>(
     tool_choice_style: ToolChoiceStyle,
     force_json: bool,
     stream_argument_fields: bool,
-    mut on_chunk: F,
+    mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
-    F: FnMut(String) + Send,
+    F: FnMut(crate::types::LlmStreamEvent) + Send,
 {
-    use futures_util::StreamExt;
     use std::collections::BTreeMap;
 
     let request_started = std::time::Instant::now();
-    let client = http_client().clone();
+    let client = streaming_http_client().clone();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let msgs: Vec<Value> = messages
@@ -785,9 +797,60 @@ where
     let mut first_event_logged = false;
     let mut chunk_count = 0u64;
     let mut response_bytes = 0u64;
+    let mut terminal_marker_received = false;
 
-    'outer: while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| ApiError::LlmFailed(format!("stream chunk error: {e}")))?;
+    'outer: loop {
+        let chunk = match crate::stream_control::next_with_idle_timeout(&mut stream).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(()) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "stream_idle_timeout",
+                        "stream": true,
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "idle_timeout_ms": crate::stream_control::IDLE_TIMEOUT.as_millis() as u64,
+                        "first_event_received": first_event_logged,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "partial_content_chars": full_content.chars().count(),
+                        "partial_reasoning_chars": full_reasoning.chars().count(),
+                        "partial_tool_call_count": tc_map.len(),
+                        "partial_tool_argument_bytes": tc_map.values().map(|(_, _, arguments)| arguments.len()).sum::<usize>(),
+                    })
+                ));
+                return Err(ApiError::LlmFailed(format!(
+                    "stream produced no data for {} seconds",
+                    crate::stream_control::IDLE_TIMEOUT.as_secs()
+                )));
+            }
+        };
+        let bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": if error.is_timeout() { "stream_total_timeout" } else { "stream_error" },
+                        "stream": true,
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "first_event_received": first_event_logged,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "total_timeout_ms": crate::stream_control::TOTAL_TIMEOUT.as_millis() as u64,
+                        "partial_content_chars": full_content.chars().count(),
+                        "partial_reasoning_chars": full_reasoning.chars().count(),
+                        "partial_tool_call_count": tc_map.len(),
+                        "partial_tool_argument_bytes": tc_map.values().map(|(_, _, arguments)| arguments.len()).sum::<usize>(),
+                        "error": error.to_string(),
+                    })
+                ));
+                return Err(ApiError::LlmFailed(format!("stream chunk error: {error}")));
+            }
+        };
         chunk_count = chunk_count.saturating_add(1);
         response_bytes = response_bytes.saturating_add(bytes.len() as u64);
         buf.push_str(std::str::from_utf8(&bytes).unwrap_or(""));
@@ -801,6 +864,7 @@ where
             };
             let data = data.trim();
             if data == "[DONE]" {
+                terminal_marker_received = true;
                 break 'outer;
             }
             if data.is_empty() {
@@ -831,6 +895,19 @@ where
                     .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown provider error");
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "provider_stream_error",
+                        "stream": true,
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "partial_tool_call_count": tc_map.len(),
+                        "error": msg,
+                    })
+                ));
                 return Err(ApiError::LlmFailed(format!(
                     "stream API error [{}]: {}",
                     model, msg
@@ -848,13 +925,16 @@ where
             if let Some(s) = delta["content"].as_str() {
                 if !s.is_empty() {
                     full_content.push_str(s);
-                    on_chunk(s.to_string());
+                    on_event(crate::types::LlmStreamEvent::TextDelta {
+                        text: s.to_string(),
+                    });
                 }
             }
 
             if let Some(s) = delta["reasoning_content"].as_str() {
                 if !s.is_empty() {
                     full_reasoning.push_str(s);
+                    on_event(crate::types::LlmStreamEvent::ReasoningDelta { bytes: s.len() });
                 }
             }
 
@@ -862,6 +942,7 @@ where
                 for tc in tcs {
                     let idx = tc["index"].as_u64().unwrap_or(0) as usize;
                     let entry = tc_map.entry(idx).or_default();
+                    let mut argument_bytes = 0usize;
                     if let Some(id) = tc["id"].as_str() {
                         entry.0 = id.to_string();
                     }
@@ -870,17 +951,49 @@ where
                     }
                     if let Some(a) = tc["function"]["arguments"].as_str() {
                         entry.2.push_str(a);
+                        argument_bytes = a.len();
                         if stream_argument_fields {
                             if let Some(visible) = arg_extractor.feed(a) {
-                                on_chunk(visible);
+                                on_event(crate::types::LlmStreamEvent::TextDelta { text: visible });
                             }
                         }
                     }
+                    on_event(crate::types::LlmStreamEvent::ToolCallDelta {
+                        index: idx as u64,
+                        call_id: (!entry.0.is_empty()).then(|| entry.0.clone()),
+                        name: (!entry.1.is_empty()).then(|| entry.1.clone()),
+                        argument_bytes,
+                    });
                 }
             }
         }
     }
 
+    if !terminal_marker_received && finish_reason.is_none() {
+        crate::diagnostics::append_line(format!(
+            "[ai-gateway response] {}",
+            json!({
+                "phase": "stream_incomplete",
+                "stream": true,
+                "model": model,
+                "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                "chunk_count": chunk_count,
+                "response_bytes": response_bytes,
+                "partial_tool_call_count": tc_map.len(),
+            })
+        ));
+        return Err(ApiError::LlmFailed(
+            "stream ended before a terminal marker or finish reason was received".to_string(),
+        ));
+    }
+
+    for (index, (call_id, name, _)) in &tc_map {
+        on_event(crate::types::LlmStreamEvent::ToolCallCompleted {
+            index: *index as u64,
+            call_id: (!call_id.is_empty()).then(|| call_id.clone()),
+            name: (!name.is_empty()).then(|| name.clone()),
+        });
+    }
     let tool_calls = if tc_map.is_empty() {
         None
     } else {

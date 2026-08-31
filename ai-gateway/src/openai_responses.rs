@@ -17,9 +17,23 @@ fn http_client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
         Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(15))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()
             .expect("build OpenAI Responses HTTP client")
+    })
+}
+
+fn streaming_http_client() -> &'static Client {
+    static CLIENT: OnceCell<Client> = OnceCell::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(crate::stream_control::TOTAL_TIMEOUT)
+            .connect_timeout(crate::stream_control::CONNECT_TIMEOUT)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .build()
+            .expect("build OpenAI Responses streaming HTTP client")
     })
 }
 
@@ -235,12 +249,12 @@ pub async fn call_inner_streaming<F>(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
-    mut on_chunk: F,
+    mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
-    F: FnMut(String) + Send,
+    F: FnMut(crate::types::LlmStreamEvent) + Send,
 {
-    use futures_util::StreamExt;
+    let request_started = std::time::Instant::now();
 
     let url = format!("{}/responses", base_url.trim_end_matches('/'));
     let mut body = build_request_body(
@@ -266,7 +280,7 @@ where
         let model = model_owned.clone();
         let runtime_headers = runtime_headers.clone();
         async move {
-            let request = http_client()
+            let request = streaming_http_client()
                 .post(url.as_str())
                 .bearer_auth(key.as_str())
                 .json(body.as_ref());
@@ -293,13 +307,74 @@ where
     })
     .await?;
 
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
+        json!({
+            "phase": "headers_received",
+            "stream": true,
+            "provider_api": "openai_responses",
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+        })
+    ));
+
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut completed_response = None;
     let mut completed_items = std::collections::BTreeMap::<u64, Value>::new();
-    while let Some(chunk) = stream.next().await {
-        let bytes =
-            chunk.map_err(|error| ApiError::LlmFailed(format!("stream chunk error: {error}")))?;
+    let mut first_event_logged = false;
+    let mut chunk_count = 0u64;
+    let mut response_bytes = 0u64;
+    loop {
+        let chunk = match crate::stream_control::next_with_idle_timeout(&mut stream).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(()) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "stream_idle_timeout",
+                        "stream": true,
+                        "provider_api": "openai_responses",
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "idle_timeout_ms": crate::stream_control::IDLE_TIMEOUT.as_millis() as u64,
+                        "first_event_received": first_event_logged,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "partial_output_item_count": completed_items.len(),
+                    })
+                ));
+                return Err(ApiError::LlmFailed(format!(
+                    "stream produced no data for {} seconds",
+                    crate::stream_control::IDLE_TIMEOUT.as_secs()
+                )));
+            }
+        };
+        let bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": if error.is_timeout() { "stream_total_timeout" } else { "stream_error" },
+                        "stream": true,
+                        "provider_api": "openai_responses",
+                        "model": model,
+                        "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                        "first_event_received": first_event_logged,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                        "total_timeout_ms": crate::stream_control::TOTAL_TIMEOUT.as_millis() as u64,
+                        "partial_output_item_count": completed_items.len(),
+                        "error": error.to_string(),
+                    })
+                ));
+                return Err(ApiError::LlmFailed(format!("stream chunk error: {error}")));
+            }
+        };
+        chunk_count = chunk_count.saturating_add(1);
+        response_bytes = response_bytes.saturating_add(bytes.len() as u64);
         buffer.push_str(std::str::from_utf8(&bytes).unwrap_or_default());
         while let Some(pos) = buffer.find('\n') {
             let line = buffer[..pos].trim_end_matches('\r').to_string();
@@ -314,6 +389,21 @@ where
             let event: Value = serde_json::from_str(data).map_err(|error| {
                 ApiError::LlmFailed(format!("invalid Responses stream event: {error}"))
             })?;
+            if !first_event_logged {
+                first_event_logged = true;
+                crate::diagnostics::append_line(format!(
+                    "[ai-gateway response] {}",
+                    json!({
+                        "phase": "first_stream_event",
+                        "stream": true,
+                        "provider_api": "openai_responses",
+                        "model": model,
+                        "ttft_ms": request_started.elapsed().as_millis() as u64,
+                        "chunk_count": chunk_count,
+                        "response_bytes": response_bytes,
+                    })
+                ));
+            }
             match event
                 .get("type")
                 .and_then(Value::as_str)
@@ -322,15 +412,71 @@ where
                 "response.output_text.delta" => {
                     if let Some(delta) = event.get("delta").and_then(Value::as_str) {
                         if !delta.is_empty() {
-                            on_chunk(delta.to_string());
+                            on_event(crate::types::LlmStreamEvent::TextDelta {
+                                text: delta.to_string(),
+                            });
                         }
                     }
+                }
+                "response.output_item.added" => {
+                    let index = event
+                        .get("output_index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    if let Some(item) = event.get("item").filter(|item| {
+                        item.get("type").and_then(Value::as_str) == Some("function_call")
+                    }) {
+                        on_event(crate::types::LlmStreamEvent::ToolCallDelta {
+                            index,
+                            call_id: item
+                                .get("call_id")
+                                .or_else(|| item.get("id"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            name: item.get("name").and_then(Value::as_str).map(str::to_string),
+                            argument_bytes: 0,
+                        });
+                    }
+                }
+                "response.function_call_arguments.delta" => {
+                    let index = event
+                        .get("output_index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    let argument_bytes = event
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .map(str::len)
+                        .unwrap_or_default();
+                    on_event(crate::types::LlmStreamEvent::ToolCallDelta {
+                        index,
+                        call_id: event
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        name: event
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        argument_bytes,
+                    });
                 }
                 "response.output_item.done" => {
                     if let (Some(index), Some(item)) = (
                         event.get("output_index").and_then(Value::as_u64),
                         event.get("item").cloned(),
                     ) {
+                        if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                            on_event(crate::types::LlmStreamEvent::ToolCallCompleted {
+                                index,
+                                call_id: item
+                                    .get("call_id")
+                                    .or_else(|| item.get("id"))
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                name: item.get("name").and_then(Value::as_str).map(str::to_string),
+                            });
+                        }
                         completed_items.insert(index, item);
                     }
                 }
@@ -344,19 +490,60 @@ where
                         .or_else(|| event.get("message"))
                         .and_then(Value::as_str)
                         .unwrap_or("Responses stream failed");
+                    crate::diagnostics::append_line(format!(
+                        "[ai-gateway response] {}",
+                        json!({
+                            "phase": "provider_stream_error",
+                            "stream": true,
+                            "provider_api": "openai_responses",
+                            "model": model,
+                            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                            "chunk_count": chunk_count,
+                            "response_bytes": response_bytes,
+                            "error": message,
+                        })
+                    ));
                     return Err(ApiError::LlmFailed(message.to_string()));
                 }
                 _ => {}
             }
         }
     }
-    let response = completed_response.unwrap_or_else(|| {
+    let Some(response) = completed_response else {
+        crate::diagnostics::append_line(format!(
+            "[ai-gateway response] {}",
+            json!({
+                "phase": "stream_incomplete",
+                "stream": true,
+                "provider_api": "openai_responses",
+                "model": model,
+                "elapsed_ms": request_started.elapsed().as_millis() as u64,
+                "chunk_count": chunk_count,
+                "response_bytes": response_bytes,
+                "completed_output_item_count": completed_items.len(),
+            })
+        ));
+        return Err(ApiError::LlmFailed(
+            "Responses stream ended before response.completed".to_string(),
+        ));
+    };
+    let parsed = parse_response(response)?;
+    crate::diagnostics::append_line(format!(
+        "[ai-gateway response] {}",
         json!({
-            "status": "completed",
-            "output": completed_items.into_values().collect::<Vec<_>>()
+            "phase": "completed",
+            "stream": true,
+            "provider_api": "openai_responses",
+            "model": model,
+            "elapsed_ms": request_started.elapsed().as_millis() as u64,
+            "first_event_received": first_event_logged,
+            "chunk_count": chunk_count,
+            "response_bytes": response_bytes,
+            "content_chars": parsed.content.chars().count(),
+            "tool_call_count": parsed.tool_calls.as_ref().map(Vec::len).unwrap_or(0),
         })
-    });
-    parse_response(response)
+    ));
+    Ok(parsed)
 }
 
 #[cfg(test)]

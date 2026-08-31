@@ -689,6 +689,34 @@ func (r *Runtime) SetSummaryModel(
 	}, nil
 }
 
+func (r *Runtime) SetConversationModel(
+	ctx context.Context,
+	conversationID string,
+	modelUID uint32,
+) (AdmissionResult, error) {
+	raw, err := r.invoke(ctx, "conversation.set_model", map[string]any{
+		"conversation_id": conversationID,
+		"model_uid":       modelUID,
+	})
+	if err != nil {
+		return AdmissionResult{}, err
+	}
+	var admission struct {
+		CommandID string `json:"command_id"`
+		Decision  string `json:"decision"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &admission); err != nil {
+		return AdmissionResult{}, err
+	}
+	return AdmissionResult{
+		CommandID:    admission.CommandID,
+		Accepted:     admission.Decision == "accepted",
+		Decision:     admission.Decision,
+		RejectReason: admission.Reason,
+	}, nil
+}
+
 func (r *Runtime) CompactHistory(
 	ctx context.Context,
 	conversationID string,

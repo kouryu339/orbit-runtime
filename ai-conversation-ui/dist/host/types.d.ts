@@ -218,7 +218,8 @@ export type ConfigureProvidersRequest = {
     source?: 'path' | 'json' | 'text';
     metadata?: Record<string, unknown>;
 };
-export type SetCurrentModelRequest = {
+export type SetConversationModelRequest = {
+    conversationId: string;
     modelUid: number;
     metadata?: Record<string, unknown>;
 };
@@ -226,7 +227,7 @@ export interface ConversationProviderController {
     getProviderDefinitions(): Promise<ProviderDefinitionsResult>;
     getBuiltinProviderCatalog?(): Promise<BuiltinProviderCatalog>;
     configureProviders(request: ConfigureProvidersRequest): Promise<CommandResult>;
-    setCurrentModel(request: SetCurrentModelRequest): Promise<CommandResult>;
+    setConversationModel(request: SetConversationModelRequest): Promise<CommandResult>;
 }
 export type ConversationProviderControlsPolicy = {
     enabled: false;

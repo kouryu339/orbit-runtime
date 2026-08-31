@@ -93,6 +93,20 @@ mod delegated_task_snapshot_tests {
         assert_eq!(deltas[1]["op"], "agent.retired");
         assert_eq!(deltas[1]["definition_id"], "research-profile");
     }
+
+    #[test]
+    fn agent_instance_deltas_do_not_repeat_an_unchanged_runtime_state() {
+        let snapshot = crate::agent::AgentRuntimeSnapshot {
+            agent_id: "main".to_string(),
+            definition_id: "main".to_string(),
+            agent_name: "Main Agent".to_string(),
+            state: "thinking".to_string(),
+        };
+        let previous = BTreeMap::from([("main".to_string(), snapshot.clone())]);
+        let current = BTreeMap::from([("main".to_string(), snapshot)]);
+
+        assert!(agent_instance_state_deltas(&previous, &current).is_empty());
+    }
 }
 
 enum CompactAgentOutcome {

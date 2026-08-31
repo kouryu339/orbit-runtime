@@ -54,6 +54,26 @@ RUNTIME_CONTEXT_PROBE=1
 RUNTIME_CONTEXT_PROBE_FILE=./data/logs/runtime-context-probe.log
 ```
 
+流式 LLM 请求在 Runtime 诊断日志中使用稳定阶段：
+
+```text
+headers_received
+first_stream_event
+completed
+stream_idle_timeout
+stream_total_timeout
+stream_error
+stream_incomplete
+provider_stream_error
+```
+
+流式请求使用 15 秒连接超时、60 秒相邻数据块空闲超时和 10 分钟总上限。只要持续收到
+SSE 数据，就不会再被旧的 120 秒总请求限制误杀。`stream_idle_timeout` 表示连接仍存在但
+连续 60 秒没有新数据；`stream_total_timeout` 表示整个流超过 10 分钟；
+`stream_incomplete` 表示连接结束却没有收到该协议规定的终止信号。日志只记录耗时、
+chunk/byte 数、部分正文长度、部分工具调用数量和参数字节数，不记录工具参数原文。前端
+没有工具气泡时，可据此区分“provider 从未发出工具身份”与“已发出身份但调用未闭合”。
+
 ## 8.4 文件职责
 
 | 文件/出口 | 责任 |

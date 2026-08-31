@@ -210,9 +210,11 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private providerModelsForProvider;
     private nextProviderUid;
     private nextModelUid;
-    private currentProviderModelUid;
+    private globalProviderModelUid;
+    private currentConversationModelUid;
     private currentProviderModelLabel;
     private providerModelLabel;
+    private providerModelName;
     private isCurrentArchive;
     private formatArchiveTime;
     private emitProviderError;

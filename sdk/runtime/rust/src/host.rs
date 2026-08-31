@@ -502,6 +502,18 @@ impl RuntimeApp {
         Ok(admission_from_value(result))
     }
 
+    pub fn set_conversation_model(
+        &self,
+        conversation_id: &str,
+        model_uid: u64,
+    ) -> Result<AdmissionResult> {
+        let result = self.invoke(
+            "conversation.set_model",
+            json!({ "conversation_id": conversation_id, "model_uid": model_uid }),
+        )?;
+        Ok(admission_from_value(result))
+    }
+
     pub fn compact_history(
         &self,
         conversation_id: &str,

@@ -79,6 +79,12 @@ export function conversationReducer(state, action) {
                     ? { ...message, state: 'failed', error: action.error }
                     : message),
             };
+        case 'conversation-model-selected':
+            return {
+                ...state,
+                model: action.model,
+                modelUid: action.modelUid,
+            };
         case 'clear-error':
             return { ...state, lastError: undefined };
         case 'reset':
@@ -110,7 +116,13 @@ function applySnapshot(state, payload, eventSeq = 0) {
     const incoming = snapshotRecords(payload);
     const pending = reconcilePendingMessages(state.pendingUserMessages, incoming);
     const records = mergeRecords(state.records, incoming, payload, pending.acknowledgedIds);
-    const toolCalls = collectToolCalls(records, payload.ledger_delta?.kind === 'replace' ? [] : state.toolCalls);
+    // `records` is the complete merged ledger view. Rebuild durable tool calls
+    // from it so stream-only placeholders cannot leak into the next snapshot.
+    const durableToolCalls = collectToolCalls(records, []);
+    const assistantStream = payload.assistant_stream === undefined
+        ? state.assistantStream
+        : payload.assistant_stream ?? undefined;
+    const toolCalls = mergeProvisionalToolCalls(durableToolCalls, assistantStream);
     const runtimeState = payload.conversation_state ?? state.runtimeState;
     const turnObservedRunning = state.turnObservedRunning || runtimeState !== 'waiting';
     const assistantOutputObserved = hasCurrentTurnAssistantOutput(state.records, incoming);
@@ -138,10 +150,44 @@ function applySnapshot(state, payload, eventSeq = 0) {
         pendingUserMessages: pendingMessages,
         toolCalls,
         agents: payload.agents ?? state.agents,
+        model: payload.model === undefined ? state.model : payload.model ?? undefined,
+        modelUid: payload.model_uid === undefined ? state.modelUid : payload.model_uid ?? undefined,
         plan: payload.plan ?? state.plan,
         pendingPermissions: payload.pending_permissions ?? payload.pendingPermissions ?? state.pendingPermissions,
+        assistantStream,
         lastError: payload.error ?? state.lastError,
     };
+}
+function mergeProvisionalToolCalls(durable, stream) {
+    const calls = new Map(durable.map((call) => [call.id, call]));
+    for (const provisional of stream?.provisional_tool_calls ?? []) {
+        const id = provisional.call_id || provisional.key;
+        const toolName = provisional.tool_name ?? '';
+        const existing = calls.get(id);
+        if (existing) {
+            if (existing.status === 'placeholder' && !existing.toolName && toolName) {
+                calls.set(id, {
+                    ...existing,
+                    title: `Preparing ${toolName}`,
+                    toolName,
+                    detail: provisional.status === 'ready'
+                        ? 'The model has finished preparing this call.'
+                        : 'The model is preparing this call.',
+                });
+            }
+            continue;
+        }
+        calls.set(id, {
+            id,
+            title: toolName ? `Preparing ${toolName}` : 'Preparing tool call',
+            status: 'placeholder',
+            detail: provisional.status === 'ready'
+                ? 'The model has finished preparing this call.'
+                : 'The model is preparing this call.',
+            toolName,
+        });
+    }
+    return [...calls.values()].slice(-80);
 }
 function hasCurrentTurnAssistantOutput(current, incoming) {
     const currentByKey = new Map(current.map((record) => [recordKey(record), displayText(record)]));

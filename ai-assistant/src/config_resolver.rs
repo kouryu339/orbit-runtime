@@ -39,9 +39,22 @@ fn conversation_cache() -> Option<Arc<dyn Cache>> {
 /// `agent_cache` 通常为 `agent.sm.unit().cache()` 或 thinking on_enter 内
 /// 拿到的 scoped cache。返回 `None` 表示无任何可用模型。
 pub async fn resolve_inference_model_uid(agent_cache: &Arc<dyn Cache>) -> Option<u32> {
-    if let Some(name) =
-        read_model_name_from_caches(agent_cache, conversation_keys::CONFIG_MODEL).await
-    {
+    let scoped_name = agent_cache
+        .get::<String>(conversation_keys::CONFIG_MODEL)
+        .await
+        .ok()
+        .flatten()
+        .filter(|name| !name.is_empty());
+    let agent_name = match scoped_name {
+        Some(name) => Some(name),
+        None => agent_cache
+            .get::<String>(keys::MODEL)
+            .await
+            .ok()
+            .flatten()
+            .filter(|name| !name.is_empty()),
+    };
+    if let Some(name) = agent_name {
         if let Some(uid) = llm_gateway::key_store::find_by_name(&name) {
             return Some(uid);
         } else {
@@ -56,23 +69,19 @@ pub async fn resolve_inference_model_uid(agent_cache: &Arc<dyn Cache>) -> Option
 
 /// 解析摘要模型的 `model_uid`，缺省时回退到推理模型 `fallback_uid`。
 pub async fn resolve_summary_model_uid(agent_cache: &Arc<dyn Cache>, fallback_uid: u32) -> u32 {
-    // 仅 conversation 层显式设置 summary_model 才走此路径。
-    if let Some(cache) = conversation_cache() {
-        if let Ok(Some(name)) = cache
-            .get::<String>(conversation_keys::CONFIG_SUMMARY_MODEL)
-            .await
-        {
-            if let Some(uid) = llm_gateway::key_store::find_by_name(&name) {
-                return uid;
-            } else {
-                tracing::warn!(
-                    "scoped config:summary_model='{}' 未在 key_store 中找到，回退到推理模型",
-                    name
-                );
-            }
+    if let Ok(Some(name)) = agent_cache
+        .get::<String>(conversation_keys::CONFIG_SUMMARY_MODEL)
+        .await
+    {
+        if let Some(uid) = llm_gateway::key_store::find_by_name(&name) {
+            return uid;
+        } else {
+            tracing::warn!(
+                "scoped config:summary_model='{}' 未在 key_store 中找到，回退到推理模型",
+                name
+            );
         }
     }
-    let _ = agent_cache; // 暂未使用 agent 层 summary key（保留参数以便未来扩展）
     fallback_uid
 }
 
@@ -115,24 +124,4 @@ pub async fn write_conversation_language(language: &str) -> crate::Result<()> {
             .await?;
     }
     Ok(())
-}
-
-/// 在 conversation cache 与 agent cache 中按 key 查模型名。
-async fn read_model_name_from_caches(
-    agent_cache: &Arc<dyn Cache>,
-    conversation_key: &str,
-) -> Option<String> {
-    if let Some(cache) = conversation_cache() {
-        if let Ok(Some(name)) = cache.get::<String>(conversation_key).await {
-            if !name.is_empty() {
-                return Some(name);
-            }
-        }
-    }
-    if let Ok(Some(name)) = agent_cache.get::<String>(keys::MODEL).await {
-        if !name.is_empty() {
-            return Some(name);
-        }
-    }
-    None
 }

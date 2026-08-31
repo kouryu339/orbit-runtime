@@ -159,8 +159,10 @@ bounded diagnostics off the Runtime event payload path:
   Responses, and Anthropic Messages preserve structured tool calls, arguments,
   provider call IDs, and formal tool results across Ledger recovery.
 - **Focused streaming snapshots**: all native FC requests stream internally,
-  while only the focused Agent's ephemeral text is projected through
-  `frontend:state_snapshot.assistant_stream`. Background Agent streams remain
+  while only the focused Agent's ephemeral output is projected through
+  `frontend:state_snapshot.assistant_stream`. Provisional tool identity is
+  projected without partial arguments, then reconciled by provider `call_id`
+  with the durable Ledger tool lifecycle. Background Agent streams remain
   internal and final content is committed once through the Ledger.
 - **Strict tool schemas**: compatible providers may enable closed strict
   function schemas; invalid active tool metadata fails explicitly without
@@ -168,7 +170,11 @@ bounded diagnostics off the Runtime event payload path:
 
 - **Model latency diagnostics**: every provider attempt records start, success,
   failure, retry scheduling, backoff, exhaustion, response headers, streaming
-  first-event latency, and completion duration.
+  first-event latency, completion duration, inter-chunk idle timeout, ten-minute
+  total timeout, stream error, and a missing terminal marker. Streaming uses a
+  15-second connect / 60-second idle / 10-minute total policy, so active streams
+  are not cut off at the former two-minute boundary. Partial argument byte
+  counts are recorded without argument contents.
 - **Tool-protocol retry evidence**: responses rejected before ledger write record
   the validation reason, thinking attempt, and complete pre-normalization model
   content in the local Runtime diagnostic log so hidden syntax retries can be

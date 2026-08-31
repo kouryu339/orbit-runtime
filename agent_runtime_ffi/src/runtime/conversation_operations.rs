@@ -1,6 +1,26 @@
 use super::*;
 
 impl RuntimeFacade {
+    pub fn set_conversation_model_with_admission(
+        &self,
+        conversation_id: &str,
+        model_uid: u32,
+        command_id: String,
+    ) -> Result<ai_assistant::gateway::AdmissionResult, RuntimeError> {
+        let manager = self.manager()?;
+        let conversation_id = non_empty_arg(conversation_id, "conversation_id")?;
+        self.require_conversation_owner(&conversation_id)?;
+        let model_name = key_store::get(model_uid)
+            .map(|entry| entry.model_name)
+            .ok_or_else(|| RuntimeError::Llm(format!("model uid {model_uid} is not configured")))?;
+        self.rt.block_on(async move {
+            manager
+                .set_model_with_admission(&conversation_id, &model_name, Some(command_id))
+                .await
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })
+    }
+
     pub fn set_ai_auth_context(&mut self, context_json: &str) -> Result<(), RuntimeError> {
         let headers = parse_ai_auth_context_headers(context_json)?;
         self.ai_auth_context_headers = headers.clone();
@@ -93,7 +113,14 @@ impl RuntimeFacade {
     ) -> Result<ConversationInfo, RuntimeError> {
         let snapshot = parse_conversation_snapshot(snapshot_json)?;
         let info = self.spawn_conversation(spawn_json)?;
+        let tool_protocols = snapshot.tool_protocols.clone();
         let state_deltas = snapshot_state_deltas(&snapshot);
+        if let Err(error) =
+            self.apply_conversation_tool_protocols(&info.conversation_id, tool_protocols.as_ref())
+        {
+            let _ = self.close_conversation(&info.conversation_id);
+            return Err(error);
+        }
         let recovery =
             match self.replace_conversation_ledger(&info.conversation_id, snapshot.ledger) {
                 Ok(recovery) => recovery,

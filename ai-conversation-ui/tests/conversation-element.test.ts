@@ -783,7 +783,7 @@ describe('AgentRuntimeConversationElement', () => {
           payload: {
             revision: 7,
             conversation_state: 'waiting',
-            ledger_records: [
+            ledger: [
               { record_id: 'user-1', role: 'user', content: 'hello' },
               { record_id: 'assistant-1', role: 'assistant', content: 'saved answer' },
             ],
@@ -858,9 +858,16 @@ describe('AgentRuntimeConversationElement', () => {
         ],
       })),
       configureProviders: vi.fn(async () => ({ accepted: true })),
-      setCurrentModel: vi.fn(async () => ({ accepted: true })),
+      setConversationModel: vi.fn(async () => ({ accepted: true })),
     };
     const element = new AgentRuntimeConversationElement();
+    element.conversationId = 'conversation-model-test';
+    element.state = {
+      ...element.state,
+      conversationId: 'conversation-model-test',
+      model: 'deepseek-v4-flash',
+      modelUid: 1002,
+    };
     element.providerControls = { enabled: true, controller };
     document.body.append(element);
     await element.updateComplete;
@@ -871,16 +878,20 @@ describe('AgentRuntimeConversationElement', () => {
     const modelButton = Array.from(
       element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
     ).find((button) => button.dataset.tone === 'model');
-    expect(modelButton?.textContent?.trim()).toBe('gpt-5.1 / OpenAI compatible');
+    expect(modelButton?.textContent?.trim()).toBe('deepseek-v4-flash / OpenAI compatible');
     modelButton?.click();
     await element.updateComplete;
 
     const select = element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select');
     expect(select?.textContent).toContain('deepseek-v4-flash');
-    select!.value = '1002';
+    expect(select?.value).toBe('1002');
+    select!.value = '1001';
     select!.dispatchEvent(new Event('change'));
     await vi.waitFor(() => {
-      expect(controller.setCurrentModel).toHaveBeenCalledWith({ modelUid: 1002 });
+      expect(controller.setConversationModel).toHaveBeenCalledWith({
+        conversationId: 'conversation-model-test',
+        modelUid: 1001,
+      });
     });
     await vi.waitFor(() => {
       expect(
@@ -889,6 +900,14 @@ describe('AgentRuntimeConversationElement', () => {
         ).find((button) => button.textContent?.trim() === 'Add provider')?.disabled,
       ).toBe(false);
     });
+    expect(modelButton?.textContent?.trim()).toBe('gpt-5.1 / OpenAI compatible');
+    modelButton?.click();
+    await element.updateComplete;
+    modelButton?.click();
+    await element.updateComplete;
+    expect(
+      element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select')?.value,
+    ).toBe('1001');
 
     const addButton = Array.from(
       element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
@@ -950,7 +969,7 @@ describe('AgentRuntimeConversationElement', () => {
           }],
         },
       ],
-      current_model_uid: 1002,
+      current_model_uid: 1001,
     });
   });
 

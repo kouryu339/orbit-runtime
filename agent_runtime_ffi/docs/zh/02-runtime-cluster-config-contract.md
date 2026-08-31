@@ -112,6 +112,12 @@ role/feature Skill 白名单开放。当前不接受除 `thinking` 外的状态�
 `tool(tool_call_id)` 作为正式 Ledger 事实持久化；恢复后仍按原生协议回传，不转换成
 伪造的 user 消息。
 
+实际协议按 conversation participant 固定，并通过 conversation snapshot 顶层的
+`tool_protocols` 映射持久化。导入时以该映射为准，不使用当前 Agent 注册表的新默认值。
+前两个受支持版本生成的 snapshot 没有这个映射，恢复时按 `exec_legacy` 处理。构造原生
+FC 历史时，Runtime 只发送属于完整 `assistant(tool_calls)` 调用组的 `tool` 消息；旧记录中
+无法配对的工具结果会作为普通上下文发送。
+
 这次默认值切换是有意行为：未配置 `toolProtocol` 的配置现在会使用 `native_fc`。
 仍需保留文本 `EXEC` 行为的部署必须显式设置 `"toolProtocol": "exec_legacy"`。
 

@@ -929,12 +929,17 @@ mod tests {
             },
         );
 
-        tokio::spawn(async {
-            let _ = serve("127.0.0.1:50170").await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(AgentToolServiceServer::new(RustAgentToolService))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
         });
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        let mut client = AgentToolServiceClient::connect("http://127.0.0.1:50170")
+        let mut client = AgentToolServiceClient::connect(format!("http://{address}"))
             .await
             .unwrap();
         let tools = client
@@ -981,5 +986,6 @@ mod tests {
         };
         assert_eq!(output.to_ai, "rust sdk smoke ok");
         assert_eq!(output.error_code, ToolErrorCode::Ok as i32);
+        server.abort();
     }
 }

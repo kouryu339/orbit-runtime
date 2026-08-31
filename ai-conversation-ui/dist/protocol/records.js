@@ -48,14 +48,18 @@ export function toolCallFromRecord(record) {
     const id = String(extra.call_id ?? record.metadata?.call_id ?? recordKey(record));
     const toolName = String(record.metadata?.tool_name ?? extra.tool_name ?? '');
     const title = String(record.metadata?.title ?? (toolName || recordText(record) || 'Tool call'));
-    const status = subtype === 'tool_call_failed'
-        ? 'failed'
-        : subtype === 'tool_call_finished'
-            ? 'finished'
-            : subtype === 'tool_call_permission_requested' ||
-                extra.status === 'waiting_permission'
-                ? 'waiting_permission'
-                : 'running';
+    const status = subtype === 'tool_call_interrupted_unknown' ||
+        extra.status === 'interrupted_unknown' ||
+        extra.status === 'recovery_interrupted'
+        ? 'uncertain'
+        : subtype === 'tool_call_failed'
+            ? 'failed'
+            : subtype === 'tool_call_finished'
+                ? 'finished'
+                : subtype === 'tool_call_permission_requested' ||
+                    extra.status === 'waiting_permission'
+                    ? 'waiting_permission'
+                    : 'running';
     return {
         id,
         title,
@@ -69,6 +73,28 @@ export function collectToolCalls(records, previous = []) {
     const calls = new Map(previous.map((call) => [call.id, call]));
     for (const record of records) {
         if (record.role === 'assistant') {
+            const declarations = record.metadata?.extra?.tool_calls;
+            if (Array.isArray(declarations)) {
+                for (const declaration of declarations) {
+                    if (!declaration || typeof declaration !== 'object')
+                        continue;
+                    const value = declaration;
+                    const id = typeof value.id === 'string' ? value.id : '';
+                    const fn = value.function && typeof value.function === 'object'
+                        ? value.function
+                        : undefined;
+                    const toolName = typeof fn?.name === 'string' ? fn.name : '';
+                    if (!id || calls.has(id))
+                        continue;
+                    calls.set(id, {
+                        id,
+                        title: toolName ? `Preparing ${toolName}` : 'Preparing tool call',
+                        status: 'placeholder',
+                        detail: '',
+                        toolName,
+                    });
+                }
+            }
             for (const id of toolCallIdsFromRecord(record)) {
                 if (!calls.has(id)) {
                     calls.set(id, {

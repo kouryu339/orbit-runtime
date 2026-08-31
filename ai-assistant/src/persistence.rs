@@ -79,7 +79,9 @@ mod legacy_migration_tests {
         let _ = tokio::fs::remove_dir_all(&data_dir).await;
         set_data_dir(data_dir);
 
-        let session_id = create_new_session("test-model").await.unwrap();
+        let session_id = create_new_session("test-model", crate::ToolProtocol::NativeFc)
+            .await
+            .unwrap();
         let unique_content = format!("persist me in {}", session_id);
         let record = crate::ledger::LedgerRecord {
             record_id: 987,
@@ -119,6 +121,11 @@ impl Default for ConversationIndex {
 /// 单个会话的元数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
+    /// Per-session persistence contract. Version 1 is the EXEC-only format
+    /// produced by the two releases before native function calling became the
+    /// default; version 2 persists the tool protocol explicitly.
+    #[serde(default = "legacy_session_format_version")]
+    pub format_version: u32,
     /// 会话 ID（格式：sid_YYYYMMDD_HHMMSS）
     pub id: String,
     /// 会话标题（自动生成或用户自定义）
@@ -131,6 +138,10 @@ pub struct SessionMeta {
     pub message_count: u32,
     /// 使用的模型名称
     pub model: String,
+    /// Tool protocol fixed when the conversation is created. Old version-1
+    /// sessions did not carry this field and are migrated as `ExecLegacy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_protocol: Option<crate::ToolProtocol>,
     /// 该会话中创建过的子 Agent 快照
     #[serde(default)]
     pub agents: Vec<AgentSnapshot>,
@@ -164,6 +175,10 @@ pub struct AgentSnapshot {
     pub imported_skills: Vec<String>,
     #[serde(default)]
     pub permissions: AgentPermissions,
+    /// Protocol used to produce this participant's persisted history. Missing
+    /// values belong to the supported legacy EXEC snapshot format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_protocol: Option<crate::ToolProtocol>,
 }
 
 /// 展示层元数据：仅用于前端渲染，不参与 LLM API 调用
@@ -281,6 +296,25 @@ pub struct RestoreResult {
     pub imported_skills: Vec<String>,
     /// 默认入口 Agent 上次会话的当前计划
     pub current_plan: Option<CurrentPlan>,
+    /// Effective protocol selected from the persisted session contract.
+    pub tool_protocol: crate::ToolProtocol,
+}
+
+const CURRENT_SESSION_FORMAT_VERSION: u32 = 2;
+
+fn legacy_session_format_version() -> u32 {
+    1
+}
+
+fn effective_session_tool_protocol(
+    session: &SessionMeta,
+    configured: crate::ToolProtocol,
+) -> (crate::ToolProtocol, bool) {
+    match session.tool_protocol {
+        Some(protocol) => (protocol, false),
+        None if session.format_version == 1 => (crate::ToolProtocol::ExecLegacy, true),
+        None => (configured, false),
+    }
 }
 
 // ============================================================================
@@ -572,17 +606,22 @@ pub async fn load_full_session(session_id: &str) -> crate::Result<Vec<PersistedM
 }
 
 /// 创建新会话（写入索引，切换 current_session）
-pub async fn create_new_session(model: &str) -> crate::Result<String> {
+pub async fn create_new_session(
+    model: &str,
+    tool_protocol: crate::ToolProtocol,
+) -> crate::Result<String> {
     let sid = generate_session_id();
     let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
 
     let meta = SessionMeta {
+        format_version: CURRENT_SESSION_FORMAT_VERSION,
         id: sid.clone(),
         title: "新对话".to_string(),
         created_at: now.clone(),
         updated_at: now,
         message_count: 0,
         model: model.to_string(),
+        tool_protocol: Some(tool_protocol),
         agents: Vec::new(),
         imported_skills: Vec::new(),
         current_plan: None,
@@ -824,7 +863,11 @@ pub async fn save_agent_skill_state(
 /// 初始化持久化层：加载索引，恢复或创建当前会话
 /// 返回需要恢复的默认入口 Agent 历史和活跃子 Agent 快照。
 /// 调用方负责将 default_agent_history 写入 cache，将 active_agents 重建为 SubAgent。
-pub async fn init_persistence(model: &str, default_agent_id: &str) -> crate::Result<RestoreResult> {
+pub async fn init_persistence(
+    model: &str,
+    default_agent_id: &str,
+    configured_tool_protocol: crate::ToolProtocol,
+) -> crate::Result<RestoreResult> {
     set_default_agent_id(default_agent_id);
     ensure_dirs()
         .await
@@ -839,7 +882,11 @@ pub async fn init_persistence(model: &str, default_agent_id: &str) -> crate::Res
             let default_agent_history = load_default_agent_history(sid).await?;
 
             // 从 SessionMeta 中读取默认 Agent 的 imported_skills + 筛选活跃子 Agent
-            let session = index.sessions.iter().find(|s| s.id == *sid);
+            let session_index = index.sessions.iter().position(|s| s.id == *sid);
+            let session = session_index.map(|position| &index.sessions[position]);
+            let (tool_protocol, migrate_legacy_protocol) = session
+                .map(|session| effective_session_tool_protocol(session, configured_tool_protocol))
+                .unwrap_or((configured_tool_protocol, false));
 
             let active_agents: Vec<AgentSnapshot> = session
                 .map(|s| {
@@ -859,6 +906,19 @@ pub async fn init_persistence(model: &str, default_agent_id: &str) -> crate::Res
 
             let current_plan: Option<CurrentPlan> = session.and_then(|s| s.current_plan.clone());
 
+            if migrate_legacy_protocol {
+                if let Some(position) = session_index {
+                    index.sessions[position].tool_protocol = Some(tool_protocol);
+                    index.sessions[position].format_version = CURRENT_SESSION_FORMAT_VERSION;
+                    save_index(&index).await?;
+                }
+                tracing::info!(
+                    session_id = %sid,
+                    tool_protocol = ?tool_protocol,
+                    "migrated supported legacy session tool protocol"
+                );
+            }
+
             tracing::info!(
                 "恢复会话 {}：{}条默认 Agent 消息，{}个活跃 Agent，{}个 imported skills，计划={}",
                 sid,
@@ -873,12 +933,13 @@ pub async fn init_persistence(model: &str, default_agent_id: &str) -> crate::Res
                 active_agents,
                 imported_skills,
                 current_plan,
+                tool_protocol,
             });
         }
     }
 
     // 无可恢复的会话 → 创建新会话
-    let sid = create_new_session(model).await?;
+    let sid = create_new_session(model, configured_tool_protocol).await?;
     index.current_session = Some(sid.clone());
     set_current_session_id(&sid);
 
@@ -887,6 +948,7 @@ pub async fn init_persistence(model: &str, default_agent_id: &str) -> crate::Res
         active_agents: Vec::new(),
         imported_skills: Vec::new(),
         current_plan: None,
+        tool_protocol: configured_tool_protocol,
     })
 }
 
@@ -927,6 +989,7 @@ pub fn snapshot_from_entry(
         skill_names,
         imported_skills: Vec::new(), // 创建时无动态 skill，运行中由 UpdateSkills 写入
         permissions: AgentPermissions::default(),
+        tool_protocol: Some(crate::ToolProtocol::default()),
     }
 }
 
@@ -1250,6 +1313,46 @@ mod tests {
         assert_eq!(index.version, 1);
         assert!(index.current_session.is_none());
         assert!(index.sessions.is_empty());
+    }
+
+    #[test]
+    fn legacy_session_without_protocol_migrates_to_exec() {
+        let session: SessionMeta = serde_json::from_value(serde_json::json!({
+            "id": "legacy-session",
+            "title": "legacy",
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+            "message_count": 2,
+            "model": "legacy-model"
+        }))
+        .unwrap();
+
+        assert_eq!(session.format_version, 1);
+        assert_eq!(session.tool_protocol, None);
+        assert_eq!(
+            effective_session_tool_protocol(&session, crate::ToolProtocol::NativeFc),
+            (crate::ToolProtocol::ExecLegacy, true)
+        );
+    }
+
+    #[test]
+    fn persisted_session_protocol_wins_over_runtime_default() {
+        let session: SessionMeta = serde_json::from_value(serde_json::json!({
+            "format_version": 2,
+            "id": "fc-session",
+            "title": "fc",
+            "created_at": "2026-08-12T00:00:00",
+            "updated_at": "2026-08-12T00:00:00",
+            "message_count": 2,
+            "model": "current-model",
+            "tool_protocol": "native_fc"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            effective_session_tool_protocol(&session, crate::ToolProtocol::ExecLegacy),
+            (crate::ToolProtocol::NativeFc, false)
+        );
     }
 
     #[test]

@@ -19,7 +19,7 @@ use corework::execution_unit::ExecutionUnit;
 use corework::statemachine::{FnState, SimpleTransition};
 use corework::system::SystemOperation;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use super::{events, states};
@@ -403,6 +403,7 @@ async fn start_assistant_stream(
                 attempt,
                 sequence: 0,
                 content: String::new(),
+                provisional_tool_calls: Vec::new(),
             },
             None,
         )
@@ -445,26 +446,42 @@ fn spawn_assistant_stream_projector(
     turn_id: u64,
     attempt: u32,
 ) -> (
-    tokio::sync::mpsc::UnboundedSender<String>,
+    tokio::sync::mpsc::UnboundedSender<llm_gateway::LlmStreamEvent>,
     tokio::task::JoinHandle<corework::error::Result<()>>,
 ) {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<llm_gateway::LlmStreamEvent>();
     let task = tokio::spawn(async move {
         let mut content = String::new();
         let mut sequence = 0u64;
-        while let Some(delta) = rx.recv().await {
-            if delta.is_empty() {
+        let mut provisional =
+            std::collections::BTreeMap::<u64, crate::snapshot::ProvisionalToolCallView>::new();
+        while let Some(event) = rx.recv().await {
+            let mut changed = apply_assistant_stream_event(
+                event,
+                &mut content,
+                &mut provisional,
+                &agent_id,
+                turn_id,
+                attempt,
+            );
+            if !changed {
                 continue;
             }
-            content.push_str(&delta);
-            sequence = sequence.saturating_add(1);
             tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-            while let Ok(delta) = rx.try_recv() {
-                if !delta.is_empty() {
-                    content.push_str(&delta);
-                    sequence = sequence.saturating_add(1);
-                }
+            while let Ok(event) = rx.try_recv() {
+                changed |= apply_assistant_stream_event(
+                    event,
+                    &mut content,
+                    &mut provisional,
+                    &agent_id,
+                    turn_id,
+                    attempt,
+                );
             }
+            if !changed {
+                continue;
+            }
+            sequence = sequence.saturating_add(1);
             cache
                 .set(
                     keys::ASSISTANT_STREAM,
@@ -474,6 +491,7 @@ fn spawn_assistant_stream_projector(
                         attempt,
                         sequence,
                         content: content.clone(),
+                        provisional_tool_calls: provisional.values().cloned().collect(),
                     },
                     None,
                 )
@@ -495,6 +513,81 @@ fn spawn_assistant_stream_projector(
         Ok(())
     });
     (tx, task)
+}
+
+fn apply_assistant_stream_event(
+    event: llm_gateway::LlmStreamEvent,
+    content: &mut String,
+    provisional: &mut std::collections::BTreeMap<u64, crate::snapshot::ProvisionalToolCallView>,
+    agent_id: &str,
+    turn_id: u64,
+    attempt: u32,
+) -> bool {
+    match event {
+        llm_gateway::LlmStreamEvent::TextDelta { text } => {
+            if text.is_empty() {
+                false
+            } else {
+                content.push_str(&text);
+                true
+            }
+        }
+        llm_gateway::LlmStreamEvent::ReasoningDelta { .. } => false,
+        llm_gateway::LlmStreamEvent::ToolCallDelta {
+            index,
+            call_id,
+            name,
+            ..
+        } => {
+            if call_id.as_deref().unwrap_or_default().is_empty()
+                && name.as_deref().unwrap_or_default().is_empty()
+                && !provisional.contains_key(&index)
+            {
+                return false;
+            }
+            let entry = provisional.entry(index).or_insert_with(|| {
+                crate::snapshot::ProvisionalToolCallView {
+                    key: format!("{agent_id}:{turn_id}:{attempt}:{index}"),
+                    index,
+                    call_id: None,
+                    tool_name: None,
+                    status: "preparing".to_string(),
+                }
+            });
+            let previous = entry.clone();
+            if call_id.as_deref().is_some_and(|value| !value.is_empty()) {
+                entry.call_id = call_id;
+            }
+            if name.as_deref().is_some_and(|value| !value.is_empty()) {
+                entry.tool_name = name;
+            }
+            *entry != previous
+        }
+        llm_gateway::LlmStreamEvent::ToolCallCompleted {
+            index,
+            call_id,
+            name,
+        } => {
+            let entry = provisional.entry(index).or_insert_with(|| {
+                crate::snapshot::ProvisionalToolCallView {
+                    key: format!("{agent_id}:{turn_id}:{attempt}:{index}"),
+                    index,
+                    call_id: None,
+                    tool_name: None,
+                    status: "preparing".to_string(),
+                }
+            });
+            let previous = entry.clone();
+            if call_id.as_deref().is_some_and(|value| !value.is_empty()) {
+                entry.call_id = call_id;
+            }
+            if name.as_deref().is_some_and(|value| !value.is_empty()) {
+                entry.tool_name = name;
+            }
+            entry.status = "ready".to_string();
+            *entry != previous
+        }
+    }
 }
 
 fn forward_legacy_stream_chunk(chunk: &str) {
@@ -939,7 +1032,13 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         .find(|msg| msg.role == "user" && !msg.content.trim().is_empty())
         .map(|msg| msg.content.clone());
 
-    for msg in selected {
+    let complete_native_fc_messages = if tool_protocol == crate::ToolProtocol::NativeFc {
+        complete_native_fc_message_indexes(&selected)
+    } else {
+        HashSet::new()
+    };
+
+    for (message_index, msg) in selected.into_iter().enumerate() {
         if matches!(
             msg.role.as_str(),
             "display" | "thinking_step" | "tool_step" | "interrupted" | "llm_error"
@@ -960,7 +1059,9 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
         match msg.role.as_str() {
             "tool" => {
-                if tool_protocol == crate::ToolProtocol::NativeFc {
+                if tool_protocol == crate::ToolProtocol::NativeFc
+                    && complete_native_fc_messages.contains(&message_index)
+                {
                     if let Some(call_id) = msg.tool_call_id.clone() {
                         let mut projected = llm_gateway::ChatMessage::tool_with_id(
                             msg.content.clone(),
@@ -977,6 +1078,14 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         );
                     }
                     continue;
+                }
+                if tool_protocol == crate::ToolProtocol::NativeFc {
+                    tracing::warn!(
+                        conversation_id = %conversation_id,
+                        turn_id,
+                        tool_call_id = msg.tool_call_id.as_deref().unwrap_or(""),
+                        "projecting unpaired legacy tool history as ordinary context"
+                    );
                 }
                 let tool_prefix = crate::prompt_assets::template("tool_execution_result.md")
                     .split("{{COMMAND}}")
@@ -997,15 +1106,14 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 messages.push(llm_gateway::ChatMessage::user(content));
             }
             "assistant" => {
+                let has_function_calls = native_function_call_ids(&msg).is_some();
                 if tool_protocol == crate::ToolProtocol::NativeFc
-                    && (msg
-                        .tool_calls
-                        .as_ref()
-                        .is_some_and(|calls| !calls.is_empty())
-                        || msg
-                            .provider_items
-                            .as_ref()
-                            .is_some_and(|items| !items.is_empty()))
+                    && (complete_native_fc_messages.contains(&message_index)
+                        || (!has_function_calls
+                            && msg
+                                .provider_items
+                                .as_ref()
+                                .is_some_and(|items| !items.is_empty())))
                 {
                     messages.push(llm_gateway::ChatMessage {
                         role: "assistant".to_string(),
@@ -1206,7 +1314,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 turn_id,
                 attempt,
             );
-            let call = llm_gateway::call_llm_with_tools_streaming_cancellable(
+            let call = llm_gateway::call_llm_with_tools_stream_events_cancellable(
                 model_uid,
                 &messages,
                 &native_tool_definitions,
@@ -1214,9 +1322,11 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 None,
                 None,
                 cancel,
-                move |chunk| {
-                    forward_legacy_stream_chunk(&chunk);
-                    let _ = stream_tx.send(chunk);
+                move |event| {
+                    if let llm_gateway::LlmStreamEvent::TextDelta { text } = &event {
+                        forward_legacy_stream_chunk(text);
+                    }
+                    let _ = stream_tx.send(event);
                 },
             );
             let result = llm_gateway::request_context::scope_request_headers(
@@ -1404,16 +1514,6 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     continue;
                 }
 
-                if tool_protocol == crate::ToolProtocol::NativeFc {
-                    clear_assistant_stream(
-                        &cache,
-                        &event_bus,
-                        &stream_conversation_state,
-                        &agent_id,
-                        false,
-                    )
-                    .await?;
-                }
                 llm_response = Some(resp);
                 break;
             }
@@ -1738,6 +1838,16 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     .await;
 
     if super::consume_pause_if_requested(&cache).await? {
+        if tool_protocol == crate::ToolProtocol::NativeFc {
+            clear_assistant_stream(
+                &cache,
+                &event_bus,
+                &stream_conversation_state,
+                &agent_id,
+                true,
+            )
+            .await?;
+        }
         cache
             .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
             .await?;
@@ -1745,6 +1855,25 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     }
 
     let event_bus = sm_ctx.event_bus();
+    let native_fc_has_tool_calls = tool_protocol == crate::ToolProtocol::NativeFc
+        && llm_response
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty());
+    // Plain-text native responses can clear before the durable assistant write;
+    // that write immediately publishes the final text without a duplicate
+    // temporary bubble. Tool-call streams stay visible through the write so
+    // their provisional bubble can be reconciled by call_id without a gap.
+    if tool_protocol == crate::ToolProtocol::NativeFc && !native_fc_has_tool_calls {
+        clear_assistant_stream(
+            &cache,
+            &event_bus,
+            &stream_conversation_state,
+            &agent_id,
+            false,
+        )
+        .await?;
+    }
     let thinking_payload = match tool_protocol {
         crate::ToolProtocol::NativeFc => {
             build_thinking_payload_from_native_fc(
@@ -1772,6 +1901,20 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         }
     };
 
+    // Keep provisional native-FC calls visible until their durable assistant
+    // tool-call record has been written. Clearing earlier creates a UI gap in
+    // which the preparing bubble disappears before the formal call exists.
+    if native_fc_has_tool_calls {
+        clear_assistant_stream(
+            &cache,
+            &event_bus,
+            &stream_conversation_state,
+            &agent_id,
+            true,
+        )
+        .await?;
+    }
+
     if let Ok(mut payload_json) = serde_json::to_value(&thinking_payload) {
         let src = crate::agent::source_id_from_cache(&*cache).await;
         if let Some(obj) = payload_json.as_object_mut() {
@@ -1781,6 +1924,80 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         let _ = sm_ctx.event_bus().publish(event).await;
     }
     Ok(())
+}
+
+/// Return indexes belonging to complete native FC groups. A group is valid
+/// only when an assistant function-call record is followed immediately by one
+/// tool result for every declared call id and no unrelated tool result. This
+/// prevents legacy EXEC records with synthetic `tool_call_id` values from
+/// becoming invalid Chat Completions protocol messages after an upgrade.
+fn complete_native_fc_message_indexes(history: &[crate::context::Message]) -> HashSet<usize> {
+    let mut complete = HashSet::new();
+    let mut index = 0;
+
+    while index < history.len() {
+        let Some(expected_ids) = native_function_call_ids(&history[index]) else {
+            index += 1;
+            continue;
+        };
+        if history[index].role != crate::context::roles::ASSISTANT {
+            index += 1;
+            continue;
+        }
+
+        let mut observed_ids = BTreeSet::new();
+        let mut tool_indexes = Vec::new();
+        let mut cursor = index + 1;
+        let mut invalid = false;
+        while cursor < history.len() && history[cursor].role == crate::context::roles::TOOL {
+            match history[cursor].tool_call_id.as_deref() {
+                Some(call_id)
+                    if expected_ids.contains(call_id)
+                        && observed_ids.insert(call_id.to_string()) =>
+                {
+                    tool_indexes.push(cursor);
+                }
+                _ => invalid = true,
+            }
+            cursor += 1;
+        }
+
+        if !invalid && observed_ids == expected_ids {
+            complete.insert(index);
+            complete.extend(tool_indexes);
+        }
+        index = cursor.max(index + 1);
+    }
+
+    complete
+}
+
+fn native_function_call_ids(message: &crate::context::Message) -> Option<BTreeSet<String>> {
+    let mut ids = message
+        .tool_calls
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .map(|call| call.id.clone())
+        .filter(|id| !id.trim().is_empty())
+        .collect::<BTreeSet<_>>();
+
+    if ids.is_empty() {
+        if let Some(items) = &message.provider_items {
+            ids.extend(items.iter().filter_map(|item| {
+                (item.get("type").and_then(serde_json::Value::as_str) == Some("function_call"))
+                    .then(|| {
+                        item.get("call_id")
+                            .or_else(|| item.get("id"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .flatten()
+            }));
+        }
+    }
+
+    (!ids.is_empty()).then_some(ids)
 }
 
 async fn publish_llm_usage_event(
@@ -2853,7 +3070,10 @@ mod tests {
             7,
             1,
         );
-        tx.send("background".to_string()).unwrap();
+        tx.send(llm_gateway::LlmStreamEvent::TextDelta {
+            text: "background".to_string(),
+        })
+        .unwrap();
         drop(tx);
         task.await.unwrap().unwrap();
 
@@ -2874,7 +3094,10 @@ mod tests {
             8,
             1,
         );
-        tx.send("foreground".to_string()).unwrap();
+        tx.send(llm_gateway::LlmStreamEvent::TextDelta {
+            text: "foreground".to_string(),
+        })
+        .unwrap();
         drop(tx);
         task.await.unwrap().unwrap();
         clear_assistant_stream(&cache, &event_bus, &conversation_state, "worker", true)
@@ -2887,6 +3110,59 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn assistant_stream_projects_tool_identity_without_exposing_arguments() {
+        let mut content = String::new();
+        let mut provisional = BTreeMap::new();
+
+        assert!(apply_assistant_stream_event(
+            llm_gateway::LlmStreamEvent::ToolCallDelta {
+                index: 0,
+                call_id: Some("call-7".to_string()),
+                name: Some("ReadScene".to_string()),
+                argument_bytes: 128,
+            },
+            &mut content,
+            &mut provisional,
+            "boss",
+            9,
+            2,
+        ));
+        assert!(!apply_assistant_stream_event(
+            llm_gateway::LlmStreamEvent::ToolCallDelta {
+                index: 0,
+                call_id: None,
+                name: None,
+                argument_bytes: 64,
+            },
+            &mut content,
+            &mut provisional,
+            "boss",
+            9,
+            2,
+        ));
+        assert!(apply_assistant_stream_event(
+            llm_gateway::LlmStreamEvent::ToolCallCompleted {
+                index: 0,
+                call_id: Some("call-7".to_string()),
+                name: Some("ReadScene".to_string()),
+            },
+            &mut content,
+            &mut provisional,
+            "boss",
+            9,
+            2,
+        ));
+
+        assert!(content.is_empty());
+        assert_eq!(provisional.len(), 1);
+        let call = provisional.get(&0).expect("provisional tool call");
+        assert_eq!(call.key, "boss:9:2:0");
+        assert_eq!(call.call_id.as_deref(), Some("call-7"));
+        assert_eq!(call.tool_name.as_deref(), Some("ReadScene"));
+        assert_eq!(call.status, "ready");
     }
 
     #[tokio::test]
@@ -3004,6 +3280,70 @@ mod tests {
         assert_eq!(refs[0].name, "Read");
         let next: String = cache.get(keys::NEXT_STATE).await.unwrap().unwrap();
         assert_eq!(next, states::EXECUTING);
+    }
+
+    #[test]
+    fn native_fc_history_accepts_only_complete_tool_groups() {
+        let assistant = crate::context::Message {
+            role: crate::context::roles::ASSISTANT.to_string(),
+            content: String::new(),
+            cache_control: false,
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![llm_gateway::ToolCall::function(
+                "call-1",
+                "Read",
+                r#"{"path":"a.txt"}"#,
+            )]),
+            reasoning_content: None,
+            provider_items: None,
+        };
+        let tool = crate::context::Message::tool_with_id("ok", "call-1", "Read");
+        let history = vec![assistant, tool, crate::context::Message::user("continue")];
+
+        assert_eq!(
+            complete_native_fc_message_indexes(&history),
+            HashSet::from([0, 1])
+        );
+    }
+
+    #[test]
+    fn native_fc_history_rejects_orphan_legacy_tool_record() {
+        let history = vec![
+            crate::context::Message::assistant("I will adjust the camera."),
+            crate::context::Message::tool_with_id(
+                "camera keyframe updated",
+                "legacy-synthetic-call",
+                "UpdateCamera",
+            ),
+            crate::context::Message::user("continue"),
+        ];
+
+        assert!(complete_native_fc_message_indexes(&history).is_empty());
+    }
+
+    #[test]
+    fn native_fc_history_rejects_incomplete_multi_tool_group() {
+        let assistant = crate::context::Message {
+            role: crate::context::roles::ASSISTANT.to_string(),
+            content: String::new(),
+            cache_control: false,
+            tool_call_id: None,
+            name: None,
+            tool_calls: Some(vec![
+                llm_gateway::ToolCall::function("call-1", "Read", "{}"),
+                llm_gateway::ToolCall::function("call-2", "Write", "{}"),
+            ]),
+            reasoning_content: None,
+            provider_items: None,
+        };
+        let history = vec![
+            assistant,
+            crate::context::Message::tool_with_id("read", "call-1", "Read"),
+            crate::context::Message::user("continue"),
+        ];
+
+        assert!(complete_native_fc_message_indexes(&history).is_empty());
     }
 
     #[test]

@@ -1009,6 +1009,19 @@ public:
         return admission_from_result(result);
     }
 
+    AdmissionResult set_conversation_model_admission(
+        const std::string& conversation_id,
+        std::uint32_t model_uid,
+        RuntimeCommandOptions options = {})
+    {
+        std::string result = invoke(
+            "conversation.set_model",
+            std::string("{\"conversation_id\":") + detail::quote(conversation_id)
+                + ",\"model_uid\":" + std::to_string(model_uid) + "}",
+            std::move(options));
+        return admission_from_result(result);
+    }
+
     std::string compact_history(
         const std::string& conversation_id,
         const std::string& agent_ids_json = "[]",

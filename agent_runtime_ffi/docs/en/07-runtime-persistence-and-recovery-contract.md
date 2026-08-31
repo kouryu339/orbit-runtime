@@ -82,9 +82,31 @@ then call:
 - `conversation.spawn_from_snapshot`: create a new conversation from the snapshot.
 - `conversation.import_snapshot`: import the snapshot into a target conversation.
 
+The snapshot must persist the top-level `tool_protocols` map describing the
+tool protocol that produced each Agent's history. Import applies this map
+before replaying the Ledger or starting Agents; it must not reinterpret old
+history using a newer registry default. Snapshots from the two supported
+pre-FC releases omit this field and are migrated as `exec_legacy`. Older
+formats are outside the compatibility commitment.
+
 FFI passes the snapshot to `ai-assistant` recovery. The core runtime decides
 whether the restored entry is `thinking`, `executing`, or `suspended`; FFI does
 not synthesize history in the event layer.
+
+Recovery distinguishes tool-call phases:
+
+- `assistant(tool_calls)` without a persisted started fact was declared but
+  never entered the tool runner, so it may resume execution;
+- a started read-only call may be observed again;
+- a started non-read-only or unknown-effect call is closed as an indeterminate
+  recovery result and is not repeated. The next model turn must verify external
+  state or re-plan;
+- terminal success, failure, cancellation, and interrupted-unknown facts remain
+  terminal and are never reopened.
+
+Native FC calls are reconstructed from persisted structured arguments and
+provider call IDs. Recovery does not parse them through the textual `EXEC`
+protocol. Ephemeral `assistant_stream` data is discarded and never replayed.
 
 The cluster and every Agent definition referenced by the snapshot must be
 registered before recovery. Agent definitions, permissions, tools, Skills, and

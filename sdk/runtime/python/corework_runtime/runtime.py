@@ -908,6 +908,12 @@ class Runtime:
             {"conversation_id": conversation_id, "model_name": model_name},
         )
 
+    def set_conversation_model(self, conversation_id: str, model_uid: int) -> Any:
+        return self.invoke(
+            "conversation.set_model",
+            {"conversation_id": conversation_id, "model_uid": model_uid},
+        )
+
     def compact_history(
         self,
         conversation_id: str,

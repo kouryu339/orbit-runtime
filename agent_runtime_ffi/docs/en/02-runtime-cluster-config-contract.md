@@ -127,6 +127,14 @@ Native `assistant(tool_calls)`, provider `call_id`, and `tool(tool_call_id)`
 records are canonical Ledger facts and remain native after restoration rather
 than being converted into synthetic user messages.
 
+The effective protocol is fixed per conversation participant and exported in
+the conversation snapshot's `tool_protocols` map. Import uses this persisted
+value instead of the current Agent registry default. Snapshots produced by the
+two supported pre-FC releases do not contain the map and are restored as
+`exec_legacy`. While projecting native FC history, Runtime only emits `tool`
+messages that belong to a complete preceding `assistant(tool_calls)` group;
+unpaired legacy tool records are projected as ordinary context.
+
 This default change is intentional: configurations that omit `toolProtocol`
 now use `native_fc`. A deployment that must retain textual `EXEC` behavior must
 set `"toolProtocol": "exec_legacy"` explicitly.

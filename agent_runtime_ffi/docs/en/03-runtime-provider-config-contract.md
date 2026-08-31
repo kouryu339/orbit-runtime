@@ -20,7 +20,9 @@ string, or file path for compatibility with older hosts.
 Runtime commands are `runtime.register_llm`, `runtime.reload_llm`,
 `runtime.configure_providers` (prefer a `registration` JSON object),
 `runtime.get_provider_definitions`, `runtime.set_current_model` (`model_uid` is
-uint32), and `runtime.set_auth_context`. `runtime.reload_llm` accepts the same
+uint32 and changes only the default for new conversations),
+`conversation.set_model` (changes one existing conversation), and
+`runtime.set_auth_context`. `runtime.reload_llm` accepts the same
 `payload.input` / `payload.registration` boundary as registration commands; the
 input may be an `agent-runtime-llm-registration/v1` document or a provider
 config document/file. All commands go through `agent_runtime_invoke_v1`; there
@@ -46,9 +48,11 @@ Hosts may configure models later by calling `runtime.configure_providers` or
 `runtime.reload_llm`, then `runtime.set_current_model` when the loaded config
 does not already contain a valid `current_model_uid`. A non-null
 `current_model_uid` is valid only when it references one of the loaded enabled
-models. Existing conversations use the newly selected current model for later
-LLM calls; cluster and Agent configs must not embed provider secrets or fake
-model placeholders to compensate for delayed setup.
+models. This value is only the fallback for new conversations and does not
+overwrite an existing conversation's model. Hosts must use
+`conversation.set_model` for an existing conversation; cluster and Agent configs
+must not embed provider secrets or fake model placeholders to compensate for
+delayed setup.
 
 Do not overwrite a valid loaded configuration with example placeholders.
 Hosts own production secrets. Failures use the result envelope and thread-local

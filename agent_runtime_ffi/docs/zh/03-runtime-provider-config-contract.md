@@ -29,7 +29,8 @@ Agent 可以运行。
   provider config JSON/file。
 - `runtime.configure_providers`：推荐使用 `registration` JSON object 加载/覆盖 provider。
 - `runtime.get_provider_definitions`：返回 `agent-runtime-provider-definitions/v1`。
-- `runtime.set_current_model`：要求 `model_uid` 为 uint32。
+- `runtime.set_current_model`：设置新会话使用的全局默认模型，要求 `model_uid` 为 uint32。
+- `conversation.set_model`：按 `conversation_id` 设置已有会话的推理模型；前端的“当前模型”切换必须使用此命令，不能修改全局默认值。
 - `runtime.set_auth_context`：设置宿主提供的认证上下文。
 
 这些都是 `agent_runtime_invoke_v1` command，不存在独立 provider C 函数。
@@ -53,9 +54,10 @@ Provider 配置允许在首次启动时不存在，或显式为空：
 
 宿主可在之后调用 `runtime.configure_providers` 或 `runtime.reload_llm` 加载真实 provider，
 如果加载内容没有有效 `current_model_uid`，再调用 `runtime.set_current_model` 选择模型。
-非空 `current_model_uid` 必须引用已加载 provider 的 enabled model。已有 conversation 的后续
-LLM 调用使用新的当前模型；cluster 和 Agent 配置不得为了延迟配置而内嵌 provider 密钥或
-虚假模型占位。
+非空 `current_model_uid` 必须引用已加载 provider 的 enabled model。它只作为新会话没有
+显式模型时的默认值，不会覆盖已有 conversation 的模型。已有会话应调用
+`conversation.set_model` 显式切换；cluster 和 Agent 配置不得为了延迟配置而内嵌 provider
+密钥或虚假模型占位。
 
 不要用示例/占位 provider 无条件覆盖已正确加载的配置。生产密钥由宿主管理；错误通过
 `agent-runtime-result/v1` 和同线程 `agent_runtime_last_error_json_v1` 返回。

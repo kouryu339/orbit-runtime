@@ -2827,6 +2827,21 @@ fn spawn_conversation_from_snapshot_allocates_a_new_runtime_id_and_restores_ledg
     assert_eq!(records[0].conversation_id, info.conversation_id);
     assert_eq!(records[0].record_id, 1);
     assert_eq!(records[0].content, "restored message");
+    let restored_protocol = facade.rt.block_on(async {
+        manager
+            .default_agent_cache(&info.conversation_id)
+            .await
+            .unwrap()
+            .get::<ai_assistant::ToolProtocol>(ai_assistant::context::keys::TOOL_PROTOCOL)
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(
+        restored_protocol,
+        ai_assistant::ToolProtocol::ExecLegacy,
+        "a supported pre-FC snapshot without protocol metadata must stay legacy"
+    );
 
     let repaired_info = facade
         .spawn_conversation_from_snapshot(
@@ -3436,7 +3451,7 @@ fn restored_native_tool_call_preserves_provider_call_identity() {
     let call = llm_gateway::ToolCall::function(
         "provider-call-7",
         "QueryLedger",
-        r#"{"conversation_id":"current"}"#,
+        r#"{"conversation_id":"current","filters":{"status":"open"}}"#,
     );
     let mut metadata = ai_assistant::ledger::LedgerMessageMeta::default();
     metadata
@@ -3465,9 +3480,22 @@ fn restored_native_tool_call_preserves_provider_call_identity() {
     assert_eq!(plan.tool_call_refs.len(), 1);
     assert_eq!(plan.tool_call_refs[0].id, "provider-call-7");
     assert_eq!(plan.tool_call_refs[0].name, "QueryLedger");
+    assert!(plan.recovery_results.is_empty());
+    assert_eq!(plan.structured_tools.len(), 1);
+    assert_eq!(plan.structured_tools[0].name, "QueryLedger");
+    assert_eq!(
+        plan.structured_tools[0].params,
+        vec![
+            ("conversation_id".to_string(), "current".to_string()),
+            ("filters".to_string(), r#"{"status":"open"}"#.to_string()),
+        ]
+    );
     assert_eq!(
         plan.tools,
-        vec!["QueryLedger --conversation_id current".to_string()]
+        vec![
+            r#"QueryLedger --conversation_id current --filters "{\"status\":\"open\"}""#
+                .to_string()
+        ]
     );
 }
 
@@ -3520,7 +3548,7 @@ fn restored_ledger_repairs_unfinished_started_tool_call() {
 }
 
 #[test]
-fn restored_ledger_repairs_assistant_declared_tool_call_without_start_fact() {
+fn restored_ledger_does_not_repair_assistant_declared_tool_call_without_start_fact() {
     let mut metadata = ai_assistant::ledger::LedgerMessageMeta::default();
     metadata
         .extra
@@ -3538,22 +3566,10 @@ fn restored_ledger_repairs_assistant_declared_tool_call_without_start_fact() {
 
     repair_restored_ledger(&mut records, "new-runtime-id");
 
-    assert_eq!(records.len(), 2);
-    let recovery = &records[1];
-    assert_eq!(recovery.role, ai_assistant::ledger::LedgerRole::Tool);
-    assert_eq!(recovery.metadata.tool_name.as_deref(), Some("QueryLedger"));
-    assert_eq!(
-        recovery.metadata.extra.get("call_id"),
-        Some(&json!("call-2"))
-    );
-    assert_eq!(
-        recovery.metadata.extra.get("source"),
-        Some(&json!("assistant_declared"))
-    );
-    assert!(recovery.content.contains("effect: unknown"));
-    assert!(recovery
-        .content
-        .contains("do not directly repeat the same operation"));
+    assert_eq!(records.len(), 1);
+    let plans = restored_execution_plans(&records);
+    assert_eq!(plans.len(), 1);
+    assert!(plans[0].recovery_results.is_empty());
 }
 
 #[test]
@@ -3613,6 +3629,9 @@ fn best_effort_conversation_snapshot_exports_ledger_when_not_waiting() {
             &json!({
                 "schema": "agent-runtime-conversation-snapshot/v1",
                 "conversation_id": "old-runtime-id",
+                "tool_protocols": {
+                    "agent-a": "native_fc"
+                },
                 "ledger": [{
                     "record_id": 1,
                     "conversation_id": "old-runtime-id",
@@ -3686,6 +3705,7 @@ fn best_effort_conversation_snapshot_exports_ledger_when_not_waiting() {
     );
     assert_eq!(snapshot["runtime"]["agents"][0]["agent_id"], "agent-a");
     assert_eq!(snapshot["runtime"]["agents"][0]["definition_id"], "agent-a");
+    assert_eq!(snapshot["tool_protocols"]["agent-a"], "native_fc");
     assert!(snapshot["runtime"]["agents"][0]
         .get("permissions")
         .is_none());
@@ -3713,6 +3733,17 @@ fn best_effort_conversation_snapshot_exports_ledger_when_not_waiting() {
         restored_tasks[0].assignee_agent_id.as_deref(),
         Some("agent-a")
     );
+    let restored_protocol = facade.rt.block_on(async {
+        manager
+            .default_agent_cache(&restored.conversation_id)
+            .await
+            .unwrap()
+            .get::<ai_assistant::ToolProtocol>(ai_assistant::context::keys::TOOL_PROTOCOL)
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(restored_protocol, ai_assistant::ToolProtocol::NativeFc);
     facade
         .close_conversation(&restored.conversation_id)
         .unwrap();
@@ -4678,6 +4709,119 @@ fn provider_bundle_import_hot_loads_and_model_switch_updates_same_json() {
     let definitions: Value = serde_json::from_str(&facade.provider_definitions().unwrap()).unwrap();
     assert_eq!(definitions["current_model_uid"], json!(7101));
 
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("conversation-model-switch");
+    let skills_dir = root.join("skills");
+    write_role_skill(
+        &skills_dir,
+        "browser_operator",
+        "role",
+        "# Persona\n\nOperate browser.",
+    );
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+    facade
+        .register_resources_json(
+            &json!({
+                "schema": "agent-runtime-resource-registration/v1",
+                "id": "default-resources",
+                "skills": { "root_dir": skills_dir, "builtin_system": true }
+            })
+            .to_string(),
+        )
+        .unwrap();
+    facade
+        .register_llm_json(
+            &json!({
+                "schema": "agent-runtime-llm-registration/v1",
+                "id": "test-llm",
+                "current_model_uid": 1001,
+                "providers": [{
+                    "id": 1,
+                    "name": "test-provider",
+                    "type": "deepseek",
+                    "base_url": "https://example.invalid",
+                    "api_key": "sk-test",
+                    "api_paradigm": "openai_chat_completions",
+                    "enabled_models": [
+                        { "uid": 1001, "model_id": "model-a" },
+                        { "uid": 1002, "model_id": "model-b" }
+                    ]
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+    facade
+        .register_agent_cluster_json(
+            &json!({
+                "schema": "agent-runtime-agent-cluster-registration/v1",
+                "id": "default-cluster",
+                "description": "Conversation model isolation",
+                "focus_agent_id": "agent-a",
+                "agents": [{
+                    "id": "agent-a",
+                    "name": "Agent A",
+                    "role": "browser_operator",
+                    "model_uid": 1001
+                }],
+                "max_thinking_rounds": 0
+            })
+            .to_string(),
+        )
+        .unwrap();
+    facade.start().unwrap();
+    let spawn = json!({
+        "schema": "agent-runtime-conversation-spawn/v1",
+        "cluster_id": "default-cluster"
+    })
+    .to_string();
+    let first = facade.spawn_conversation(&spawn).unwrap();
+    let second = facade.spawn_conversation(&spawn).unwrap();
+
+    let admission = facade
+        .set_conversation_model_with_admission(
+            &first.conversation_id,
+            1002,
+            "command-model-switch".to_string(),
+        )
+        .unwrap();
+    assert!(admission.decision.is_accepted());
+    assert_eq!(key_store::current(), Some(1001));
+
+    let manager = facade.manager().unwrap();
+    facade.rt.block_on(async {
+        let first_cache = manager
+            .default_agent_cache(&first.conversation_id)
+            .await
+            .unwrap();
+        let second_cache = manager
+            .default_agent_cache(&second.conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            first_cache
+                .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
+                .await
+                .unwrap(),
+            Some("model-b".to_string())
+        );
+        assert_eq!(
+            second_cache
+                .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
+                .await
+                .unwrap(),
+            None
+        );
+    });
+
+    facade.close_conversation(&first.conversation_id).unwrap();
+    facade.close_conversation(&second.conversation_id).unwrap();
+    facade.shutdown().unwrap();
     let _ = fs::remove_dir_all(root);
 }
 

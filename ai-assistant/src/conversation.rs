@@ -507,6 +507,15 @@ impl Conversation {
             )
             .await?;
         crate::agent::set_conversation_id_in_cache(&**cache, conversation_id).await?;
+        cache
+            .set(
+                keys::TOOL_PROTOCOL,
+                &snapshot
+                    .tool_protocol
+                    .unwrap_or(crate::ToolProtocol::ExecLegacy),
+                None,
+            )
+            .await?;
 
         if !restored_snapshot {
             cache
@@ -545,8 +554,53 @@ impl Conversation {
     }
 
     pub async fn set_model(&self, model: &str) -> Result<()> {
-        let guard = self.default_agent.lock().await;
-        guard.set_model(model).await
+        llm_gateway::key_store::find_by_name(model).ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!("model '{}' uid not found", model))
+        })?;
+        self.ledger
+            .cache()
+            .set(
+                crate::config_resolver::conversation_keys::CONFIG_MODEL,
+                &model.to_string(),
+                None,
+            )
+            .await?;
+        for agent_id in self.cluster.list_agent_ids().await {
+            let Some(agent) = self.cluster.get(&agent_id).await else {
+                continue;
+            };
+            let cache = agent.sm.unit().cache();
+            cache
+                .set(
+                    crate::config_resolver::conversation_keys::CONFIG_MODEL,
+                    &model.to_string(),
+                    None,
+                )
+                .await?;
+            cache.set(keys::MODEL, &model.to_string(), None).await?;
+        }
+        self.publish_current_state().await;
+        Ok(())
+    }
+
+    pub async fn set_model_with_admission(
+        &self,
+        model: &str,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        let admission = self
+            .gateway
+            .admit_with_command_id(
+                &crate::admission::Command::SetConversationModel {
+                    model: model.to_string(),
+                },
+                command_id,
+            )
+            .await;
+        if admission.decision.is_accepted() {
+            self.set_model(model).await?;
+        }
+        Ok(admission)
     }
 
     pub async fn get_model(&self) -> Result<String> {

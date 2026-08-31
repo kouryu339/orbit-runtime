@@ -67,6 +67,7 @@ pub mod openai_responses;
 pub mod providers;
 pub mod request_context;
 pub mod retry;
+mod stream_control;
 pub mod vlm;
 
 pub mod nodes;
@@ -74,7 +75,8 @@ pub mod nodes;
 // 重新导出常用类型
 pub use types::{
     AsrResponse, AsrSegment, BBox2D, ChatMessage, FunctionCall, FunctionDefinition, ImageSize,
-    LlmResponse, OcrResult, OcrResultItem, TokenUsage, ToolCall, ToolDefinition, VlmResponse,
+    LlmResponse, LlmStreamEvent, OcrResult, OcrResultItem, TokenUsage, ToolCall, ToolDefinition,
+    VlmResponse,
 };
 
 // 重新导出错误类型 + 重试策略
@@ -98,5 +100,6 @@ pub use dispatch::{
     call_llm, call_llm_cancellable, call_llm_decide, call_llm_decide_cancellable,
     call_llm_decide_streaming, call_llm_decide_streaming_cancellable, call_llm_json_cancellable,
     call_llm_with_tools, call_llm_with_tools_cancellable,
-    call_llm_with_tools_streaming_cancellable, model_supports_tool_choice, model_tool_choice_style,
+    call_llm_with_tools_stream_events_cancellable, call_llm_with_tools_streaming_cancellable,
+    model_supports_tool_choice, model_tool_choice_style,
 };

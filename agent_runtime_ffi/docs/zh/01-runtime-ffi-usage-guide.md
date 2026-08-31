@@ -163,7 +163,7 @@ LLM 和 Agent Cluster 三类注册配置表达。
 | `runtime.get_workflow_node_definitions` | 空 payload；`start` 后 | 统一的 Corework、控制、本地工具和 RPC 工作流节点定义 |
 | `runtime.get_agent_cluster_definitions` | 空 payload | 解析后的注册与内置 Agent Cluster |
 | `runtime.get_rpc_endpoint_definitions` | 空 payload | 脱敏后的 RPC Endpoint 注册与启动状态 |
-| `runtime.set_current_model` | `model_uid:uint32` | `{}` |
+| `runtime.set_current_model` | `model_uid:uint32`；仅设置新会话默认模型 | `{}` |
 | `runtime.set_language` | `language:string` | `{}` |
 | `runtime.export_snapshot` | 空 payload | runtime snapshot |
 | `workflow.create` | `resource` | 不可信 Draft |
@@ -178,6 +178,7 @@ LLM 和 Agent Cluster 三类注册配置表达。
 | `conversation.spawn` | `spawn` 对象或直接展开 spawn 字段 | conversation info |
 | `conversation.spawn_from_snapshot` | `spawn` + `snapshot` | conversation info + `restored:true` |
 | `conversation.send_message` | `conversation_id`, `content` | admission decision |
+| `conversation.set_model` | `conversation_id`, `model_uid:uint32` | admission decision |
 | `conversation.pause` | `conversation_id`, `mode?:"wait_for_tool"|"detach_tool"` | admission decision；默认等待当前工具完成，`detach_tool` 生成 `interrupted_unknown` 且要求外部验证 |
 | `conversation.close` | `conversation_id` | `{}` |
 | `conversation.export_snapshot` | `conversation_id`, `options?` object/string | conversation snapshot |

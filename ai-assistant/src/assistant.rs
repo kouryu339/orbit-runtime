@@ -164,7 +164,12 @@ impl AIAssistant {
             .ok_or_else(|| FrameworkError::InvalidOperation("状态机未初始化".into()))?;
         let cache = sm.unit().cache();
 
-        match crate::persistence::init_persistence(&self.config.model, &self.config.agent_id).await
+        match crate::persistence::init_persistence(
+            &self.config.model,
+            &self.config.agent_id,
+            self.config.tool_protocol,
+        )
+        .await
         {
             Ok(mut restore) => {
                 // 1) 优先用 cache snapshot 一次性恢复默认 Agent 全部 runtime 字段
@@ -183,6 +188,13 @@ impl AIAssistant {
                 } else {
                     false
                 };
+
+                // The protocol is part of the persisted conversation contract.
+                // Apply it after restoring the cache so a stale snapshot or a
+                // changed runtime default cannot reinterpret old history.
+                cache
+                    .set(keys::TOOL_PROTOCOL, &restore.tool_protocol, None)
+                    .await?;
 
                 // 2) 用 ledger 校准 conversation（来自 jsonl 的中心 ledger 是规范源），
                 //    防止 snapshot 时机滞后于最新一条 ledger。归一化裁剪 dangling tool。
@@ -250,6 +262,7 @@ impl AIAssistant {
                     active_agents: Vec::new(),
                     imported_skills: Vec::new(),
                     current_plan: None,
+                    tool_protocol: self.config.tool_protocol,
                 })
             }
         }
@@ -281,7 +294,8 @@ impl AIAssistant {
         }
 
         // 4. 创建新会话
-        crate::persistence::create_new_session(&self.config.model).await?;
+        crate::persistence::create_new_session(&self.config.model, self.config.tool_protocol)
+            .await?;
 
         Ok(())
     }

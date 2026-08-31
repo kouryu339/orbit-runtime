@@ -767,6 +767,12 @@ impl AgentRuntime {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let tool_protocol = cache
+            .get::<crate::ToolProtocol>(keys::TOOL_PROTOCOL)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let conversation_id = crate::agent::conversation_id_from_cache(&*cache)
             .await
             .unwrap_or_else(|| crate::ledger::DEFAULT_CONVERSATION_ID.to_string());
@@ -798,6 +804,7 @@ impl AgentRuntime {
             skill_names,
             imported_skills,
             permissions: self.permissions.clone(),
+            tool_protocol: Some(tool_protocol),
         }
     }
 

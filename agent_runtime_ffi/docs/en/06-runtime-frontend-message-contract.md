@@ -23,11 +23,18 @@ payload.ledger_delta.record
 
 is the optional message delta carried by the snapshot. When `ledger_delta` is absent, the event only means state, capability flags, or other snapshot fields changed.
 
+The snapshot fields `model` and `model_uid` identify the inference model of the
+current conversation. A model switcher's outer label, selected option, and
+mutation command must all use these conversation fields. The provider
+definitions' `current_model_uid` is only the default for new conversations.
+Switch an existing conversation with `conversation.set_model`.
+
 ### 6.2.1 Focused Assistant Stream
 
 Native function-calling model requests run in streaming mode. The runtime does
 not introduce a separate public stream event; the current focused Agent's
-ephemeral text is projected through the existing snapshot field:
+ephemeral text and provisional tool identity are projected through the existing
+snapshot field:
 
 ```json
 {
@@ -36,7 +43,16 @@ ephemeral text is projected through the existing snapshot field:
     "turn_id": 12,
     "attempt": 1,
     "sequence": 8,
-    "content": "Partial assistant text"
+    "content": "Partial assistant text",
+    "provisional_tool_calls": [
+      {
+        "key": "boss:12:1:0",
+        "index": 0,
+        "call_id": "call_abc",
+        "tool_name": "ReadScene",
+        "status": "preparing"
+      }
+    ]
   }
 }
 ```
@@ -48,11 +64,20 @@ contract:
   internally but do not produce frontend rendering updates;
 - it is ephemeral display state and must not be persisted or replayed during
   conversation recovery;
+- a complete ledger received in the first restored snapshot is already-rendered
+  history; the frontend must not progressively reveal its final assistant record again;
 - `sequence` increases as chunks are coalesced, so hosts should replace the
   previous temporary bubble rather than append a new message;
+- `provisional_tool_calls` exposes only the index, known call ID, tool name,
+  and `preparing`/`ready` state. It never exposes incomplete JSON arguments and
+  is never executable state;
+- render a provisional tool bubble by `call_id`, or by `key` until an ID is
+  known. Replace it in place when the durable Ledger fact with the same
+  `call_id` arrives;
 - a retry or failure clears it with `null`;
-- after a successful response, the final canonical `assistant` ledger record
-  replaces the temporary stream. Stream chunks never enter the ledger.
+- after a successful response, Runtime writes the canonical
+  `assistant(tool_calls)` Ledger record before clearing the temporary stream,
+  preventing a tool-bubble gap. Stream chunks never enter the ledger.
 
 Hosts should therefore keep consuming only `frontend:state_snapshot`: render
 `assistant_stream` as the current temporary assistant bubble, and reconcile it

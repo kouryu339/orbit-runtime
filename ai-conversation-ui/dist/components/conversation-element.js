@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import { visiblePresentationItems } from '../content/presentation.js';
-import { conversationReducer, createConversationState, createPendingUserMessage, displayText, recordKey, } from '../protocol/index.js';
+import { conversationReducer, createConversationState, createPendingUserMessage, displayText, recordKey, snapshotRecords, } from '../protocol/index.js';
 import './rich-content.js';
 function isVisibleGatewayRecord(record) {
     if (record.role !== 'gateway_message')
@@ -1430,7 +1430,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         const zh = this.locale.toLowerCase().startsWith('zh');
         const models = this.providerModels();
         const providers = this.providerDefinitions?.providers ?? [];
-        const current = this.currentProviderModelUid();
+        const current = this.currentConversationModelUid();
         return html `<aside class="provider-panel" part="provider-panel">
       ${models.length
             ? html `<label class="provider-field">
@@ -1438,10 +1438,12 @@ export class AgentRuntimeConversationElement extends LitElement {
             <select
               class="provider-select"
               ?disabled=${this.providerOperation !== null}
-              .value=${current === null ? '' : String(current)}
               @change=${(event) => void this.selectProviderModel(event.target.value)}
             >
-              ${models.map((model) => html `<option value=${String(model.uid)}>
+              ${models.map((model) => html `<option
+                value=${String(model.uid)}
+                ?selected=${model.uid === current}
+              >
                 ${this.providerModelLabel(model)}
               </option>`)}
             </select>
@@ -1813,21 +1815,30 @@ export class AgentRuntimeConversationElement extends LitElement {
     async selectProviderModel(value) {
         if (!this.providerControls.enabled)
             return;
+        const conversationId = this.state.conversationId ?? this.conversationId;
+        if (!conversationId)
+            return;
         const modelUid = Number(value);
         if (!Number.isFinite(modelUid))
             return;
+        const model = this.providerModels().find((item) => item.uid === modelUid);
+        if (!model)
+            return;
+        const modelName = this.providerModelName(model);
         this.providerOperation = 'model';
         try {
-            const result = await this.providerControls.controller.setCurrentModel({
+            const result = await this.providerControls.controller.setConversationModel({
+                conversationId,
                 modelUid,
             });
             if (result.accepted === false) {
                 throw new Error(result.rejectReason ?? 'Model switch was rejected');
             }
-            this.providerDefinitions = {
-                ...(this.providerDefinitions ?? {}),
-                current_model_uid: modelUid,
-            };
+            this.dispatch({
+                type: 'conversation-model-selected',
+                model: modelName,
+                modelUid,
+            });
             this.emit('agent-conversation-provider-action', {
                 action: 'model-selected',
                 modelUid,
@@ -1892,7 +1903,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             providerRegistration,
         ];
         const providerModelUids = new Set(providers.flatMap((provider) => provider.enabled_models.map((model) => model.uid)));
-        const currentModelUid = this.currentProviderModelUid();
+        const currentModelUid = this.globalProviderModelUid();
         const bundle = {
             schema: 'agent-runtime-llm-registration/v1',
             id: 'conversation-provider-editor',
@@ -1981,30 +1992,40 @@ export class AgentRuntimeConversationElement extends LitElement {
             uid += 1;
         return uid;
     }
-    currentProviderModelUid() {
+    globalProviderModelUid() {
         const definitions = this.providerDefinitions;
         return definitions?.current_model_uid ??
             definitions?.currentModelUid ??
             null;
     }
+    currentConversationModelUid() {
+        if (this.state.modelUid !== undefined)
+            return this.state.modelUid;
+        if (!this.state.model)
+            return null;
+        return this.providerModels().find((model) => this.providerModelName(model) === this.state.model)?.uid ?? null;
+    }
     currentProviderModelLabel() {
-        const current = this.currentProviderModelUid();
+        const current = this.currentConversationModelUid();
         if (current === null)
             return null;
         const model = this.providerModels().find((item) => item.uid === current);
         return model ? this.providerModelLabel(model) : `Model ${current}`;
     }
     providerModelLabel(model) {
-        const modelName = model.model_name ??
+        const modelName = this.providerModelName(model);
+        const providerUid = model.provider_uid ?? model.providerUid;
+        const provider = this.providerDefinitions?.providers?.find((item) => item.uid === providerUid);
+        const providerName = provider?.name ?? (providerUid ? `Provider ${providerUid}` : '');
+        return providerName ? `${modelName} / ${providerName}` : modelName;
+    }
+    providerModelName(model) {
+        return model.model_name ??
             model.modelName ??
             model.model_id ??
             model.modelId ??
             model.name ??
             `Model ${model.uid}`;
-        const providerUid = model.provider_uid ?? model.providerUid;
-        const provider = this.providerDefinitions?.providers?.find((item) => item.uid === providerUid);
-        const providerName = provider?.name ?? (providerUid ? `Provider ${providerUid}` : '');
-        return providerName ? `${modelName} / ${providerName}` : modelName;
     }
     isCurrentArchive(archive) {
         const binding = this.persistence.enabled ? this.persistence.binding : null;
@@ -2274,14 +2295,16 @@ export class AgentRuntimeConversationElement extends LitElement {
             });
         }
         const stream = this.state.assistantStream;
-        if (stream?.content) {
+        const provisionalToolLines = (stream?.provisional_tool_calls ?? [])
+            .map((call) => `[tool:status | call_id="${call.call_id || call.key}"]`);
+        if (stream && (stream.content || provisionalToolLines.length)) {
             items.push({
                 kind: 'record',
                 key: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
                 record: {
                     record_id: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
                     role: 'assistant',
-                    content: stream.content,
+                    content: [stream.content, ...provisionalToolLines].filter(Boolean).join('\n'),
                 },
             });
         }
@@ -2334,14 +2357,14 @@ export class AgentRuntimeConversationElement extends LitElement {
                 this.state.conversationId &&
                 event.conversationId !== this.state.conversationId)
                 return;
+            const initialSnapshot = !this.state.snapshotReceived;
             this.dispatch({
                 type: 'snapshot',
                 payload: event.payload,
                 eventSeq: event.eventSeq,
             });
-            if (event.payload.conversation_state === 'waiting' &&
-                event.payload.ledger_records) {
-                this.markRecordsRevealComplete(event.payload.ledger_records);
+            if (initialSnapshot && event.payload.conversation_state === 'waiting') {
+                this.markRecordsRevealComplete(snapshotRecords(event.payload));
             }
             this.releaseDeferredSendIfReady();
             return;

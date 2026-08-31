@@ -273,6 +273,57 @@ pub struct LlmResponse {
     pub provider_items: Option<Vec<serde_json::Value>>,
 }
 
+/// Provider-neutral events produced while an LLM response is streaming.
+///
+/// Tool argument fragments remain inside the gateway. Runtime consumers only
+/// receive their byte count so an incomplete function call can never become an
+/// executable or persisted command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LlmStreamEvent {
+    TextDelta {
+        text: String,
+    },
+    ReasoningDelta {
+        bytes: usize,
+    },
+    ToolCallDelta {
+        index: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        argument_bytes: usize,
+    },
+    ToolCallCompleted {
+        index: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+}
+
+#[cfg(test)]
+mod stream_event_tests {
+    use super::LlmStreamEvent;
+
+    #[test]
+    fn tool_stream_event_exposes_progress_without_partial_arguments() {
+        let value = serde_json::to_value(LlmStreamEvent::ToolCallDelta {
+            index: 2,
+            call_id: Some("call-2".to_string()),
+            name: Some("ReadScene".to_string()),
+            argument_bytes: 96,
+        })
+        .expect("serialize stream event");
+
+        assert_eq!(value["type"], "tool_call_delta");
+        assert_eq!(value["argument_bytes"], 96);
+        assert!(value.get("arguments").is_none());
+    }
+}
+
 // ============================================================================
 // Function Calling
 // ============================================================================

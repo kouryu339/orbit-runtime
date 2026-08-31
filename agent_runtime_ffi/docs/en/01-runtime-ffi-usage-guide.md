@@ -164,7 +164,7 @@ through Resources, LLM, and Agent Cluster registrations.
 | `runtime.get_workflow_node_definitions` | empty; after `start` | unified Corework, control, local-tool, and RPC workflow node definitions |
 | `runtime.get_agent_cluster_definitions` | empty | effective registered and built-in Agent clusters |
 | `runtime.get_rpc_endpoint_definitions` | empty | sanitized RPC endpoint registration and startup state |
-| `runtime.set_current_model` | `model_uid:uint32` | `{}` |
+| `runtime.set_current_model` | `model_uid:uint32`; default for new conversations only | `{}` |
 | `runtime.set_language` | `language:string` | `{}` |
 | `runtime.export_snapshot` | empty | runtime snapshot |
 | `workflow.create` | `resource` | untrusted Draft |
@@ -179,6 +179,7 @@ through Resources, LLM, and Agent Cluster registrations.
 | `conversation.spawn` | `spawn` or expanded spawn fields | conversation info |
 | `conversation.spawn_from_snapshot` | `spawn`, `snapshot` | info + restored |
 | `conversation.send_message` | `conversation_id`, `content` | admission |
+| `conversation.set_model` | `conversation_id`, `model_uid:uint32` | admission |
 | `conversation.pause` | `conversation_id` | admission |
 | `conversation.close` | `conversation_id` | `{}` |
 | `conversation.export_snapshot` | `conversation_id`, `options?` | snapshot |

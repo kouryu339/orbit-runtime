@@ -47,6 +47,8 @@ export type FrontendSnapshotPayload = {
     records?: LedgerRecord[];
   };
   agents?: Array<Record<string, unknown>>;
+  model?: string | null;
+  model_uid?: number | null;
   plan?: unknown;
   error?: string;
   pending_permissions?: PendingToolPermission[];
@@ -60,6 +62,15 @@ export type AssistantStreamView = {
   attempt: number;
   sequence: number;
   content: string;
+  provisional_tool_calls?: ProvisionalToolCallView[];
+};
+
+export type ProvisionalToolCallView = {
+  key: string;
+  index: number;
+  call_id?: string;
+  tool_name?: string;
+  status: 'preparing' | 'ready';
 };
 
 export type ToolEffect = 'read_only' | 'controlled_change' | 'destructive';
@@ -88,6 +99,7 @@ export type ToolCallStatus =
   | 'waiting_permission'
   | 'running'
   | 'finished'
+  | 'uncertain'
   | 'failed';
 
 export type ToolCallView = {
@@ -128,6 +140,8 @@ export type ConversationState = {
   pendingUserMessages: PendingUserMessage[];
   toolCalls: ToolCallView[];
   agents: Array<Record<string, unknown>>;
+  model?: string;
+  modelUid?: number;
   plan?: unknown;
   pendingPermissions: PendingToolPermission[];
   assistantStream?: AssistantStreamView;
@@ -142,5 +156,6 @@ export type ConversationAction =
   | { type: 'local-message-added'; message: PendingUserMessage }
   | { type: 'local-message-accepted'; id: string }
   | { type: 'local-message-failed'; id: string; error: string }
+  | { type: 'conversation-model-selected'; model: string; modelUid: number }
   | { type: 'clear-error' }
   | { type: 'reset'; conversationId?: string | null };

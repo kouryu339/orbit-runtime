@@ -8,7 +8,7 @@
 use crate::config::ApiParadigm;
 use crate::error::{ApiError, FatalError};
 use crate::providers::{self, ApiFormat, ToolChoiceStyle};
-use crate::types::{ChatMessage, LlmResponse, ToolDefinition};
+use crate::types::{ChatMessage, LlmResponse, LlmStreamEvent, ToolDefinition};
 
 /// 查询指定模型的 tool_choice 支持方式
 pub fn model_tool_choice_style(model_name: Option<&str>) -> ToolChoiceStyle {
@@ -265,10 +265,42 @@ pub async fn call_llm_with_tools_streaming_cancellable<F>(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     cancel: tokio_util::sync::CancellationToken,
-    on_chunk: F,
+    mut on_chunk: F,
 ) -> crate::error::Result<LlmResponse>
 where
     F: FnMut(String) + Send,
+{
+    call_llm_with_tools_stream_events_cancellable(
+        model_id,
+        messages,
+        tools,
+        temperature,
+        top_p,
+        max_tokens,
+        cancel,
+        move |event| {
+            if let LlmStreamEvent::TextDelta { text } = event {
+                on_chunk(text);
+            }
+        },
+    )
+    .await
+}
+
+/// Stream provider-neutral text and function-call lifecycle events.
+/// Partial function arguments never cross this API boundary.
+pub async fn call_llm_with_tools_stream_events_cancellable<F>(
+    model_id: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    cancel: tokio_util::sync::CancellationToken,
+    on_event: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(LlmStreamEvent) + Send,
 {
     tokio::select! {
         biased;
@@ -280,7 +312,7 @@ where
             temperature,
             top_p,
             max_tokens,
-            on_chunk,
+            on_event,
         ) => result,
     }
 }
@@ -292,10 +324,10 @@ async fn dispatch_streaming_with_tools<F>(
     temperature: Option<f64>,
     top_p: Option<f64>,
     max_tokens: Option<u32>,
-    on_chunk: F,
+    on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
-    F: FnMut(String) + Send,
+    F: FnMut(LlmStreamEvent) + Send,
 {
     let entry = crate::key_store::get(model_id).ok_or_else(|| {
         ApiError::Fatal(FatalError::config_error(format!(
@@ -330,7 +362,7 @@ where
                 provider.tool_choice_style,
                 false,
                 false,
-                on_chunk,
+                on_event,
             )
             .await
         }
@@ -345,7 +377,7 @@ where
                 top_p,
                 max_tokens,
                 None,
-                on_chunk,
+                on_event,
             )
             .await
         }
@@ -360,7 +392,7 @@ where
                 top_p,
                 max_tokens,
                 None,
-                on_chunk,
+                on_event,
             )
             .await
         }
@@ -522,7 +554,7 @@ pub async fn call_llm_decide_streaming<F>(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_json: bool,
-    on_chunk: F,
+    mut on_chunk: F,
 ) -> crate::error::Result<LlmResponse>
 where
     F: FnMut(String) + Send,
@@ -569,7 +601,11 @@ where
                 provider.tool_choice_style,
                 force_json,
                 true,
-                on_chunk,
+                move |event| {
+                    if let LlmStreamEvent::TextDelta { text } = event {
+                        on_chunk(text);
+                    }
+                },
             )
             .await?
         }

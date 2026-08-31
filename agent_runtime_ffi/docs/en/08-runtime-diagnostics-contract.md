@@ -56,6 +56,30 @@ RUNTIME_CONTEXT_PROBE=1
 RUNTIME_CONTEXT_PROBE_FILE=./data/logs/runtime-context-probe.log
 ```
 
+Streaming LLM requests use stable diagnostic phases:
+
+```text
+headers_received
+first_stream_event
+completed
+stream_idle_timeout
+stream_total_timeout
+stream_error
+stream_incomplete
+provider_stream_error
+```
+
+Streaming requests use a 15-second connection timeout, a 60-second inter-chunk
+idle timeout, and a 10-minute total limit. A stream that keeps delivering SSE
+data is no longer killed by the old 120-second total request limit.
+`stream_idle_timeout` means the connection delivered no new data for 60
+seconds. `stream_total_timeout` means the complete stream exceeded 10 minutes.
+`stream_incomplete` means the connection ended without the protocol's terminal
+signal. These records contain elapsed time, chunk/byte counts, partial text
+lengths, tool-call counts, and argument byte counts, but never raw tool
+arguments. This distinguishes “the provider never emitted tool identity” from
+“the call started streaming but never closed.”
+
 ## 8.4 Outputs
 
 | Output | Responsibility |

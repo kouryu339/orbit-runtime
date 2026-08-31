@@ -145,6 +145,10 @@ export class ConversationRichContentElement extends LitElement {
     }
     .tool[data-status="finished"] .tool-dot { background: var(--conversation-tool-success); }
     .tool[data-status="failed"] .tool-dot { background: var(--conversation-tool-error); }
+    .tool[data-status="uncertain"] .tool-dot {
+      background: var(--conversation-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--conversation-accent) 18%, transparent);
+    }
     .tool[data-status="waiting_permission"] {
       border-color: color-mix(in srgb, var(--conversation-accent) 45%, var(--conversation-border));
     }

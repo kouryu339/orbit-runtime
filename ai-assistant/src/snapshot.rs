@@ -25,6 +25,8 @@ pub struct FrontendStateSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -44,6 +46,21 @@ pub struct AssistantStreamView {
     pub attempt: u32,
     pub sequence: u64,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provisional_tool_calls: Vec<ProvisionalToolCallView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProvisionalToolCallView {
+    /// Stable only within one turn/attempt. Replaced by `call_id` when the
+    /// provider supplies one.
+    pub key: String,
+    pub index: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +171,10 @@ impl SnapshotBuilder {
             Some(keys::MODEL),
         )
         .await;
+        let model_uid = match active_cache.as_ref() {
+            Some(cache) => crate::config_resolver::resolve_inference_model_uid(cache).await,
+            None => None,
+        };
         let summary_model = read_string_config(
             active_cache.as_ref(),
             crate::config_resolver::conversation_keys::CONFIG_SUMMARY_MODEL,
@@ -244,6 +265,7 @@ impl SnapshotBuilder {
             agents,
             active_agent_id,
             model,
+            model_uid,
             summary_model,
             language,
             conversation_state,

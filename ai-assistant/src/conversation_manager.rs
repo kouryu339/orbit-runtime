@@ -277,6 +277,18 @@ impl ConversationManager {
         runtime.conversation.set_language(language).await
     }
 
+    pub async fn set_model_with_admission(
+        &self,
+        conversation_id: &str,
+        model: &str,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        self.require_runtime(conversation_id)
+            .await?
+            .set_model_with_admission(model, command_id)
+            .await
+    }
+
     pub async fn set_summary_model(&self, conversation_id: &str, model: &str) -> Result<()> {
         self.require_runtime(conversation_id)
             .await?
@@ -432,6 +444,58 @@ impl ConversationManager {
         Ok(agent.sm.unit().cache())
     }
 
+    pub async fn agent_tool_protocols(
+        &self,
+        conversation_id: &str,
+    ) -> Result<BTreeMap<String, crate::ToolProtocol>> {
+        let runtime = self.require_runtime(conversation_id).await?;
+        let cluster = runtime.conversation.cluster();
+        let mut protocols = BTreeMap::new();
+        for agent_id in cluster.list_agent_ids().await {
+            let Some(agent) = cluster.get(&agent_id).await else {
+                continue;
+            };
+            let protocol = agent
+                .sm
+                .unit()
+                .cache()
+                .get::<crate::ToolProtocol>(crate::context::keys::TOOL_PROTOCOL)
+                .await?
+                .unwrap_or_default();
+            protocols.insert(agent_id, protocol);
+        }
+        Ok(protocols)
+    }
+
+    pub async fn restore_agent_tool_protocols(
+        &self,
+        conversation_id: &str,
+        protocols: Option<&BTreeMap<String, crate::ToolProtocol>>,
+    ) -> Result<()> {
+        let runtime = self.require_runtime(conversation_id).await?;
+        let cluster = runtime.conversation.cluster();
+        for agent_id in cluster.list_agent_ids().await {
+            let protocol = match protocols {
+                Some(protocols) => protocols.get(&agent_id).copied(),
+                // Snapshots from the two supported pre-FC releases did not
+                // persist this field and always used the EXEC protocol.
+                None => Some(crate::ToolProtocol::ExecLegacy),
+            };
+            let Some(protocol) = protocol else {
+                continue;
+            };
+            if let Some(agent) = cluster.get(&agent_id).await {
+                agent
+                    .sm
+                    .unit()
+                    .cache()
+                    .set(crate::context::keys::TOOL_PROTOCOL, &protocol, None)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn agent_immutable_cache_entries(
         &self,
         conversation_id: &str,
@@ -492,6 +556,7 @@ impl ConversationManager {
         conversation_id: &str,
         agent_id: &str,
         tools: Vec<String>,
+        structured_tools: Vec<crate::decision_line::ParsedToolCall>,
         call_ids: Vec<String>,
         recovery_results: BTreeMap<String, crate::decision::ToolResult>,
         tool_call_refs: Vec<crate::context::ToolCallRef>,
@@ -513,6 +578,13 @@ impl ConversationManager {
         let cache = agent.sm.unit().cache();
         cache
             .set(crate::context::keys::PENDING_TOOLS, &tools, None)
+            .await?;
+        cache
+            .set(
+                crate::context::keys::PENDING_STRUCTURED_TOOLS,
+                &structured_tools,
+                None,
+            )
             .await?;
         cache
             .set(crate::context::keys::PENDING_TOOL_CALL_IDS, &call_ids, None)
@@ -751,6 +823,17 @@ impl ConversationRuntime {
         let _guard = self.lock_command().await?;
         self.conversation
             .set_summary_model_with_admission(model, command_id)
+            .await
+    }
+
+    pub async fn set_model_with_admission(
+        &self,
+        model: &str,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        let _guard = self.lock_command().await?;
+        self.conversation
+            .set_model_with_admission(model, command_id)
             .await
     }
 
