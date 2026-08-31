@@ -233,6 +233,7 @@ impl BlueprintBuilder {
             variable_declarations: HashSet::new(),
             variable_defaults: HashMap::new(),
             source_map: HashMap::new(),
+            node_ids: HashMap::new(),
             // validation_report: report,
         })
     }
@@ -373,6 +374,8 @@ pub struct CompiledBlueprint {
     pub variable_defaults: HashMap<String, DataValue>,
     /// Runtime node name -> script/source reference.
     pub source_map: HashMap<String, WorkflowSourceRef>,
+    /// Runtime node name -> stable Blueprint node id.
+    pub node_ids: HashMap<String, String>,
     // Future: 添加 validation_report
     // pub validation_report: ValidationReport,
 }

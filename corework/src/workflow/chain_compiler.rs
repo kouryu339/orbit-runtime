@@ -3643,7 +3643,88 @@ fn compile_chain_from_ast_with_compiler(
     bp.nodes.extend(std::mem::take(&mut compiler.nodes));
     bp.connections
         .extend(std::mem::take(&mut compiler.connections));
+    annotate_source_refs(&mut bp, &chain.steps);
     Ok(bp)
+}
+
+fn annotate_source_refs(blueprint: &mut BlueprintJson, steps: &[Step]) {
+    fn visit(
+        steps: &[Step],
+        refs: &mut HashMap<String, (usize, &'static str)>,
+        start_line: &mut Option<usize>,
+        end_line: &mut Option<usize>,
+    ) {
+        for step in steps {
+            let (line, step_id, kind, children): (usize, Option<&String>, &'static str, &[Step]) =
+                match step {
+                    Step::Node { line, step_id, .. } => (*line, step_id.as_ref(), "node", &[]),
+                    Step::Call { line, step_id, .. } => (*line, step_id.as_ref(), "call", &[]),
+                    Step::If {
+                        line,
+                        step_id,
+                        true_block,
+                        false_block,
+                        ..
+                    } => {
+                        if let Some(id) = step_id {
+                            refs.insert(id.clone(), (*line, "branch"));
+                        }
+                        visit(true_block, refs, start_line, end_line);
+                        visit(false_block, refs, start_line, end_line);
+                        continue;
+                    }
+                    Step::ForEach {
+                        line,
+                        step_id,
+                        body,
+                        ..
+                    } => (*line, step_id.as_ref(), "for_each", body),
+                    Step::ForLoop {
+                        line,
+                        step_id,
+                        body,
+                        ..
+                    } => (*line, step_id.as_ref(), "for_loop", body),
+                    Step::Break { line, step_id } => (*line, step_id.as_ref(), "break", &[]),
+                    Step::Return { line, .. } => {
+                        *end_line = Some(*line);
+                        continue;
+                    }
+                    Step::VarInit { line, .. } | Step::Input { line, .. } => {
+                        *start_line = Some(start_line.map_or(*line, |current| current.min(*line)));
+                        continue;
+                    }
+                    Step::Block(block) => {
+                        visit(block, refs, start_line, end_line);
+                        continue;
+                    }
+                };
+            if let Some(id) = step_id {
+                refs.insert(id.clone(), (line, kind));
+            }
+            if !children.is_empty() {
+                visit(children, refs, start_line, end_line);
+            }
+        }
+    }
+
+    let mut refs = HashMap::new();
+    let mut start_line = None;
+    let mut end_line = None;
+    visit(steps, &mut refs, &mut start_line, &mut end_line);
+    for node in &mut blueprint.nodes {
+        let source = refs
+            .get(&node.id)
+            .copied()
+            .or_else(|| (node.node_type == "StartNode").then_some((start_line?, "input")))
+            .or_else(|| (node.node_type == "EndNode").then_some((end_line?, "return")));
+        if let Some((line, kind)) = source {
+            node.properties.insert(
+                "source_script".to_string(),
+                serde_json::json!({"line": line, "step": node.id, "kind": kind}),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

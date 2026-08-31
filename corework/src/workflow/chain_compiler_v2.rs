@@ -2675,4 +2675,16 @@ return result=$total
             "expected successful trace entries for the loop body"
         );
     }
+
+    #[test]
+    fn compiled_nodes_keep_script_source_references() {
+        let blueprint = compile_chain_v2(
+            "INPUT value:String\n1: EXEC DebugPrintNode --Value $value\nRETURN result=1.Value",
+        )
+        .unwrap();
+        let step = blueprint.nodes.iter().find(|node| node.id == "1").unwrap();
+        assert_eq!(step.properties["source_script"]["line"], 2);
+        assert_eq!(step.properties["source_script"]["step"], "1");
+        assert_eq!(step.properties["source_script"]["kind"], "node");
+    }
 }

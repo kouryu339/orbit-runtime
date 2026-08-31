@@ -260,6 +260,10 @@ impl BlueprintLoader {
         // 第四步：编译
         let mut compiled = builder.compile()?;
         compiled.source_map = Self::extract_source_map(&blueprint_json.nodes, &node_id_to_name);
+        compiled.node_ids = node_id_to_name
+            .iter()
+            .map(|(node_id, runtime_name)| (runtime_name.clone(), node_id.clone()))
+            .collect();
 
         // 第五步：解析节点的default_value作为默认值
         // 从pins的default_value字段中提取，而不是properties

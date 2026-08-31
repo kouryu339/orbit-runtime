@@ -10,7 +10,9 @@ use corework::{
     module::{create_module, AccessMode, Module},
     workflow::blueprint_json::BlueprintJson,
     workflow::core::DataValue,
-    workflow::execution::{ExecutionContext, WorkflowExecutionReport},
+    workflow::execution::{
+        ExecutionContext, WorkflowExecutionReport, WorkflowNodeStatus, WorkflowTraceEvent,
+    },
     workflow::{blueprint_json::BlueprintMetadata, BlueprintLoader},
 };
 use serde::{Deserialize, Serialize};
@@ -707,20 +709,48 @@ impl WorkflowsModule {
             .into_iter()
             .map(|(key, value)| (key, DataValue::new("JsonValue", value)))
             .collect();
+        let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
         let ctx = execution_context.apply_to(self.create_context())?;
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
-        exec_ctx.enable_trace(workflow_name, loaded.compiled.source_map.clone());
+        let (trace_event_tx, mut trace_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let run_id = exec_ctx.enable_trace_with_events(
+            workflow_id.clone(),
+            workflow_name.clone(),
+            loaded.compiled.source_map.clone(),
+            loaded.compiled.node_ids.clone(),
+            trace_event_tx,
+        );
+        self.publish_event(
+            crate::workflow::workflows::WORKFLOW_EXECUTION_STARTED_EVENT,
+            serde_json::json!({
+                "schema": "agent-runtime-workflow-execution/v1",
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "run_id": run_id,
+                "sequence": 0
+            }),
+        )
+        .await;
+        let event_bus = Arc::clone(&self.event_bus);
+        let event_workflow_id = workflow_id.clone();
+        let trace_forwarder = tokio::spawn(async move {
+            while let Some(event) = trace_event_rx.recv().await {
+                publish_trace_event(&event_bus, &event_workflow_id, event).await;
+            }
+        });
 
         if let Err(error) = loaded.compiled.initialize_defaults(&mut exec_ctx).await {
-            return Ok(WorkflowExecutionOutcome {
+            let outcome = WorkflowExecutionOutcome {
                 report: WorkflowExecutionReport {
                     outputs: HashMap::new(),
                     trace: exec_ctx.take_trace(),
                 },
                 error: Some(error.to_string()),
-            });
+            };
+            let _ = trace_forwarder.await;
+            return Ok(outcome);
         }
 
         let execution = loaded
@@ -729,6 +759,7 @@ impl WorkflowsModule {
             .execute_with_params(&mut exec_ctx, workflow_inputs)
             .await;
         let trace = exec_ctx.take_trace();
+        let _ = trace_forwarder.await;
         match execution {
             Ok(outputs) => Ok(WorkflowExecutionOutcome {
                 report: WorkflowExecutionReport { outputs, trace },
@@ -1000,6 +1031,44 @@ impl WorkflowsModule {
         meta.created.hash(&mut h);
         format!("{}:{:x}", meta.name, h.finish() as u32)
     }
+}
+
+async fn publish_trace_event(
+    event_bus: &Arc<dyn EventBus>,
+    workflow_id: &str,
+    event: WorkflowTraceEvent,
+) {
+    let (event_type, status) = match event.node.status {
+        WorkflowNodeStatus::Started => (
+            crate::workflow::workflows::WORKFLOW_NODE_STARTED_EVENT,
+            "started",
+        ),
+        WorkflowNodeStatus::Failed => (
+            crate::workflow::workflows::WORKFLOW_NODE_FAILED_EVENT,
+            "failed",
+        ),
+        WorkflowNodeStatus::Succeeded | WorkflowNodeStatus::Skipped => (
+            crate::workflow::workflows::WORKFLOW_NODE_COMPLETED_EVENT,
+            if matches!(event.node.status, WorkflowNodeStatus::Skipped) {
+                "skipped"
+            } else {
+                "succeeded"
+            },
+        ),
+    };
+    let payload = serde_json::json!({
+        "schema": "agent-runtime-workflow-node/v1",
+        "event_line": "workflow",
+        "workflow_id": workflow_id,
+        "workflow_name": event.workflow_name,
+        "run_id": event.run_id,
+        "sequence": event.sequence,
+        "status": status,
+        "node": event.node
+    });
+    let _ = event_bus
+        .publish(corework::event::BaseEvent::new(event_type, payload))
+        .await;
 }
 
 #[cfg(test)]

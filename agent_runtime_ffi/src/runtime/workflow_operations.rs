@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 const WORKFLOW_RESOURCE_SCHEMA: &str = "agent-runtime-workflow-resource/v1";
@@ -49,9 +50,7 @@ impl RuntimeFacade {
                 "schema": "agent-runtime-workflow-conversion/v1",
                 "script": script,
                 "blueprint": null,
-                "validation": corework::workflow::workflows::WorkflowValidation::invalid(
-                    format!("script compile failed at line {}: {}", error.line, error.message)
-                )
+                "validation": workflow_compile_validation(&error)
             })),
         }
     }
@@ -327,13 +326,16 @@ impl RuntimeFacade {
         let duration_ms = started.elapsed().as_millis();
         let execution_error = outcome.error.clone();
         let code = if outcome.error.is_some() { -1 } else { 0 };
+        let trace_meta = workflow_trace_meta(&outcome);
         let response = workflow_execution_response(outcome, duration_ms, trace_enabled);
         let mut event_payload = json!({
             "source": "registered",
             "workflow_id": selector,
             "status": if code == 0 { "succeeded" } else { "failed" },
             "code": code,
-            "duration_ms": duration_ms
+            "duration_ms": duration_ms,
+            "run_id": trace_meta.run_id,
+            "sequence": trace_meta.completed_sequence
         });
         if let Some(error) = execution_error {
             event_payload["error"] = Value::String(error);
@@ -381,6 +383,7 @@ impl RuntimeFacade {
         };
         let execution_error = outcome.error.clone();
         let code = if execution_error.is_some() { -1 } else { 0 };
+        let trace_meta = workflow_trace_meta(&outcome);
         let mut response = workflow_execution_response(outcome, duration_ms, trace_enabled);
         response["source"] = Value::String(source.to_string());
         response["trust"] = Value::String("untrusted".to_string());
@@ -396,6 +399,8 @@ impl RuntimeFacade {
                 "status": if code == 0 { "succeeded" } else { "failed" },
                 "code": code,
                 "duration_ms": duration_ms,
+                "run_id": trace_meta.run_id,
+                "sequence": trace_meta.completed_sequence,
                 "error": execution_error
             }),
         );
@@ -416,7 +421,7 @@ impl RuntimeFacade {
                 "workflow script must not be empty".to_string(),
             ));
         }
-        let blueprint =
+        let mut blueprint =
             match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
                 script,
                 &self.runtime_tools,
@@ -427,6 +432,7 @@ impl RuntimeFacade {
                         "workflow script compile failed at line {}: {}",
                         error.line, error.message
                     );
+                    let diagnostic = workflow_diagnostic(&error);
                     self.publish_workflow_event(
                         WORKFLOW_EXECUTION_COMPLETED_EVENT,
                         json!({
@@ -434,12 +440,23 @@ impl RuntimeFacade {
                             "status": "failed",
                             "code": 400,
                             "duration_ms": 0,
-                            "error": trace
+                            "error": trace,
+                            "diagnostics": [diagnostic.clone()]
                         }),
                     );
-                    return Ok(workflow_failure_response(400, trace));
+                    return Ok(workflow_compile_failure_response(400, trace, diagnostic));
                 }
             };
+        if blueprint.metadata.id.trim().is_empty() {
+            static NEXT_INLINE_WORKFLOW: AtomicU64 = AtomicU64::new(1);
+            blueprint.metadata.id = format!(
+                "inline-workflow-{}",
+                NEXT_INLINE_WORKFLOW.fetch_add(1, Ordering::Relaxed)
+            );
+        }
+        if blueprint.metadata.name.trim().is_empty() {
+            blueprint.metadata.name = "Inline Workflow".to_string();
+        }
         let module = self.workflow_module()?;
         let started = Instant::now();
         let execution = self
@@ -470,12 +487,16 @@ impl RuntimeFacade {
         let duration_ms = started.elapsed().as_millis();
         let execution_error = outcome.error.clone();
         let code = if outcome.error.is_some() { -1 } else { 0 };
+        let trace_meta = workflow_trace_meta(&outcome);
         let response = workflow_execution_response(outcome, duration_ms, trace_enabled);
         let mut event_payload = json!({
             "source": "script",
             "status": if code == 0 { "succeeded" } else { "failed" },
             "code": code,
-            "duration_ms": duration_ms
+            "duration_ms": duration_ms,
+            "workflow_id": trace_meta.workflow_id,
+            "run_id": trace_meta.run_id,
+            "sequence": trace_meta.completed_sequence
         });
         if let Some(error) = execution_error {
             event_payload["error"] = Value::String(error);
@@ -591,14 +612,7 @@ fn prepare_draft_from_input(
                         corework::workflow::workflows::WorkflowValidation::valid(),
                     )
                 }
-                Err(error) => (
-                    Some(script),
-                    None,
-                    corework::workflow::workflows::WorkflowValidation::invalid(format!(
-                        "script compile failed at line {}: {}",
-                        error.line, error.message
-                    )),
-                ),
+                Err(error) => (Some(script), None, workflow_compile_validation(&error)),
             }
         }
         (None, Some(blueprint)) => {
@@ -685,14 +699,15 @@ fn workflow_execution_response(
     duration_ms: u128,
     include_structured_trace: bool,
 ) -> Value {
+    let run_id = outcome
+        .report
+        .trace
+        .as_ref()
+        .map(|trace| trace.run_id.clone());
     let trace = outcome.report.to_ai(
         corework::workflow::execution::WorkflowToAiMode::Detailed,
         outcome.error.as_deref(),
     );
-    if outcome.error.is_some() {
-        return workflow_failure_response(-1, trace);
-    }
-
     let mut result = json!({
         "outputs": outcome.report.outputs_json(),
         "duration_ms": duration_ms
@@ -701,10 +716,28 @@ fn workflow_execution_response(
         result["node_trace"] = serde_json::to_value(&outcome.report.trace).unwrap_or(Value::Null);
     }
     json!({
-        "code": 0,
+        "code": if outcome.error.is_some() { -1 } else { 0 },
+        "run_id": run_id,
         "trace": trace,
         "result": result
     })
+}
+
+struct WorkflowTraceMeta {
+    workflow_id: Option<String>,
+    run_id: Option<String>,
+    completed_sequence: Option<u64>,
+}
+
+fn workflow_trace_meta(
+    outcome: &corework::workflow::workflows::executor::WorkflowExecutionOutcome,
+) -> WorkflowTraceMeta {
+    let trace = outcome.report.trace.as_ref();
+    WorkflowTraceMeta {
+        workflow_id: trace.map(|trace| trace.workflow_id.clone()),
+        run_id: trace.map(|trace| trace.run_id.clone()),
+        completed_sequence: trace.map(|trace| trace.event_count.saturating_add(1)),
+    }
 }
 
 fn workflow_failure_response(code: i32, trace: String) -> Value {
@@ -712,6 +745,43 @@ fn workflow_failure_response(code: i32, trace: String) -> Value {
         "code": code,
         "trace": trace
     })
+}
+
+fn workflow_compile_failure_response(
+    code: i32,
+    trace: String,
+    diagnostic: corework::workflow::workflows::catalog::WorkflowDiagnostic,
+) -> Value {
+    json!({
+        "code": code,
+        "trace": trace,
+        "diagnostics": [diagnostic]
+    })
+}
+
+fn workflow_diagnostic(
+    error: &corework::workflow::chain_compiler::ChainError,
+) -> corework::workflow::workflows::catalog::WorkflowDiagnostic {
+    corework::workflow::workflows::catalog::WorkflowDiagnostic {
+        severity: "error".to_string(),
+        kind: error.kind.as_str().to_string(),
+        line: error.line,
+        col: error.col,
+        message: error.message.clone(),
+        suggestion: error.suggestion.clone(),
+    }
+}
+
+fn workflow_compile_validation(
+    error: &corework::workflow::chain_compiler::ChainError,
+) -> corework::workflow::workflows::WorkflowValidation {
+    corework::workflow::workflows::WorkflowValidation::invalid_with_diagnostic(
+        format!(
+            "script compile failed at line {}: {}",
+            error.line, error.message
+        ),
+        workflow_diagnostic(error),
+    )
 }
 
 fn workflow_input_error(error: corework::error::FrameworkError) -> RuntimeError {

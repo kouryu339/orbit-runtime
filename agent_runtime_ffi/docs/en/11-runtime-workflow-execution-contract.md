@@ -104,6 +104,7 @@ On success both execution commands return:
 ```json
 {
   "code": 0,
+  "run_id": "wf-...",
   "trace": "Workflow execution trace:\n- line 2 step 1 succeeded: ...",
   "result": {
     "outputs": {
@@ -120,8 +121,18 @@ node outputs are not automatically copied into the program result; scripts
 must connect every value required by the host in the final `return` statement.
 When request `trace=true`, `result.node_trace` additionally contains the
 structured per-node trace.
+Once execution is established, the top-level `run_id` is always present and
+does not depend on the `trace` flag. Draft `mode=test` runs, registered runs,
+and `workflow.execute_script` follow the same rule. Compilation failures,
+missing resources, and failures before an execution context exists have no
+`run_id`.
 
-Failure responses always contain `code` and text `trace`, and omit `result`:
+Node execution failures return `code=-1` and text `trace`. `result` remains
+available and, when `trace=true`, retains a structured `result.node_trace`
+including the failed node. Compilation and setup failures may omit `result`
+because node execution never started. Compilation failures additionally return
+structured `diagnostics[]` entries with `severity`, `kind`, `line`, `col`,
+`message`, and optional `suggestion`:
 
 | Code | Meaning |
 |---|---|
@@ -152,9 +163,24 @@ declared `destructive`. The host's `destructive = ask/deny/full` policy therefor
 applies before Workflow execution begins. Development Studio sessions that need
 unconfirmed execution must have the host explicitly select `open_all`.
 
-Catalog mutation emits `workflow.resource_changed`; every attempted execution
-emits `workflow.execution_completed`. Both use the global
-`event_line: "workflow"`, carry `workflow_id` when a catalog resource is
+Catalog mutation emits `workflow.resource_changed`. Once a run is established,
+it emits the following ordered lifecycle:
+
+1. `workflow.execution_started`
+2. `workflow.node_started`
+3. `workflow.node_completed` or `workflow.node_failed`
+4. `workflow.execution_completed`
+
+Node events are bounded deltas rather than an ever-growing trace. They carry a
+stable Blueprint `node_id`, display/runtime `node_name`, `run_id`, a run-local
+monotonic `sequence`, node status, selected `output_pin`, duration, source
+reference, and bounded input/result previews. The completion event carries the
+same `run_id` and terminal `sequence`. Frontends must isolate concurrent runs by
+`run_id`, order deltas by `sequence`, and address canvas nodes by `node_id`, not
+by the potentially duplicated `node_name`.
+
+All workflow events use the global `event_line: "workflow"` and carry
+`workflow_id` when a catalog resource is
 involved, and the event envelope still does not carry `conversation_id`. The
 execution identity applies only to tool calls within that run and does not
 change the Workflow event line aggregate. They form a Workflow projector

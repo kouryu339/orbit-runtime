@@ -88,6 +88,7 @@ RPC 节点不会暴露虚构的 `Result` 引脚，脚本也不应写成 `1.Resul
 ```json
 {
   "code": 0,
+  "run_id": "wf-...",
   "trace": "Workflow execution trace:\n- line 2 step 1 succeeded: ...",
   "result": {
     "outputs": {
@@ -102,8 +103,14 @@ RPC 节点不会暴露虚构的 `Result` 引脚，脚本也不应写成 `1.Resul
 `result.outputs` 是 workflow End/`return` 节点的输出 map。内部节点输出不会自动进入
 程序结果；宿主需要的每个值都必须在脚本最终 `return` 中接到 End。请求
 `trace=true` 时，`result.node_trace` 还会包含结构化逐节点 trace。
+只要执行已经成功建立，顶层 `run_id` 始终存在，不依赖 `trace` 开关；草稿
+`mode=test` 试运行、正式执行和 `workflow.execute_script` 都遵循相同规则。编译失败、
+资源不存在或执行上下文尚未建立时没有 `run_id`。
 
-失败时始终返回 `code` 与文本 `trace`，并省略 `result`：
+节点执行失败时返回 `code=-1` 与文本 `trace`；`result` 仍然存在，且在请求
+`trace=true` 时保留包含失败节点的结构化 `result.node_trace`。编译失败或执行尚未建立时
+没有节点 Trace，可以省略 `result`。编译失败另外返回结构化 `diagnostics[]`，包含
+`severity`、`kind`、`line`、`col`、`message` 和可选 `suggestion`：
 
 | Code | 含义 |
 |---|---|
@@ -127,8 +134,20 @@ AI 工具入口 `executeWorkflow` 和 `executeWorkflowScript` 都声明为 `dest
 配置的 `destructive = ask/deny/full` 会在进入工作流执行前生效；开发期 Studio 若需要
 无确认执行，必须由宿主显式选择 `open_all`。
 
-目录变更产生 `workflow.resource_changed`；每次执行尝试产生
-`workflow.execution_completed`。二者位于全局 `event_line: "workflow"`，涉及目录资源时
+目录变更产生 `workflow.resource_changed`。一次已经建立的执行按顺序产生：
+
+1. `workflow.execution_started`
+2. `workflow.node_started`
+3. `workflow.node_completed` 或 `workflow.node_failed`
+4. `workflow.execution_completed`
+
+节点事件是增量而不是不断增长的完整 Trace，携带稳定 Blueprint `node_id`、显示/运行时
+`node_name`、`run_id`、运行内单调递增的 `sequence`、节点状态、实际 `output_pin`、耗时、
+源码引用和有界输入/结果预览。`workflow.execution_completed` 携带相同 `run_id` 及终态
+`sequence`。前端应以 `run_id` 隔离并发运行、以 `sequence` 排序，并以 `node_id` 关联画布；
+不要使用可重复的 `node_name` 作为画布主键。
+
+这些事件都位于全局 `event_line: "workflow"`，涉及目录资源时
 携带 `workflow_id`，事件信封仍不携带 `conversation_id`，也不进入 Conversation
 ledger/state。执行身份只用于本次工具调用上下文，不改变 Workflow 全局事件线的聚合根。
 宿主如需把 workflow 注入 Agent 尾部快照，应订阅该事件线、读取资源，再显式更新对应

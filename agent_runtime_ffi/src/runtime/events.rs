@@ -23,7 +23,7 @@ pub(super) async fn install_event_forwarders(
     Ok(())
 }
 
-fn forwarded_runtime_event_types() -> [&'static str; 7] {
+fn forwarded_runtime_event_types() -> [&'static str; 11] {
     [
         ai_assistant::events::types::FRONTEND_STATE_SNAPSHOT,
         ai_assistant::events::types::CONVERSATION_LEDGER_DELTA,
@@ -31,6 +31,10 @@ fn forwarded_runtime_event_types() -> [&'static str; 7] {
         CONVERSATION_CREATED_EVENT,
         CONVERSATION_CLOSED_EVENT,
         WORKFLOW_RESOURCE_CHANGED_EVENT,
+        WORKFLOW_EXECUTION_STARTED_EVENT,
+        WORKFLOW_NODE_STARTED_EVENT,
+        WORKFLOW_NODE_COMPLETED_EVENT,
+        WORKFLOW_NODE_FAILED_EVENT,
         WORKFLOW_EXECUTION_COMPLETED_EVENT,
     ]
 }

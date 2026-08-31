@@ -113,7 +113,8 @@ The event pump is one public bus for the runtime handle, not one stream per
 conversation. `EventSink` and `Events()` include only stable host-facing events:
 `conversation:created`, `conversation:closed`, `conversation.ledger_delta`,
 `conversation.state_delta`, `frontend:state_snapshot`,
-`workflow.resource_changed`, and `workflow.execution_completed`. LLM usage/error facts
+`workflow.resource_changed`, `workflow.execution_started`, `workflow.node_started`,
+`workflow.node_completed`, `workflow.node_failed`, and `workflow.execution_completed`. LLM usage/error facts
 are represented in ledger metadata. Studio/test internals and runtime
 diagnostics are not public runtime events.
 

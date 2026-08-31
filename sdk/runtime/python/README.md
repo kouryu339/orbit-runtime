@@ -152,7 +152,8 @@ tail snapshots exported during normal runtime operation.
 The public event bus only publishes stable host-facing events:
 `conversation:created`, `conversation:closed`, `conversation.ledger_delta`,
 `conversation.state_delta`, `frontend:state_snapshot`,
-`workflow.resource_changed`, and `workflow.execution_completed`. LLM usage/error
+`workflow.resource_changed`, `workflow.execution_started`, `workflow.node_started`,
+`workflow.node_completed`, `workflow.node_failed`, and `workflow.execution_completed`. LLM usage/error
 facts should be read from ledger metadata. Studio/test internals and runtime
 diagnostics are internal; diagnostics are delivered through the optional
 builder callback, not the public event stream.

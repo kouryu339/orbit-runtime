@@ -17,5 +17,5 @@ pub use node_state::NodeState;
 pub use stack_frame::{FrameType, StackFrame};
 pub use trace::{
     WorkflowExecutionReport, WorkflowExecutionTrace, WorkflowNodeStatus, WorkflowNodeTrace,
-    WorkflowSourceRef, WorkflowToAiMode, WorkflowTraceRecorder,
+    WorkflowSourceRef, WorkflowToAiMode, WorkflowTraceEvent, WorkflowTraceRecorder,
 };

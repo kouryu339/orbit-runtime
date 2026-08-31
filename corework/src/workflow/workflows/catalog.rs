@@ -46,6 +46,10 @@ fn workflow_source_step(
 
 pub(crate) const DRAFT_REGISTRY: &str = "wf:draft_registry";
 pub const WORKFLOW_RESOURCE_CHANGED_EVENT: &str = "workflow.resource_changed";
+pub const WORKFLOW_EXECUTION_STARTED_EVENT: &str = "workflow.execution_started";
+pub const WORKFLOW_NODE_STARTED_EVENT: &str = "workflow.node_started";
+pub const WORKFLOW_NODE_COMPLETED_EVENT: &str = "workflow.node_completed";
+pub const WORKFLOW_NODE_FAILED_EVENT: &str = "workflow.node_failed";
 pub const WORKFLOW_EXECUTION_COMPLETED_EVENT: &str = "workflow.execution_completed";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,6 +64,19 @@ pub struct WorkflowValidation {
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<WorkflowDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowDiagnostic {
+    pub severity: String,
+    pub kind: String,
+    pub line: usize,
+    pub col: usize,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 impl WorkflowValidation {
@@ -67,6 +84,7 @@ impl WorkflowValidation {
         Self {
             valid: true,
             error: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -74,6 +92,18 @@ impl WorkflowValidation {
         Self {
             valid: false,
             error: Some(error.into()),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    pub fn invalid_with_diagnostic(
+        error: impl Into<String>,
+        diagnostic: WorkflowDiagnostic,
+    ) -> Self {
+        Self {
+            valid: false,
+            error: Some(error.into()),
+            diagnostics: vec![diagnostic],
         }
     }
 }
@@ -505,7 +535,7 @@ impl WorkflowsModule {
         .await;
     }
 
-    async fn publish_event(&self, event_type: &str, mut payload: Value) {
+    pub(crate) async fn publish_event(&self, event_type: &str, mut payload: Value) {
         if let Some(payload) = payload.as_object_mut() {
             payload.insert(
                 "event_line".to_string(),

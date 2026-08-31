@@ -3,11 +3,14 @@ use crate::workflow::core::DataValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowSourceRef {
     pub line: Option<u32>,
+    #[serde(default)]
+    pub col: Option<u32>,
     pub step: Option<String>,
     pub kind: Option<String>,
     pub tool: Option<String>,
@@ -20,6 +23,11 @@ impl WorkflowSourceRef {
         let source = Self {
             line: obj
                 .get("line")
+                .and_then(JsonValue::as_u64)
+                .and_then(|v| u32::try_from(v).ok()),
+            col: obj
+                .get("col")
+                .or_else(|| obj.get("column"))
                 .and_then(JsonValue::as_u64)
                 .and_then(|v| u32::try_from(v).ok()),
             step: obj
@@ -41,6 +49,7 @@ impl WorkflowSourceRef {
         };
 
         if source.line.is_none()
+            && source.col.is_none()
             && source.step.is_none()
             && source.kind.is_none()
             && source.tool.is_none()
@@ -53,7 +62,7 @@ impl WorkflowSourceRef {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WorkflowNodeStatus {
     Started,
     Succeeded,
@@ -63,6 +72,9 @@ pub enum WorkflowNodeStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNodeTrace {
+    /// Stable Blueprint node id. `node_name` remains display/runtime oriented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
     pub node_name: String,
     pub node_type: String,
     pub source: Option<WorkflowSourceRef>,
@@ -79,16 +91,30 @@ pub struct WorkflowNodeTrace {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowExecutionTrace {
+    pub workflow_id: String,
     pub workflow_name: String,
     pub run_id: String,
     pub nodes: Vec<WorkflowNodeTrace>,
+    /// Number of ordered node lifecycle deltas emitted for this run.
+    #[serde(default)]
+    pub event_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTraceEvent {
+    pub run_id: String,
+    pub sequence: u64,
+    pub workflow_name: String,
+    pub node: WorkflowNodeTrace,
 }
 
 #[derive(Debug)]
 pub struct WorkflowTraceRecorder {
     trace: WorkflowExecutionTrace,
     source_map: HashMap<String, WorkflowSourceRef>,
+    node_ids: HashMap<String, String>,
     started_at: HashMap<usize, Instant>,
+    event_sender: Option<UnboundedSender<WorkflowTraceEvent>>,
 }
 
 impl WorkflowTraceRecorder {
@@ -96,14 +122,51 @@ impl WorkflowTraceRecorder {
         workflow_name: impl Into<String>,
         source_map: HashMap<String, WorkflowSourceRef>,
     ) -> Self {
+        let workflow_name = workflow_name.into();
+        Self::new_with_events(
+            workflow_name.clone(),
+            workflow_name,
+            source_map,
+            HashMap::new(),
+            None,
+        )
+    }
+
+    pub fn new_with_events(
+        workflow_id: impl Into<String>,
+        workflow_name: impl Into<String>,
+        source_map: HashMap<String, WorkflowSourceRef>,
+        node_ids: HashMap<String, String>,
+        event_sender: Option<UnboundedSender<WorkflowTraceEvent>>,
+    ) -> Self {
         Self {
             trace: WorkflowExecutionTrace {
+                workflow_id: workflow_id.into(),
                 workflow_name: workflow_name.into(),
                 run_id: make_run_id(),
                 nodes: Vec::new(),
+                event_count: 0,
             },
             source_map,
+            node_ids,
             started_at: HashMap::new(),
+            event_sender,
+        }
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.trace.run_id
+    }
+
+    fn emit_node_event(&mut self, node: WorkflowNodeTrace) {
+        self.trace.event_count = self.trace.event_count.saturating_add(1);
+        if let Some(sender) = &self.event_sender {
+            let _ = sender.send(WorkflowTraceEvent {
+                run_id: self.trace.run_id.clone(),
+                sequence: self.trace.event_count,
+                workflow_name: self.trace.workflow_name.clone(),
+                node,
+            });
         }
     }
 
@@ -112,6 +175,7 @@ impl WorkflowTraceRecorder {
         let index = self.trace.nodes.len();
         self.started_at.insert(index, Instant::now());
         self.trace.nodes.push(WorkflowNodeTrace {
+            node_id: self.node_ids.get(&node_name).cloned(),
             source: self.source_map.get(&node_name).cloned(),
             node_name,
             node_type: node_type.into(),
@@ -124,6 +188,9 @@ impl WorkflowTraceRecorder {
             result_preview: None,
             error: None,
         });
+        if let Some(node) = self.trace.nodes.last().cloned() {
+            self.emit_node_event(node);
+        }
     }
 
     pub fn finish_node(&mut self, node_name: &str, output_pin: Option<String>) {
@@ -133,11 +200,16 @@ impl WorkflowTraceRecorder {
                 .remove(&index)
                 .map(|started| started.elapsed().as_millis() as u64);
             let node = &mut self.trace.nodes[index];
-            if !matches!(node.status, WorkflowNodeStatus::Failed) {
+            let already_failed = matches!(node.status, WorkflowNodeStatus::Failed);
+            if !already_failed {
                 node.status = WorkflowNodeStatus::Succeeded;
             }
             node.output_pin = output_pin;
             node.duration_ms = duration_ms;
+            if !already_failed {
+                let node = node.clone();
+                self.emit_node_event(node);
+            }
         }
     }
 
@@ -151,6 +223,8 @@ impl WorkflowTraceRecorder {
             node.status = WorkflowNodeStatus::Failed;
             node.error = Some(error.into());
             node.duration_ms = duration_ms;
+            let node = node.clone();
+            self.emit_node_event(node);
         }
     }
 
@@ -360,9 +434,5 @@ fn format_source_ref(source: &WorkflowSourceRef) -> String {
 }
 
 fn make_run_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    format!("wf-{nanos}")
+    format!("wf-{}", uuid::Uuid::new_v4())
 }

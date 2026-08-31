@@ -241,7 +241,7 @@ events/views and recreates the Draft after restart.
 
 Execution accepts an object-valued `inputs` field and optional `trace`. Catalog
 mutations are immediately visible to the AI workflow tools. The Runtime emits
-`workflow.resource_changed` and `workflow.execution_completed` for host audit,
+`workflow.resource_changed` plus ordered workflow execution/node lifecycle events for host audit,
 but does not choose Redis, database, authorization, distributed locking, or
 cross-Pod coordination policy. Calls on one Runtime handle remain serialized by
 ABI 1; multi-process coordination belongs to the host.
@@ -252,6 +252,7 @@ program-facing result:
 ```json
 {
   "code": 0,
+  "run_id": "wf-...",
   "trace": "Workflow execution trace:\n- line 2 step 1 succeeded: ... result=...",
   "result": {
     "outputs": {"result": "value"},
@@ -262,10 +263,12 @@ program-facing result:
 
 `trace` is the existing per-node workflow trace rendered with each node's
 AI message, input/result previews, status, source line, duration, and error. A non-zero
-`code` omits `result`. Script compilation failures use code `400` and include
+`code=-1` retains `result` so `trace=true` can expose the failed node. Script compilation failures use code `400` and include
 the source line in `trace`; missing workflows use `404`; execution
 failures use `-1`. Setting the request's optional `trace` flag to `true` also
 includes the structured node trace as `result.node_trace`.
+Every established run returns the same `run_id` at the response top level,
+including draft test runs and requests with `trace=false`.
 
 Workflow events use the global `event_line: "workflow"` projection and carry a
 `workflow_id`; they never carry `conversation_id` or participate in conversation
@@ -284,8 +287,9 @@ healthy:
 - `conversation.state_delta` for focus, agent tasks, plan, skills, and dynamic
   snapshot mirrors;
 - `conversation:created` and `conversation:closed` for lifecycle routing.
-- `workflow.resource_changed` and `workflow.execution_completed` for workflow
-  catalog and execution audit.
+- `workflow.resource_changed`, `workflow.execution_started`,
+  `workflow.node_started`, `workflow.node_completed`, `workflow.node_failed`,
+  and `workflow.execution_completed` for workflow catalog and ordered execution audit.
 
 LLM usage/error facts are carried by `conversation.ledger_delta` records with
 `metadata.subtype = "llm_usage"` or `"llm_error"`. Do not build recovery,

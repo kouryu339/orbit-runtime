@@ -1610,13 +1610,15 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
             "id": "echo-workflow",
             "mode": "test",
             "inputs": {"name": "Draft Ada"},
-            "trace": true
+            "trace": false
         }),
     );
     assert_eq!(draft_test["code"], 0);
     assert_eq!(draft_test["trust"], "untrusted");
     assert_eq!(draft_test["execution_mode"], "test");
+    assert!(draft_test["run_id"].is_string());
     assert_eq!(draft_test["result"]["outputs"]["result"], "Draft Ada");
+    assert!(draft_test["result"].get("node_trace").is_none());
 
     let registered = invoke(
         &mut facade,
@@ -1636,6 +1638,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     );
     assert_eq!(first["code"], 0);
     assert_eq!(first["result"]["outputs"]["result"], "Ada");
+    assert_eq!(first["run_id"], first["result"]["node_trace"]["run_id"]);
     let trace = first["trace"].as_str().unwrap();
     assert!(trace.contains("succeeded"));
     assert!(trace.contains("inputs="), "{trace}");
@@ -1685,7 +1688,27 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     );
     assert_eq!(inline["code"], 0);
     assert_eq!(inline["result"]["outputs"]["result"], "Grace");
+    assert!(inline["run_id"].is_string());
     assert!(inline["result"].get("node_trace").is_none());
+
+    let branched = invoke(
+        &mut facade,
+        "workflow.execute_script",
+        json!({
+            "script": "INPUT\n$result = 0\n1: IF gt(3, 0)\n    1.1.1: setvar result = 1\n1.0: ELSE\n    1.0.1: setvar result = 2\nEND\nRETURN result=$result",
+            "inputs": {},
+            "trace": true
+        }),
+    );
+    assert_eq!(branched["code"], 0, "{branched}");
+    let branch_node = branched["result"]["node_trace"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["node_id"] == "1")
+        .unwrap();
+    assert_eq!(branch_node["node_id"], "1");
+    assert_eq!(branch_node["output_pin"], "True");
 
     let dynamic_inline = invoke(
         &mut facade,
@@ -1717,6 +1740,10 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         }),
     );
     assert_eq!(execution_failure["code"], -1, "{execution_failure}");
+    assert_eq!(
+        execution_failure["run_id"],
+        execution_failure["result"]["node_trace"]["run_id"]
+    );
     let failure_trace = execution_failure["trace"].as_str().unwrap();
     assert!(failure_trace.contains("failed"), "{failure_trace}");
     assert!(failure_trace.contains("Pow"), "{failure_trace}");
@@ -1725,7 +1752,17 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         failure_trace.contains("Missing or invalid input Base"),
         "{failure_trace}"
     );
-    assert!(execution_failure.get("result").is_none());
+    let failed_nodes = execution_failure["result"]["node_trace"]["nodes"]
+        .as_array()
+        .unwrap();
+    let failed_node = failed_nodes
+        .iter()
+        .find(|node| node["status"] == "Failed")
+        .unwrap();
+    assert!(failed_node["node_id"].is_string(), "{failed_node}");
+    assert!(failed_node["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("Missing or invalid input Base")));
 
     let compile_failure = invoke(
         &mut facade,
@@ -1737,7 +1774,11 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         .as_str()
         .unwrap()
         .contains("line 1"));
+    assert_eq!(compile_failure["diagnostics"][0]["severity"], "error");
+    assert_eq!(compile_failure["diagnostics"][0]["line"], 1);
+    assert!(compile_failure["diagnostics"][0]["kind"].is_string());
     assert!(compile_failure.get("result").is_none());
+    assert!(compile_failure.get("run_id").is_none());
 
     let missing = invoke(
         &mut facade,
@@ -1745,6 +1786,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         json!({"id": "missing-workflow", "inputs": {}, "trace": false}),
     );
     assert_eq!(missing["code"], 404);
+    assert!(missing.get("run_id").is_none());
     assert!(missing.get("result").is_none());
 
     let parent_registry: Vec<ParentWorkflowEntry> = facade
@@ -1789,6 +1831,24 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert!(events
         .iter()
         .any(|event| event["type"] == WORKFLOW_EXECUTION_COMPLETED_EVENT));
+    assert!(events
+        .iter()
+        .any(|event| event["type"] == WORKFLOW_EXECUTION_STARTED_EVENT));
+    assert!(events
+        .iter()
+        .any(|event| event["type"] == WORKFLOW_NODE_STARTED_EVENT));
+    assert!(events.iter().any(|event| {
+        event["type"] == WORKFLOW_NODE_COMPLETED_EVENT
+            && event["payload"]["node"]["node_id"].is_string()
+            && event["payload"]["sequence"]
+                .as_u64()
+                .is_some_and(|value| value > 0)
+    }));
+    assert!(events.iter().any(|event| {
+        event["type"] == WORKFLOW_NODE_FAILED_EVENT
+            && event["payload"]["status"] == "failed"
+            && event["payload"]["run_id"].is_string()
+    }));
     assert!(events.iter().any(|event| {
         event["type"] == WORKFLOW_EXECUTION_COMPLETED_EVENT
             && event["event_line"] == "workflow"
@@ -1802,6 +1862,24 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
                 .as_str()
                 .is_some_and(|error| error.contains("Missing or invalid input Base"))
     }));
+    let failed_completion = events
+        .iter()
+        .find(|event| {
+            event["type"] == WORKFLOW_EXECUTION_COMPLETED_EVENT && event["payload"]["code"] == -1
+        })
+        .unwrap();
+    let failed_run_id = failed_completion["payload"]["run_id"].as_str().unwrap();
+    let failed_node_event = events
+        .iter()
+        .find(|event| {
+            event["type"] == WORKFLOW_NODE_FAILED_EVENT
+                && event["payload"]["run_id"] == failed_run_id
+        })
+        .unwrap();
+    assert!(
+        failed_completion["payload"]["sequence"].as_u64().unwrap()
+            > failed_node_event["payload"]["sequence"].as_u64().unwrap()
+    );
 
     facade.shutdown().unwrap();
     let _ = fs::remove_dir_all(root);

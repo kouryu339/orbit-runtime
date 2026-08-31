@@ -345,6 +345,29 @@ impl ExecutionContext {
         self.trace_recorder = Some(WorkflowTraceRecorder::new(workflow_name, source_map));
     }
 
+    pub fn enable_trace_with_events(
+        &mut self,
+        workflow_id: impl Into<String>,
+        workflow_name: impl Into<String>,
+        source_map: HashMap<String, WorkflowSourceRef>,
+        node_ids: HashMap<String, String>,
+        event_sender: tokio::sync::mpsc::UnboundedSender<
+            crate::workflow::execution::WorkflowTraceEvent,
+        >,
+    ) -> String {
+        self.workflow_trace.clear();
+        let recorder = WorkflowTraceRecorder::new_with_events(
+            workflow_id,
+            workflow_name,
+            source_map,
+            node_ids,
+            Some(event_sender),
+        );
+        let run_id = recorder.run_id().to_string();
+        self.trace_recorder = Some(recorder);
+        run_id
+    }
+
     pub fn take_trace(&mut self) -> Option<WorkflowExecutionTrace> {
         self.trace_recorder
             .take()

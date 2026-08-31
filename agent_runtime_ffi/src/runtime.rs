@@ -97,6 +97,10 @@ use crate::agent_test_studio::tools::{
 const CONVERSATION_CREATED_EVENT: &str = "runtime:conversation_created";
 const CONVERSATION_CLOSED_EVENT: &str = "runtime:conversation_closed";
 const WORKFLOW_RESOURCE_CHANGED_EVENT: &str = "workflow.resource_changed";
+const WORKFLOW_EXECUTION_STARTED_EVENT: &str = "workflow.execution_started";
+const WORKFLOW_NODE_STARTED_EVENT: &str = "workflow.node_started";
+const WORKFLOW_NODE_COMPLETED_EVENT: &str = "workflow.node_completed";
+const WORKFLOW_NODE_FAILED_EVENT: &str = "workflow.node_failed";
 const WORKFLOW_EXECUTION_COMPLETED_EVENT: &str = "workflow.execution_completed";
 
 #[derive(Debug, thiserror::Error)]

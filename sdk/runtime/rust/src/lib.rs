@@ -45,6 +45,10 @@ pub const STATE_DELTA_EVENT_TYPE: &str = "conversation.state_delta";
 pub const STATE_DELTA_SCHEMA: &str = "agent-runtime-state-delta/v1";
 pub const FRONTEND_STATE_SNAPSHOT_EVENT_TYPE: &str = "frontend:state_snapshot";
 pub const WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE: &str = "workflow.resource_changed";
+pub const WORKFLOW_EXECUTION_STARTED_EVENT_TYPE: &str = "workflow.execution_started";
+pub const WORKFLOW_NODE_STARTED_EVENT_TYPE: &str = "workflow.node_started";
+pub const WORKFLOW_NODE_COMPLETED_EVENT_TYPE: &str = "workflow.node_completed";
+pub const WORKFLOW_NODE_FAILED_EVENT_TYPE: &str = "workflow.node_failed";
 pub const WORKFLOW_EXECUTION_COMPLETED_EVENT_TYPE: &str = "workflow.execution_completed";
 
 pub type AgentRuntimeHandle = u64;
