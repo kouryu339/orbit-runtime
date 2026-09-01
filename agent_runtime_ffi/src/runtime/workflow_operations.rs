@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 const WORKFLOW_RESOURCE_SCHEMA: &str = "agent-runtime-workflow-resource/v1";
@@ -447,13 +446,6 @@ impl RuntimeFacade {
                     return Ok(workflow_compile_failure_response(400, trace, diagnostic));
                 }
             };
-        if blueprint.metadata.id.trim().is_empty() {
-            static NEXT_INLINE_WORKFLOW: AtomicU64 = AtomicU64::new(1);
-            blueprint.metadata.id = format!(
-                "inline-workflow-{}",
-                NEXT_INLINE_WORKFLOW.fetch_add(1, Ordering::Relaxed)
-            );
-        }
         if blueprint.metadata.name.trim().is_empty() {
             blueprint.metadata.name = "Inline Workflow".to_string();
         }

@@ -182,6 +182,14 @@ bounded diagnostics off the Runtime event payload path:
 - **RPC latency diagnostics**: JSON-lines and gRPC tools record request start,
   first response, HostCall activity, completion, failure, and timeout using
   stable call, conversation, Agent, and turn identifiers.
+- **Workflow-aware RPC identity**: RPC Tool calls now carry independent
+  `workflow_id`, `workflow_run_id`, and `node_id` metadata. Agent-started
+  workflows preserve their conversation/Agent/turn origin, while direct and
+  temporary Script runs remain valid without a `workflow_id`.
+- **RPC Tool SDK 0.1.1**: Rust, Python, Node.js, C#, and Java package metadata
+  has been upgraded, and all seven language SDKs expose the new workflow
+  identity fields. Tool-side integrations should upgrade together with this
+  beta when they need workflow-level tracing or routing.
 - **Non-blocking log delivery**: diagnostics use a bounded background writer;
   saturation drops diagnostic entries with an auditable drop count instead of
   delaying model or tool execution.

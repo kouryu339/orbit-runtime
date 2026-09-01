@@ -189,10 +189,13 @@ When runtime calls an RPC tool, it includes the current call context in `Execute
 | `conversation_id` | Current conversation id. Business tools should prefer it for session isolation, routing lookup, or audit writes. |
 | `agent_id` | Agent id that initiated the tool call. Useful for distinguishing sources in multi-agent scenarios. |
 | `turn_id` | Current turn id. |
+| `workflow_id` | Stable id of a persisted Workflow. It may be empty for a temporary Script. |
+| `workflow_run_id` | Id of this Workflow run; generated for every execution. |
+| `node_id` | Stable Blueprint node id that initiated the call. |
 | `permissions` | Permissions passed by runtime. |
 | `host_context_json` | Extended context passed through by the host. SDKs may parse it into language-native objects. |
 
-Expose field names according to language convention: Python/Rust/C++ use `conversation_id`, Go/C# use `ConversationID` / `ConversationId`, and Node.js uses `conversationId`. Tools should not guess conversation or agent from global state; prefer reading `ToolContext`.
+The fields form two independent origin groups. A direct Agent call normally has only `conversation_id / agent_id / turn_id`. A Workflow node call always has `workflow_run_id / node_id`, and a persisted resource also has `workflow_id`. When an Agent starts a Workflow through local `executeWorkflow` or `executeWorkflowScript`, both groups are present. Direct host Workflow execution may omit all three Agent fields, and a temporary Script may omit `workflow_id`. Expose field names according to language convention: Python/Rust/C++ use `conversation_id`, Go/C# use `ConversationID` / `ConversationId`, and Node.js uses `conversationId`. Tools should not guess call identity from global state; prefer reading `ToolContext`.
 
 ## 9.10 Registering With Runtime
 

@@ -189,10 +189,13 @@ Runtime 调用 RPC 工具时，会在 `ExecuteRequest` 中带上当前调用上�
 | `conversation_id` | 当前 conversation ID。业务工具需要按会话隔离、查路由或写审计时优先使用它。 |
 | `agent_id` | 当前发起工具调用的 agent ID。多 agent 场景中用于区分来源。 |
 | `turn_id` | 当前 turn ID。 |
+| `workflow_id` | 持久化 Workflow 的稳定 ID。临时 Script 可以为空。 |
+| `workflow_run_id` | 本次 Workflow 执行 ID；每次执行都会生成。 |
+| `node_id` | 发起调用的稳定 Blueprint 节点 ID。 |
 | `permissions` | runtime 传入的权限列表。 |
 | `host_context_json` | 宿主透传的扩展上下文 JSON。SDK 可以解析成语言原生对象。 |
 
-字段命名按语言习惯暴露，例如 Python/Rust/C++ 使用 `conversation_id`，Go/C# 使用 `ConversationID` / `ConversationId`，Node.js 使用 `conversationId`。工具不应自己从全局状态猜 conversation 或 agent，优先读取 `ToolContext`。
+字段分为两组独立来源：Agent 直接调用时通常只有 `conversation_id / agent_id / turn_id`；Workflow 节点调用时一定带 `workflow_run_id / node_id`，持久化资源还带 `workflow_id`。Agent 通过本地 `executeWorkflow` 或 `executeWorkflowScript` 启动 Workflow 时，两组字段会同时存在。宿主直接执行 Workflow 时，Agent 三字段可以全部为空；临时 Script 的 `workflow_id` 也可以为空。字段命名按语言习惯暴露，例如 Python/Rust/C++ 使用 `conversation_id`，Go/C# 使用 `ConversationID` / `ConversationId`，Node.js 使用 `conversationId`。工具不应自己从全局状态猜调用身份，优先读取 `ToolContext`。
 
 ## 9.10 注册到 runtime
 

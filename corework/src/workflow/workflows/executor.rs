@@ -92,6 +92,7 @@ pub struct WorkflowExecutionOutcome {
 pub struct WorkflowExecutionContext {
     pub conversation_id: Option<String>,
     pub agent_id: Option<String>,
+    pub turn_id: Option<String>,
 }
 
 impl WorkflowExecutionContext {
@@ -99,7 +100,13 @@ impl WorkflowExecutionContext {
         Self {
             conversation_id: Some(conversation_id.into()),
             agent_id: Some(agent_id.into()),
+            turn_id: None,
         }
+    }
+
+    pub fn with_turn_id(mut self, turn_id: impl Into<String>) -> Self {
+        self.turn_id = Some(turn_id.into());
+        self
     }
 
     fn apply_to(
@@ -123,6 +130,14 @@ impl WorkflowExecutionContext {
                         .to_string(),
                 ));
             }
+        }
+        if let Some(turn_id) = self
+            .turn_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            ctx.set("turn_id", turn_id.to_string())?;
         }
         Ok(ctx)
     }
@@ -598,27 +613,18 @@ impl WorkflowsModule {
         file_path: &str,
         inputs: HashMap<String, JsonValue>,
     ) -> Result<HashMap<String, JsonValue>> {
-        let workflow_inputs = inputs
-            .into_iter()
-            .map(|(k, v)| (k, corework::workflow::core::DataValue::new("JsonValue", v)))
-            .collect();
-
         tracing::debug!(file_path = %file_path, "workflow execution started");
         let t = std::time::Instant::now();
-        let mut wf = BlueprintLoader::new()
-            .load_workflow_from_file(file_path)
-            .await?;
-        let outputs = wf.execute(workflow_inputs).await?;
+        let blueprint =
+            BlueprintJson::from_workflow_file(file_path).map_err(FrameworkError::SystemError)?;
+        let outputs = self.execute_from_blueprint(blueprint, inputs).await?;
         tracing::debug!(
             file_path = %file_path,
             duration_ms = t.elapsed().as_millis(),
             "workflow execution completed"
         );
 
-        Ok(outputs
-            .into_iter()
-            .map(|(k, v)| (k, v.json_value().clone()))
-            .collect())
+        Ok(outputs)
     }
 
     /// 从 BlueprintJson 直接执行临时工作流。
@@ -632,14 +638,15 @@ impl WorkflowsModule {
             .map(|(k, v)| (k, DataValue::new("JsonValue", v)))
             .collect();
 
-        tracing::debug!(
-            workflow_name = %blueprint.metadata.name,
-            "inline workflow execution started"
-        );
+        let workflow_id = blueprint.metadata.id.clone();
+        let workflow_name = blueprint.metadata.name.clone();
+        tracing::debug!(workflow_name = %workflow_name, "inline workflow execution started");
         let t = std::time::Instant::now();
         let ctx = self.create_context();
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
+        let run_id = crate::workflow::execution::trace::new_workflow_run_id();
+        exec_ctx.bind_workflow_identity(workflow_id, run_id, loaded.compiled.node_ids.clone())?;
         loaded.compiled.initialize_defaults(&mut exec_ctx).await?;
         let executor = loaded.compiled.executor();
         let outputs = executor
@@ -668,14 +675,23 @@ impl WorkflowsModule {
             .map(|(k, v)| (k, DataValue::new("JsonValue", v)))
             .collect();
 
+        let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
         tracing::debug!(workflow_name = %workflow_name, "inline workflow report started");
         let ctx = self.create_context();
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
-        if trace_enabled {
-            exec_ctx.enable_trace(workflow_name, loaded.compiled.source_map.clone());
-        }
+        let run_id = if trace_enabled {
+            exec_ctx.enable_trace_for_workflow(
+                workflow_id.clone(),
+                workflow_name,
+                loaded.compiled.source_map.clone(),
+                loaded.compiled.node_ids.clone(),
+            )
+        } else {
+            crate::workflow::execution::trace::new_workflow_run_id()
+        };
+        exec_ctx.bind_workflow_identity(workflow_id, run_id, loaded.compiled.node_ids.clone())?;
         loaded.compiled.initialize_defaults(&mut exec_ctx).await?;
         let executor = loaded.compiled.executor();
         let outputs = executor
@@ -722,6 +738,11 @@ impl WorkflowsModule {
             loaded.compiled.node_ids.clone(),
             trace_event_tx,
         );
+        exec_ctx.bind_workflow_identity(
+            workflow_id.clone(),
+            run_id.clone(),
+            loaded.compiled.node_ids.clone(),
+        )?;
         self.publish_event(
             crate::workflow::workflows::WORKFLOW_EXECUTION_STARTED_EVENT,
             serde_json::json!({
@@ -1090,6 +1111,7 @@ mod execution_context_tests {
     fn execution_identity_is_local_to_each_workflow_context() {
         let shared_cache = Arc::new(InMemoryCache::new());
         let first = WorkflowExecutionContext::new("conversation-a", "agent-a")
+            .with_turn_id("7")
             .apply_to(base_context(Arc::clone(&shared_cache)))
             .unwrap();
         let second = WorkflowExecutionContext::new("conversation-b", "agent-b")
@@ -1101,6 +1123,10 @@ mod execution_context_tests {
             first.get::<String>("agent_id").unwrap().as_deref(),
             Some("agent-a")
         );
+        assert_eq!(
+            first.get::<String>("turn_id").unwrap().as_deref(),
+            Some("7")
+        );
         assert_eq!(second.conversation_id.as_deref(), Some("conversation-b"));
         assert_eq!(
             second.get::<String>("agent_id").unwrap().as_deref(),
@@ -1110,6 +1136,7 @@ mod execution_context_tests {
         let incomplete = WorkflowExecutionContext {
             conversation_id: Some("conversation-only".to_string()),
             agent_id: None,
+            turn_id: None,
         };
         assert!(incomplete
             .apply_to(base_context(Arc::new(InMemoryCache::new())))

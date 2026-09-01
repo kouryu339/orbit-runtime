@@ -83,6 +83,9 @@ class ToolContext {
   std::string conversation_id;
   std::string agent_id;
   std::string turn_id;
+  std::string workflow_id;
+  std::string workflow_run_id;
+  std::string node_id;
   std::vector<std::string> permissions;
   Json host_context;
 

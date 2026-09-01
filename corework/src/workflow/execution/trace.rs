@@ -143,7 +143,7 @@ impl WorkflowTraceRecorder {
             trace: WorkflowExecutionTrace {
                 workflow_id: workflow_id.into(),
                 workflow_name: workflow_name.into(),
-                run_id: make_run_id(),
+                run_id: new_workflow_run_id(),
                 nodes: Vec::new(),
                 event_count: 0,
             },
@@ -433,6 +433,6 @@ fn format_source_ref(source: &WorkflowSourceRef) -> String {
         .unwrap_or_else(|| "<unknown source>".to_string())
 }
 
-fn make_run_id() -> String {
+pub(crate) fn new_workflow_run_id() -> String {
     format!("wf-{}", uuid::Uuid::new_v4())
 }

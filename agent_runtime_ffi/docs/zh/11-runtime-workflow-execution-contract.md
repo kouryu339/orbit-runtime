@@ -124,11 +124,18 @@ Agent 的 active tools 中，且注册元数据具有明确的描述、输入引
 
 ## 11.4 审计与宿主职责
 
-由 Conversation 或 Agent 发起执行时，宿主必须同时传入 `conversation_id` 与 `agent_id`。
-Runtime 将这对身份绑定到本次独立 Workflow 执行上下文，并透传给本地工具与 RPC
-`ToolContext`；只传其中一个会返回参数错误。非会话型后台任务可以同时省略二者。该上下文
+由 Conversation 或 Agent 发起执行时，宿主必须同时传入 `conversation_id` 与 `agent_id`，
+并可传入当前 `turn_id`。AI 本地工具 `executeWorkflow` 和 `executeWorkflowScript` 会自动从
+调用它们的 Agent `Context` 提取这三个字段。Runtime 将该来源身份绑定到本次独立 Workflow
+执行上下文，并透传给其中的本地工具与 RPC `ToolContext`；只传 conversation/agent 中一个
+会返回参数错误。非会话型后台任务可以同时省略 Agent 来源字段。该上下文
 不得写入 Workflow 模块共享缓存，以免并发执行串用调用者身份。传入执行身份不会启动
 Conversation 审批；审批只属于 AI Executor，宿主直接调用 `workflow.execute` 仍是直接执行。
+
+执行引擎独立绑定 `workflow_id`、`workflow_run_id` 与当前 `node_id`。其中每次执行都有
+`workflow_run_id`，RPC 节点都有 `node_id`；只有持久化 Workflow 资源要求 `workflow_id`，
+直接执行的临时 Script 允许该字段为空。Agent 启动 Workflow 时，Agent 来源字段与 Workflow
+执行字段同时存在；宿主直接执行 Workflow 时只有 Workflow 执行字段。
 
 AI 工具入口 `executeWorkflow` 和 `executeWorkflowScript` 都声明为 `destructive`。因此宿主
 配置的 `destructive = ask/deny/full` 会在进入工作流执行前生效；开发期 Studio 若需要

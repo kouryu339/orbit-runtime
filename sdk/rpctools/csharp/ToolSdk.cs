@@ -93,6 +93,9 @@ public sealed class ToolContext
         ConversationId = executeRequest.ConversationId;
         AgentId = executeRequest.AgentId;
         TurnId = executeRequest.TurnId;
+        WorkflowId = executeRequest.WorkflowId;
+        WorkflowRunId = executeRequest.WorkflowRunId;
+        NodeId = executeRequest.NodeId;
         Permissions = executeRequest.Permissions.ToArray();
         HostContextJson = executeRequest.HostContextJson;
     }
@@ -107,6 +110,9 @@ public sealed class ToolContext
     public string ConversationId { get; }
     public string AgentId { get; }
     public string TurnId { get; }
+    public string WorkflowId { get; }
+    public string WorkflowRunId { get; }
+    public string NodeId { get; }
     public IReadOnlyList<string> Permissions { get; }
     public string HostContextJson { get; }
 

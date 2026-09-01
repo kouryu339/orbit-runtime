@@ -193,6 +193,12 @@ pub struct AgentToolRequest {
     #[serde(default)]
     pub turn_id: String,
     #[serde(default)]
+    pub workflow_id: String,
+    #[serde(default)]
+    pub workflow_run_id: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
     pub permissions: Vec<String>,
     #[serde(default)]
     pub host_context: Value,
@@ -217,6 +223,9 @@ fn append_rpc_diagnostic(
         "conversation_id": request.conversation_id,
         "agent_id": request.agent_id,
         "turn_id": request.turn_id,
+        "workflow_id": request.workflow_id,
+        "workflow_run_id": request.workflow_run_id,
+        "node_id": request.node_id,
         "timeout_ms": endpoint.timeout_ms,
         "elapsed_ms": started.elapsed().as_millis() as u64,
     });
@@ -875,6 +884,10 @@ impl DynamicExecute for RpcStubSystem {
         let tool_call_id = tool_call_id.unwrap_or_else(|| call_id.clone());
         let conversation_id = resolve_rpc_tool_conversation_id(ctx).await?;
         let agent_id = resolve_rpc_tool_agent_id(ctx).await?;
+        let turn_id = resolve_rpc_tool_turn_id(ctx).await?;
+        let workflow_id = resolve_rpc_tool_workflow_id(ctx).await?;
+        let workflow_run_id = resolve_rpc_tool_workflow_run_id(ctx).await?;
+        let node_id = resolve_rpc_tool_node_id(ctx).await?;
         let host_context = resolve_rpc_tool_host_context(ctx).await?;
         let request = AgentToolRequest {
             tool_name: self.tool_name.clone(),
@@ -889,7 +902,10 @@ impl DynamicExecute for RpcStubSystem {
             runtime_instance_id: String::new(),
             conversation_id,
             agent_id,
-            turn_id: String::new(),
+            turn_id,
+            workflow_id,
+            workflow_run_id,
+            node_id,
             permissions: metadata.required_capabilities.clone(),
             host_context,
         };
@@ -995,6 +1011,106 @@ async fn resolve_rpc_tool_agent_id(ctx: &Context) -> Result<String> {
     }
 
     Ok(String::new())
+}
+
+fn rpc_identity_value(value: &Value, canonical_field: &str) -> Option<String> {
+    let value = value
+        .as_object()
+        .and_then(|object| object.get(canonical_field).or_else(|| object.get("id")))
+        .unwrap_or(value);
+    match value {
+        Value::String(value) => {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        }
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+async fn resolve_rpc_tool_identity(
+    ctx: &Context,
+    canonical_field: &str,
+    local_keys: &[&str],
+    cache_keys: &[&str],
+) -> Result<String> {
+    for key in local_keys {
+        if let Some(value) = ctx.get::<Value>(key)? {
+            if let Some(value) = rpc_identity_value(&value, canonical_field) {
+                return Ok(value);
+            }
+        }
+    }
+    for key in cache_keys {
+        if let Some(value) = ctx.cache.get_raw(key).await? {
+            if let Some(value) = rpc_identity_value(&value, canonical_field) {
+                return Ok(value);
+            }
+        }
+    }
+    Ok(String::new())
+}
+
+async fn resolve_rpc_tool_turn_id(ctx: &Context) -> Result<String> {
+    resolve_rpc_tool_identity(
+        ctx,
+        "turn_id",
+        &["turn_id"],
+        &["turn_id", "runtime:turn_id", "scope:turn_id", "turn:id"],
+    )
+    .await
+}
+
+async fn resolve_rpc_tool_workflow_id(ctx: &Context) -> Result<String> {
+    // An inline Script explicitly binds an empty workflow_id. That is a real
+    // identity boundary and must not fall through to a stale shared-cache id.
+    if let Some(value) = ctx.get::<Value>("workflow_id")? {
+        return Ok(rpc_identity_value(&value, "workflow_id").unwrap_or_default());
+    }
+    resolve_rpc_tool_identity(
+        ctx,
+        "workflow_id",
+        &[],
+        &[
+            "workflow_id",
+            "runtime:workflow_id",
+            "scope:workflow_id",
+            "workflow:id",
+        ],
+    )
+    .await
+}
+
+async fn resolve_rpc_tool_workflow_run_id(ctx: &Context) -> Result<String> {
+    resolve_rpc_tool_identity(
+        ctx,
+        "workflow_run_id",
+        &["workflow_run_id", "run_id"],
+        &[
+            "workflow_run_id",
+            "run_id",
+            "runtime:workflow_run_id",
+            "scope:workflow_run_id",
+            "workflow:run_id",
+        ],
+    )
+    .await
+}
+
+async fn resolve_rpc_tool_node_id(ctx: &Context) -> Result<String> {
+    resolve_rpc_tool_identity(
+        ctx,
+        "node_id",
+        &["node_id"],
+        &[
+            "node_id",
+            "runtime:node_id",
+            "scope:node_id",
+            "workflow:node_id",
+            "node:id",
+        ],
+    )
+    .await
 }
 
 #[derive(Default)]
@@ -1384,6 +1500,9 @@ impl RpcToolClient for GrpcRpcToolClient {
                         conversation_id: request.conversation_id.clone(),
                         agent_id: request.agent_id.clone(),
                         turn_id: request.turn_id.clone(),
+                        workflow_id: request.workflow_id.clone(),
+                        workflow_run_id: request.workflow_run_id.clone(),
+                        node_id: request.node_id.clone(),
                         permissions: request.permissions.clone(),
                         host_context_json: serde_json::to_string(&request.host_context)
                             .map_err(FrameworkError::SerializationError)?,
@@ -1783,6 +1902,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_identity_resolves_agent_and_workflow_layers_independently() {
+        let cache = Arc::new(InMemoryCache::new());
+        cache
+            .set_raw("turn_id", serde_json::json!(3), None)
+            .await
+            .unwrap();
+        cache
+            .set_raw("workflow_id", serde_json::json!("stale-workflow"), None)
+            .await
+            .unwrap();
+        let ctx = Context::new(
+            cache,
+            Arc::new(InMemoryEventBus::new()),
+            Arc::new(NoopTelemetry),
+        );
+        ctx.set("turn_id", 7u64).unwrap();
+        ctx.set("workflow_id", "workflow-1").unwrap();
+        ctx.set("workflow_run_id", "wf-run-1").unwrap();
+        ctx.set("node_id", "1.2").unwrap();
+
+        assert_eq!(resolve_rpc_tool_turn_id(&ctx).await.unwrap(), "7");
+        assert_eq!(
+            resolve_rpc_tool_workflow_id(&ctx).await.unwrap(),
+            "workflow-1"
+        );
+        ctx.set("workflow_id", "").unwrap();
+        assert_eq!(
+            resolve_rpc_tool_workflow_id(&ctx).await.unwrap(),
+            "",
+            "an inline Script must not inherit a stale cached workflow id"
+        );
+        assert_eq!(
+            resolve_rpc_tool_workflow_run_id(&ctx).await.unwrap(),
+            "wf-run-1"
+        );
+        assert_eq!(resolve_rpc_tool_node_id(&ctx).await.unwrap(), "1.2");
+    }
+
+    #[tokio::test]
     async fn json_line_discovery_reads_sdk_registered_tools() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -2092,6 +2250,9 @@ mod tests {
             conversation_id: "conv-1".to_string(),
             agent_id: "agent-1".to_string(),
             turn_id: "turn-1".to_string(),
+            workflow_id: "workflow-1".to_string(),
+            workflow_run_id: "wf-run-1".to_string(),
+            node_id: "node-1".to_string(),
             permissions: vec![CAPABILITY_WORKSPACE_RESOLVE_PATH.to_string()],
             host_context: serde_json::json!({ "subject": "opaque" }),
         };

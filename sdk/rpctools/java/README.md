@@ -37,6 +37,9 @@ ToolHandler handler = (context, arguments) ->
 - `conversationId`
 - `agentId`
 - `turnId`
+- `workflowId`
+- `workflowRunId`
+- `nodeId`
 - `permissions`
 - `hostContextJson`
 

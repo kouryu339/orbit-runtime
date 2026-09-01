@@ -14,4 +14,5 @@ compatible. The SDK generates server bindings from
 
 `ToolContext` also exposes runtime execute metadata: `CallId`, `ToolCallId`,
 `IdempotencyKey`, `SessionId`, `ProviderId`, `ClusterId`, `RuntimeInstanceId`,
-`ConversationId`, `AgentId`, `TurnId`, `Permissions`, and `HostContextJson`.
+`ConversationId`, `AgentId`, `TurnId`, `WorkflowId`, `WorkflowRunId`, `NodeId`,
+`Permissions`, and `HostContextJson`.

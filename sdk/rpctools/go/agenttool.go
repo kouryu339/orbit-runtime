@@ -70,6 +70,9 @@ type Context struct {
 	ConversationID    string
 	AgentID           string
 	TurnID            string
+	WorkflowID        string
+	WorkflowRunID     string
+	NodeID            string
 	Permissions       []string
 	HostContext       any
 }

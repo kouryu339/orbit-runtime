@@ -73,6 +73,9 @@ class ToolContext:
         self.conversation_id = getattr(execute_request, "conversation_id", "") if execute_request is not None else ""
         self.agent_id = getattr(execute_request, "agent_id", "") if execute_request is not None else ""
         self.turn_id = getattr(execute_request, "turn_id", "") if execute_request is not None else ""
+        self.workflow_id = getattr(execute_request, "workflow_id", "") if execute_request is not None else ""
+        self.workflow_run_id = getattr(execute_request, "workflow_run_id", "") if execute_request is not None else ""
+        self.node_id = getattr(execute_request, "node_id", "") if execute_request is not None else ""
         self.permissions = list(getattr(execute_request, "permissions", [])) if execute_request is not None else []
         self.host_context = _decode_host_context(getattr(execute_request, "host_context_json", "")) if execute_request is not None else None
         self._calls = calls

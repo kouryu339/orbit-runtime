@@ -49,6 +49,9 @@ type executeRequest struct {
 	ConversationID    string          `json:"conversation_id"`
 	AgentID           string          `json:"agent_id"`
 	TurnID            string          `json:"turn_id"`
+	WorkflowID        string          `json:"workflow_id"`
+	WorkflowRunID     string          `json:"workflow_run_id"`
+	NodeID            string          `json:"node_id"`
 	Permissions       []string        `json:"permissions"`
 	HostContext       any             `json:"host_context"`
 }
@@ -192,6 +195,9 @@ func callTool(tool registeredTool, request *executeRequest) (AIOutput, error) {
 		ConversationID:    request.ConversationID,
 		AgentID:           request.AgentID,
 		TurnID:            request.TurnID,
+		WorkflowID:        request.WorkflowID,
+		WorkflowRunID:     request.WorkflowRunID,
+		NodeID:            request.NodeID,
 		Permissions:       append([]string(nil), request.Permissions...),
 		HostContext:       request.HostContext,
 	}

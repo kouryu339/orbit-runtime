@@ -34,8 +34,8 @@ sidecars should not duplicate those rules.
 
 `ToolContext` also exposes runtime execute metadata: `call_id`, `tool_call_id`,
 `idempotency_key`, `session_id`, `provider_id`, `cluster_id`,
-`runtime_instance_id`, `conversation_id`, `agent_id`, `turn_id`, `permissions`,
-and `host_context`.
+`runtime_instance_id`, `conversation_id`, `agent_id`, `turn_id`, `workflow_id`,
+`workflow_run_id`, `node_id`, `permissions`, and `host_context`.
 
 The SDK compiles `corework/proto/corework_agent_tool_v1.proto` at startup for
 local development. If the proto lives outside this repository layout, set

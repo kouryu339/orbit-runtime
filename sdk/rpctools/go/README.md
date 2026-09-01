@@ -28,7 +28,8 @@ routes AI calls back to `agenttool.Serve(...)`.
 `agenttool.Context` is populated from the runtime execute request. Tool
 handlers can read call/session fields such as `CallID`, `ToolCallID`,
 `SessionID`, `ProviderID`, `ClusterID`, `RuntimeInstanceID`, `ConversationID`,
-`AgentID`, `TurnID`, `Permissions`, and `HostContext`.
+`AgentID`, `TurnID`, `WorkflowID`, `WorkflowRunID`, `NodeID`, `Permissions`, and
+`HostContext`.
 
 Dynamic AI context is host-owned and updated through the runtime FFI.
 The removed RPC `snapshot.*` helpers are not compatible with this version.

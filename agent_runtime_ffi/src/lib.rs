@@ -356,6 +356,21 @@ fn optional_workflow_execution_context(
     };
     let conversation_id = optional_string("conversation_id", "conversationId")?;
     let agent_id = optional_string("agent_id", "agentId")?;
+    let turn_id = match payload.get("turn_id").or_else(|| payload.get("turnId")) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_string()),
+        Some(Value::Number(value)) => Some(value.to_string()),
+        Some(Value::String(_)) => {
+            return Err(FfiError::invalid_argument(
+                "payload.turn_id must not be empty when provided",
+            ));
+        }
+        Some(_) => {
+            return Err(FfiError::invalid_argument(
+                "payload.turn_id must be a string or number",
+            ));
+        }
+    };
     if conversation_id.is_some() != agent_id.is_some() {
         return Err(FfiError::invalid_argument(
             "payload.conversation_id and payload.agent_id must be provided together",
@@ -364,6 +379,7 @@ fn optional_workflow_execution_context(
     Ok(corework::workflow::workflows::WorkflowExecutionContext {
         conversation_id,
         agent_id,
+        turn_id,
     })
 }
 
@@ -1166,17 +1182,20 @@ mod abi_tests {
     fn workflow_execution_context_requires_a_complete_identity_pair() {
         let canonical = json!({
             "conversation_id": "conversation-1",
-            "agent_id": "agent-1"
+            "agent_id": "agent-1",
+            "turn_id": 7
         });
         let legacy = json!({
             "conversationId": "conversation-2",
-            "agentId": "agent-2"
+            "agentId": "agent-2",
+            "turnId": "8"
         });
-        for payload in [canonical, legacy] {
+        for (payload, expected_turn_id) in [(canonical, "7"), (legacy, "8")] {
             let context =
                 optional_workflow_execution_context(payload.as_object().unwrap()).unwrap();
             assert!(context.conversation_id.is_some());
             assert!(context.agent_id.is_some());
+            assert_eq!(context.turn_id.as_deref(), Some(expected_turn_id));
         }
 
         let incomplete = json!({"conversation_id": "conversation-1"});

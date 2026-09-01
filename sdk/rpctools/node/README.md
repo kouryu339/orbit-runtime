@@ -22,4 +22,5 @@ compatible. `serve()` accepts either
 
 `ToolContext` also exposes runtime execute metadata: `callId`, `toolCallId`,
 `idempotencyKey`, `sessionId`, `providerId`, `clusterId`, `runtimeInstanceId`,
-`conversationId`, `agentId`, `turnId`, `permissions`, and `hostContext`.
+`conversationId`, `agentId`, `turnId`, `workflowId`, `workflowRunId`, `nodeId`,
+`permissions`, and `hostContext`.

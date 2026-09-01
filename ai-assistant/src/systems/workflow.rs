@@ -91,9 +91,19 @@ async fn workflow_execution_context(
             .await?
             .filter(|value| !value.trim().is_empty()),
     };
+    let turn_id = match ctx.get::<Value>("turn_id")? {
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value),
+        Some(Value::Number(value)) => Some(value.to_string()),
+        _ => ctx
+            .cache
+            .get::<u64>(crate::context::keys::TURN_ID)
+            .await?
+            .map(|value| value.to_string()),
+    };
     Ok(WorkflowExecutionContext {
         conversation_id,
         agent_id,
+        turn_id,
     })
 }
 
@@ -966,6 +976,32 @@ mod tests {
         Arc<WorkflowEditorSession>,
     ) {
         test_context_with_runtime_tools(Vec::new())
+    }
+
+    #[tokio::test]
+    async fn agent_workflow_tool_preserves_agent_origin_context() {
+        let (ctx, _unit, _workflows, _selection) = test_context();
+        let ctx = ctx.with_conversation_id("conversation-1");
+        ctx.cache
+            .set(
+                crate::state_machine::agent_keys::AGENT_ID,
+                &"agent-1".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        ctx.cache
+            .set(crate::context::keys::TURN_ID, &9u64, None)
+            .await
+            .unwrap();
+
+        let propagated = workflow_execution_context(&ctx).await.unwrap();
+        assert_eq!(
+            propagated.conversation_id.as_deref(),
+            Some("conversation-1")
+        );
+        assert_eq!(propagated.agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(propagated.turn_id.as_deref(), Some("9"));
     }
 
     #[tokio::test]

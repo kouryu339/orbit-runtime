@@ -51,6 +51,9 @@ export class ToolContext {
     this.conversationId = executeRequest.conversation_id ?? "";
     this.agentId = executeRequest.agent_id ?? "";
     this.turnId = executeRequest.turn_id ?? "";
+    this.workflowId = executeRequest.workflow_id ?? "";
+    this.workflowRunId = executeRequest.workflow_run_id ?? "";
+    this.nodeId = executeRequest.node_id ?? "";
     this.permissions = Array.isArray(executeRequest.permissions) ? [...executeRequest.permissions] : [];
     this.hostContext = parseHostContext(executeRequest.host_context_json);
     this._hostCall = hostCall;

@@ -149,14 +149,22 @@ previews, AI-facing node message, and error details.
 ## 11.4 Audit and Host Ownership
 
 When a Conversation or Agent initiates execution, the host must provide both
-`conversation_id` and `agent_id`. Runtime binds that identity pair to the
+`conversation_id` and `agent_id`, and may provide the current `turn_id`. The local
+AI tools `executeWorkflow` and `executeWorkflowScript` automatically extract all
+three fields from their calling Agent `Context`. Runtime binds that origin to the
 individual Workflow execution context and forwards it to local tools and RPC
-`ToolContext`. Supplying only one field is an argument error. Non-conversation
-background jobs may omit both. The identity is never written to the shared
+`ToolContext`. Supplying only one of conversation/agent is an argument error.
+Non-conversation background jobs may omit the Agent-origin fields. The identity is never written to the shared
 Workflow module cache, so concurrent executions cannot overwrite each other.
 Providing execution identity does not start Conversation permission handling;
 approval belongs to the AI Executor, while direct host `workflow.execute` calls
 remain direct execution.
+
+The execution engine independently binds `workflow_id`, `workflow_run_id`, and
+the current `node_id`. Every execution has a `workflow_run_id`, and every RPC
+node has a `node_id`. Only persisted Workflow resources require `workflow_id`;
+a directly executed temporary Script may leave it empty. Agent-started runs carry
+both origin groups, while direct host runs carry only Workflow execution identity.
 
 The AI tool entry points `executeWorkflow` and `executeWorkflowScript` are both
 declared `destructive`. The host's `destructive = ask/deny/full` policy therefore

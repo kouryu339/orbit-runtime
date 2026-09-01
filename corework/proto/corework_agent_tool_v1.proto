@@ -136,6 +136,14 @@ message ExecuteRequest {
   string turn_id = 13;
   repeated string permissions = 14;
   string host_context_json = 15;
+  // Stable persisted Workflow id. Empty for a temporary Script.
+  string workflow_id = 16;
+
+  // Unique id of this Workflow execution. Present for Workflow-origin calls.
+  string workflow_run_id = 17;
+
+  // Stable Blueprint node id. Present for Workflow-node calls.
+  string node_id = 18;
 }
 
 // The required execution response envelope.

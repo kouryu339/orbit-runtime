@@ -54,6 +54,9 @@ pub struct ExecutionContext {
 
     /// Declared workflow variable names for this execution scope.
     workflow_variables: HashSet<String>,
+
+    /// Runtime node name -> stable Blueprint node id for the active workflow run.
+    workflow_node_ids: HashMap<String, String>,
 }
 
 impl ExecutionContext {
@@ -67,6 +70,7 @@ impl ExecutionContext {
             workflow_trace: Vec::new(),
             trace_recorder: None,
             workflow_variables: HashSet::new(),
+            workflow_node_ids: HashMap::new(),
         }
     }
 
@@ -255,6 +259,32 @@ impl ExecutionContext {
         &mut self.inner
     }
 
+    /// Bind the identity shared by every tool call in one workflow run.
+    pub fn bind_workflow_identity(
+        &mut self,
+        workflow_id: impl Into<String>,
+        workflow_run_id: impl Into<String>,
+        node_ids: HashMap<String, String>,
+    ) -> crate::error::Result<()> {
+        self.inner.set("workflow_id", workflow_id.into())?;
+        self.inner.set("workflow_run_id", workflow_run_id.into())?;
+        self.workflow_node_ids = node_ids;
+        Ok(())
+    }
+
+    /// Bind the stable Blueprint identity immediately before executing a node.
+    pub fn bind_current_node_identity(
+        &mut self,
+        runtime_node_name: &str,
+    ) -> crate::error::Result<()> {
+        if let Some(node_id) = self.workflow_node_ids.get(runtime_node_name) {
+            self.inner.set("node_id", node_id.clone())?;
+        } else {
+            self.inner.data.write().remove("node_id");
+        }
+        Ok(())
+    }
+
     /// 获取 SystemRegistry
     pub fn registry(&self) -> Arc<crate::system::SystemRegistry> {
         // registry 字段已私有化，但 Context 提供了访问方法
@@ -343,6 +373,26 @@ impl ExecutionContext {
     ) {
         self.workflow_trace.clear();
         self.trace_recorder = Some(WorkflowTraceRecorder::new(workflow_name, source_map));
+    }
+
+    pub fn enable_trace_for_workflow(
+        &mut self,
+        workflow_id: impl Into<String>,
+        workflow_name: impl Into<String>,
+        source_map: HashMap<String, WorkflowSourceRef>,
+        node_ids: HashMap<String, String>,
+    ) -> String {
+        self.workflow_trace.clear();
+        let recorder = WorkflowTraceRecorder::new_with_events(
+            workflow_id,
+            workflow_name,
+            source_map,
+            node_ids,
+            None,
+        );
+        let run_id = recorder.run_id().to_string();
+        self.trace_recorder = Some(recorder);
+        run_id
     }
 
     pub fn enable_trace_with_events(
@@ -675,6 +725,7 @@ impl Clone for ExecutionContext {
             workflow_trace: Vec::new(),
             trace_recorder: None,
             workflow_variables: self.workflow_variables.clone(),
+            workflow_node_ids: self.workflow_node_ids.clone(),
         }
     }
 }
@@ -725,5 +776,33 @@ mod tests {
 
         assert_eq!(json["message"], "hello");
         assert_eq!(json["count"], 2);
+    }
+
+    #[test]
+    fn temporary_workflow_binds_run_and_node_without_workflow_id() {
+        let mut ctx = test_context();
+        ctx.bind_workflow_identity(
+            "",
+            "wf-run-1",
+            HashMap::from([("runtime-node".to_string(), "1.2".to_string())]),
+        )
+        .unwrap();
+        ctx.bind_current_node_identity("runtime-node").unwrap();
+
+        assert_eq!(
+            ctx.inner().get::<String>("workflow_id").unwrap(),
+            Some(String::new())
+        );
+        assert_eq!(
+            ctx.inner()
+                .get::<String>("workflow_run_id")
+                .unwrap()
+                .as_deref(),
+            Some("wf-run-1")
+        );
+        assert_eq!(
+            ctx.inner().get::<String>("node_id").unwrap().as_deref(),
+            Some("1.2")
+        );
     }
 }

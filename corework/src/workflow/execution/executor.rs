@@ -306,6 +306,9 @@ impl BlueprintExecutor {
         ctx.trace_record_node_values(node_name, Some(input_preview.clone()), None);
         tracing::debug!("   📥 [Executor] 收集到 {} 个输入", inputs.len());
 
+        // Input collection may recursively execute Pure nodes. Re-bind the
+        // current node so dynamic/RPC systems observe the correct identity.
+        ctx.bind_current_node_identity(node_name)?;
         tracing::debug!("   ⚡ [Executor] 调用 node.execute_node()...");
         let output = match node.execute_node(ctx, inputs).await {
             Ok(output) => output,

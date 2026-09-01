@@ -1701,6 +1701,10 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         }),
     );
     assert_eq!(branched["code"], 0, "{branched}");
+    assert_eq!(
+        branched["result"]["node_trace"]["workflow_id"], "",
+        "temporary scripts must not invent a persistent workflow_id"
+    );
     let branch_node = branched["result"]["node_trace"]["nodes"]
         .as_array()
         .unwrap()

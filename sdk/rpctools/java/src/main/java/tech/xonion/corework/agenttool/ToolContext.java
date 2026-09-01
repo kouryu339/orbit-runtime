@@ -13,6 +13,9 @@ public record ToolContext(
     String conversationId,
     String agentId,
     String turnId,
+    String workflowId,
+    String workflowRunId,
+    String nodeId,
     List<String> permissions,
     String hostContextJson
 ) {}
