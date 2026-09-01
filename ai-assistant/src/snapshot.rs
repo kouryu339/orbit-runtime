@@ -165,13 +165,20 @@ impl SnapshotBuilder {
             },
             None => Vec::new(),
         };
+        // Conversation model controls the default Agent only. A focused child
+        // Agent may use a different registered model and must not overwrite the
+        // conversation-level selector projection.
+        let default_cache = cluster
+            .get(cluster.default_agent_id())
+            .await
+            .map(|agent| agent.sm.unit().cache());
         let model = read_string_config(
-            active_cache.as_ref(),
+            default_cache.as_ref(),
             crate::config_resolver::conversation_keys::CONFIG_MODEL,
             Some(keys::MODEL),
         )
         .await;
-        let model_uid = match active_cache.as_ref() {
+        let model_uid = match default_cache.as_ref() {
             Some(cache) => crate::config_resolver::resolve_inference_model_uid(cache).await,
             None => None,
         };

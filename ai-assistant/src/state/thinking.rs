@@ -857,18 +857,33 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         }
     };
 
-    let model_uid = crate::config_resolver::resolve_inference_model_uid(&cache)
-        .await
-        .ok_or_else(|| {
-            tracing::error!(
-                conversation_id = %conversation_id,
-                turn_id,
-                "no inference model resolved"
-            );
-            corework::error::FrameworkError::SystemError(
-                "no available inference model configured".to_string(),
-            )
-        })?;
+    let cluster = sm_ctx.resolve_shared_component::<crate::agent::AgentCluster>();
+    let is_conversation_default_agent = cluster
+        .as_ref()
+        .is_some_and(|cluster| agent_id == cluster.default_agent_id());
+    let conversation_model_cache = match cluster.as_ref() {
+        Some(cluster) => cluster
+            .get(cluster.default_agent_id())
+            .await
+            .map(|agent| agent.sm.unit().cache()),
+        None => None,
+    };
+    let model_uid = crate::config_resolver::resolve_inference_model_uid_for_agent(
+        &cache,
+        conversation_model_cache.as_ref(),
+        is_conversation_default_agent,
+    )
+    .await
+    .ok_or_else(|| {
+        tracing::error!(
+            conversation_id = %conversation_id,
+            turn_id,
+            "no inference model resolved"
+        );
+        corework::error::FrameworkError::SystemError(
+            "no available inference model configured".to_string(),
+        )
+    })?;
     let model_entry = llm_gateway::key_store::get(model_uid);
     let provider_runtime = model_entry
         .as_ref()
@@ -1247,6 +1262,8 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 "conversation state is unavailable from the agent hierarchy".to_string(),
             )
         })?;
+    let require_tool_call =
+        tool_protocol == crate::ToolProtocol::NativeFc && !is_conversation_default_agent;
 
     for attempt in 1..=3u32 {
         if tool_protocol == crate::ToolProtocol::NativeFc {
@@ -1314,13 +1331,14 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 turn_id,
                 attempt,
             );
-            let call = llm_gateway::call_llm_with_tools_stream_events_cancellable(
+            let call = llm_gateway::call_llm_with_tools_stream_events_with_requirement_cancellable(
                 model_uid,
                 &messages,
                 &native_tool_definitions,
                 None,
                 None,
                 None,
+                require_tool_call,
                 cancel,
                 move |event| {
                     if let llm_gateway::LlmStreamEvent::TextDelta { text } = &event {
@@ -1442,14 +1460,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     continue;
                 }
 
-                let protocol_error = match tool_protocol {
-                    crate::ToolProtocol::ExecLegacy => {
-                        crate::runtime::parser::validate_response_shape(&resp.content).err()
+                let protocol_error = if require_tool_call && !has_tool_calls {
+                    Some("delegated child Agent must call at least one tool".to_string())
+                } else {
+                    match tool_protocol {
+                        crate::ToolProtocol::ExecLegacy => {
+                            crate::runtime::parser::validate_response_shape(&resp.content).err()
+                        }
+                        crate::ToolProtocol::NativeFc => {
+                            validate_native_fc_response(&resp, &native_tool_definitions).err()
+                        }
+                        crate::ToolProtocol::Disabled => None,
                     }
-                    crate::ToolProtocol::NativeFc => {
-                        validate_native_fc_response(&resp, &native_tool_definitions).err()
-                    }
-                    crate::ToolProtocol::Disabled => None,
                 };
                 if let Some(reason) = protocol_error {
                     last_err = format!("invalid assistant response protocol: {reason}");

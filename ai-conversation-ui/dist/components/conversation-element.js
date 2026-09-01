@@ -1437,6 +1437,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             <span class="provider-label">${zh ? '当前模型' : 'Current model'}</span>
             <select
               class="provider-select"
+              .value=${current === null ? '' : String(current)}
               ?disabled=${this.providerOperation !== null}
               @change=${(event) => void this.selectProviderModel(event.target.value)}
             >

@@ -775,7 +775,18 @@ impl AgentGateway {
                 reason: "history_too_short",
             };
         }
-        let Some(model_uid) = crate::config_resolver::resolve_inference_model_uid(&cache).await
+        let is_conversation_default_agent = agent_id == self.cluster.default_agent_id();
+        let conversation_model_cache = self
+            .cluster
+            .get(self.cluster.default_agent_id())
+            .await
+            .map(|agent| agent.sm.unit().cache());
+        let Some(model_uid) = crate::config_resolver::resolve_inference_model_uid_for_agent(
+            &cache,
+            conversation_model_cache.as_ref(),
+            is_conversation_default_agent,
+        )
+        .await
         else {
             return CompactAgentOutcome::Failed {
                 error: "no_model_available".to_string(),
@@ -1050,6 +1061,18 @@ impl AgentGateway {
             "op": "agent_task.upsert",
             "task_id": task.task_id,
             "task": task,
+        }))
+        .await;
+    }
+
+    /// Publish the durable conversation default-Agent model selection.
+    /// Frontend snapshots remain a render projection and are not the recovery
+    /// source of truth for this state.
+    pub async fn publish_conversation_model_state_delta(&self, model_uid: u32, model: &str) {
+        self.publish_state_delta(serde_json::json!({
+            "op": "conversation.model.set",
+            "model_uid": model_uid,
+            "model": model,
         }))
         .await;
     }

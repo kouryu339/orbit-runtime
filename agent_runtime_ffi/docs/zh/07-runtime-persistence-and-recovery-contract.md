@@ -36,6 +36,8 @@ frontend:state_snapshot
   包含 user/assistant/tool 记录，也包含后台 Agent 的 LLM usage/error 等 gateway fact。
 - `conversation.state_delta`：按 delta 语义更新 Agent 运行实例、focus、agent task、
   agent skills、agent plan、dynamic snapshot 等镜像状态。其中：
+  - `conversation.model.set` 保存 conversation 默认 Agent 的模型选择；它不适用于子 Agent，
+    也不得覆盖子 Agent 注册定义或实例模型；
   - `agent.upsert` 只保存 conversation 内的 `agent_id`、`definition_id`、显示名和运行状态；
   - `agent.retired` 删除运行实例镜像，但不删除任务榜和 ledger 中的历史关系；
   - `agent_task.upsert` 保存 delegator/assignee 关系和完整任务状态。

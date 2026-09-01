@@ -2,11 +2,18 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use llm_gateway::{ChatMessage, LlmStreamEvent};
+use llm_gateway::{ChatMessage, FunctionDefinition, LlmStreamEvent, ToolDefinition};
 
-fn serve_once(body: String) -> (String, thread::JoinHandle<()>) {
+fn serve_once(
+    body: String,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<serde_json::Value>,
+    thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock provider");
     let address = listener.local_addr().expect("mock provider address");
+    let (request_tx, request_rx) = std::sync::mpsc::channel();
     let task = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept provider request");
         let mut request = Vec::new();
@@ -36,6 +43,12 @@ fn serve_once(body: String) -> (String, thread::JoinHandle<()>) {
             assert!(read > 0, "request ended before body");
             request.extend_from_slice(&buffer[..read]);
         }
+        let request_body =
+            serde_json::from_slice(&request[header_end..header_end + content_length])
+                .expect("parse provider request body");
+        request_tx
+            .send(request_body)
+            .expect("capture provider request");
 
         write!(
             stream,
@@ -46,7 +59,39 @@ fn serve_once(body: String) -> (String, thread::JoinHandle<()>) {
         .expect("write provider response");
         stream.flush().expect("flush provider response");
     });
-    (format!("http://{address}"), task)
+    (format!("http://{address}"), request_rx, task)
+}
+
+fn test_tool() -> ToolDefinition {
+    ToolDefinition {
+        tool_type: "function".to_string(),
+        function: FunctionDefinition {
+            name: "ReadScene".to_string(),
+            description: "Read the current scene".to_string(),
+            parameters: serde_json::json!({"type":"object","properties":{}}),
+            strict: None,
+        },
+    }
+}
+
+#[tokio::test]
+async fn required_tool_call_rejects_an_empty_tool_set_before_dispatch() {
+    let error = llm_gateway::call_llm_with_tools_stream_events_with_requirement_cancellable(
+        999_999,
+        &[ChatMessage::user("work")],
+        &[],
+        None,
+        None,
+        None,
+        true,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect_err("empty child tool set must fail");
+    assert!(error
+        .to_string()
+        .contains("requires at least one available tool"));
 }
 
 #[tokio::test]
@@ -71,12 +116,13 @@ async fn openai_chat_streams_tool_identity_and_completes_call() {
         }]
     });
     let body = format!("data: {first}\n\ndata: {second}\n\ndata: [DONE]\n\n");
-    let (base_url, server) = serve_once(body);
+    let (base_url, request, server) = serve_once(body);
     let mut events = Vec::new();
+    let tools = [test_tool()];
 
     let response = llm_gateway::openai_compat::call_inner_streaming(
         &[ChatMessage::user("read scene")],
-        &[],
+        &tools,
         "mock-chat",
         &base_url,
         "test-key",
@@ -84,13 +130,18 @@ async fn openai_chat_streams_tool_identity_and_completes_call() {
         None,
         None,
         None,
-        llm_gateway::providers::ToolChoiceStyle::None,
+        llm_gateway::providers::ToolChoiceStyle::ForceName,
+        true,
         false,
         false,
         |event| events.push(event),
     )
     .await
     .expect("OpenAI chat stream");
+    assert_eq!(
+        request.recv().expect("OpenAI request")["tool_choice"],
+        "required"
+    );
     server.join().expect("mock provider thread");
 
     let call = response.tool_calls.expect("tool calls").remove(0);
@@ -134,12 +185,13 @@ async fn anthropic_streams_tool_identity_and_requires_message_stop() {
         .into_iter()
         .map(|event| format!("data: {event}\n\n"))
         .collect::<String>();
-    let (base_url, server) = serve_once(body);
+    let (base_url, request, server) = serve_once(body);
     let mut streamed = Vec::new();
+    let tools = [test_tool()];
 
     let response = llm_gateway::anthropic_compat::call_inner_streaming(
         &[ChatMessage::user("read scene")],
-        &[],
+        &tools,
         "mock-anthropic",
         &base_url,
         "test-key",
@@ -147,10 +199,15 @@ async fn anthropic_streams_tool_identity_and_requires_message_stop() {
         None,
         None,
         None,
+        true,
         |event| streamed.push(event),
     )
     .await
     .expect("Anthropic stream");
+    assert_eq!(
+        request.recv().expect("Anthropic request")["tool_choice"],
+        serde_json::json!({"type":"any"})
+    );
     server.join().expect("mock provider thread");
 
     let call = response.tool_calls.expect("tool calls").remove(0);
@@ -192,12 +249,13 @@ async fn responses_streams_tool_identity_and_commits_completed_response() {
         .into_iter()
         .map(|event| format!("data: {event}\n\n"))
         .collect::<String>();
-    let (base_url, server) = serve_once(body);
+    let (base_url, request, server) = serve_once(body);
     let mut streamed = Vec::new();
+    let tools = [test_tool()];
 
     let response = llm_gateway::openai_responses::call_inner_streaming(
         &[ChatMessage::user("read scene")],
-        &[],
+        &tools,
         "mock-responses",
         &base_url,
         "test-key",
@@ -205,10 +263,15 @@ async fn responses_streams_tool_identity_and_commits_completed_response() {
         None,
         None,
         None,
+        true,
         |event| streamed.push(event),
     )
     .await
     .expect("Responses stream");
+    assert_eq!(
+        request.recv().expect("Responses request")["tool_choice"],
+        "required"
+    );
     server.join().expect("mock provider thread");
 
     let call = response.tool_calls.expect("tool calls").remove(0);
@@ -225,7 +288,7 @@ async fn openai_chat_rejects_a_stream_without_terminal_evidence() {
     let event = serde_json::json!({
         "choices": [{"delta": {"content": "partial"}, "finish_reason": null}]
     });
-    let (base_url, server) = serve_once(format!("data: {event}\n\n"));
+    let (base_url, _request, server) = serve_once(format!("data: {event}\n\n"));
 
     let error = llm_gateway::openai_compat::call_inner_streaming(
         &[ChatMessage::user("hello")],
@@ -238,6 +301,7 @@ async fn openai_chat_rejects_a_stream_without_terminal_evidence() {
         None,
         None,
         llm_gateway::providers::ToolChoiceStyle::None,
+        false,
         false,
         false,
         |_| {},
@@ -256,7 +320,7 @@ async fn anthropic_rejects_a_stream_without_message_stop() {
         "index":0,
         "delta":{"type":"text_delta","text":"partial"}
     });
-    let (base_url, server) = serve_once(format!("data: {event}\n\n"));
+    let (base_url, _request, server) = serve_once(format!("data: {event}\n\n"));
 
     let error = llm_gateway::anthropic_compat::call_inner_streaming(
         &[ChatMessage::user("hello")],
@@ -268,6 +332,7 @@ async fn anthropic_rejects_a_stream_without_message_stop() {
         None,
         None,
         None,
+        false,
         |_| {},
     )
     .await
@@ -284,7 +349,7 @@ async fn responses_rejects_a_stream_without_response_completed() {
         "output_index":0,
         "delta":"partial"
     });
-    let (base_url, server) = serve_once(format!("data: {event}\n\n"));
+    let (base_url, _request, server) = serve_once(format!("data: {event}\n\n"));
 
     let error = llm_gateway::openai_responses::call_inner_streaming(
         &[ChatMessage::user("hello")],
@@ -296,6 +361,7 @@ async fn responses_rejects_a_stream_without_response_completed() {
         None,
         None,
         None,
+        false,
         |_| {},
     )
     .await

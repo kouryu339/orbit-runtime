@@ -909,6 +909,20 @@ describe('AgentRuntimeConversationElement', () => {
       element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select')?.value,
     ).toBe('1001');
 
+    // A later Runtime snapshot may change the session model while the same
+    // native select element is retained. The select must follow session state,
+    // rather than keeping its previously selected/global provider value.
+    element.state = {
+      ...element.state,
+      model: 'deepseek-v4-flash',
+      modelUid: 1002,
+    };
+    await element.updateComplete;
+    expect(
+      element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select')?.value,
+    ).toBe('1002');
+    expect(modelButton?.textContent?.trim()).toBe('deepseek-v4-flash / OpenAI compatible');
+
     const addButton = Array.from(
       element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
     ).find((button) => button.textContent?.trim() === 'Add provider');

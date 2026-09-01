@@ -4827,7 +4827,8 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
                     "api_paradigm": "openai_chat_completions",
                     "enabled_models": [
                         { "uid": 1001, "model_id": "model-a" },
-                        { "uid": 1002, "model_id": "model-b" }
+                        { "uid": 1002, "model_id": "model-b" },
+                        { "uid": 1003, "model_id": "model-child" }
                     ]
                 }]
             })
@@ -4846,12 +4847,19 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
                     "name": "Agent A",
                     "role": "browser_operator",
                     "model_uid": 1001
+                }, {
+                    "id": "agent-b",
+                    "name": "Agent B",
+                    "role": "browser_operator",
+                    "model_uid": 1003
                 }],
                 "max_thinking_rounds": 0
             })
             .to_string(),
         )
         .unwrap();
+    let (event_tx, event_rx) = std_mpsc::channel();
+    facade.set_event_sender(event_tx);
     facade.start().unwrap();
     let spawn = json!({
         "schema": "agent-runtime-conversation-spawn/v1",
@@ -4895,7 +4903,80 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
                 .unwrap(),
             None
         );
+        let child_cache = manager
+            .agent_cache(&first.conversation_id, "agent-b")
+            .await
+            .unwrap();
+        assert_eq!(
+            child_cache
+                .get::<String>(ai_assistant::context::keys::MODEL)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("model-child")
+        );
+        assert_eq!(
+            child_cache
+                .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            ai_assistant::config_resolver::resolve_inference_model_uid_for_agent(
+                &child_cache,
+                Some(&first_cache),
+                false,
+            )
+            .await,
+            Some(1003),
+            "child Agent model must override the conversation model"
+        );
+        child_cache
+            .delete(ai_assistant::context::keys::MODEL)
+            .await
+            .unwrap();
+        assert_eq!(
+            ai_assistant::config_resolver::resolve_inference_model_uid_for_agent(
+                &child_cache,
+                Some(&first_cache),
+                false,
+            )
+            .await,
+            Some(1002),
+            "child Agent without a configured model must fall back to conversation"
+        );
+        first_cache
+            .delete(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
+            .await
+            .unwrap();
+        first_cache
+            .delete(ai_assistant::context::keys::MODEL)
+            .await
+            .unwrap();
+        assert_eq!(
+            ai_assistant::config_resolver::resolve_inference_model_uid_for_agent(
+                &child_cache,
+                Some(&first_cache),
+                false,
+            )
+            .await,
+            Some(1001),
+            "child Agent must fall back to the Runtime global model last"
+        );
     });
+
+    let events = event_rx
+        .try_iter()
+        .filter_map(|event| serde_json::from_str::<Value>(&event).ok())
+        .collect::<Vec<_>>();
+    assert!(events.iter().any(|event| {
+        event["type"] == "conversation.state_delta"
+            && event["conversation_id"] == first.conversation_id
+            && event["payload"]["op"] == "conversation.model.set"
+            && event["payload"]["model_uid"] == 1002
+            && event["payload"]["model"] == "model-b"
+    }));
 
     facade.close_conversation(&first.conversation_id).unwrap();
     facade.close_conversation(&second.conversation_id).unwrap();

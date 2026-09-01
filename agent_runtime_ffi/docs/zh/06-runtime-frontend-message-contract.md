@@ -27,10 +27,11 @@ payload.ledger_delta.record
 是本次快照携带的可选消息增量。没有 `ledger_delta` 时，事件只表示状态、能力位或
 其他快照字段发生变化。
 
-快照中的 `model` 和 `model_uid` 均表示当前 conversation 的推理模型。模型选择器的
+快照中的 `model` 和 `model_uid` 均表示当前 conversation 默认 Agent 的推理模型，不表示
+当前焦点子 Agent 的独立模型。模型选择器的
 外层标签、弹层选中项和切换命令必须统一使用这两个会话字段；provider definitions 中的
 `current_model_uid` 是新会话默认值，不能用来覆盖当前会话回显。切换当前会话时调用
-`conversation.set_model`。
+`conversation.set_model`；该命令不得修改任何子 Agent 的模型。
 
 ### 6.2.1 焦点 Assistant 流
 

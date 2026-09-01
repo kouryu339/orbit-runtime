@@ -103,6 +103,7 @@ pub async fn call_inner(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
     tool_choice_style: ToolChoiceStyle,
+    require_tool_call: bool,
     force_json: bool,
 ) -> crate::error::Result<LlmResponse> {
     let request_started = std::time::Instant::now();
@@ -179,6 +180,8 @@ pub async fn call_inner(
             }
             ToolChoiceStyle::None => {}
         }
+    } else if require_tool_call {
+        body["tool_choice"] = json!("required");
     }
     if let Some(t) = temperature {
         body["temperature"] = json!(t);
@@ -639,6 +642,7 @@ pub async fn call_inner_streaming<F>(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
     tool_choice_style: ToolChoiceStyle,
+    require_tool_call: bool,
     force_json: bool,
     stream_argument_fields: bool,
     mut on_event: F,
@@ -704,6 +708,8 @@ where
             }
             ToolChoiceStyle::None => {}
         }
+    } else if require_tool_call {
+        body["tool_choice"] = json!("required");
     }
     if let Some(t) = temperature {
         body["temperature"] = json!(t);

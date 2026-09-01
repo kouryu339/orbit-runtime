@@ -1,12 +1,11 @@
 //! Conversation-scoped 配置解析。
 //! 协议见 `docs/AGENT_GATEWAY_ADMISSION.md` §5。本模块封装"读链"，
 //! 让 thinking / compact 等热路径只调用一个函数。
-//! ## 三层来源（优先级从高到低）
-//! 1. **Conversation 层**：`Conversation::global().ledger().cache()`
-//!    存储在 conversation 共享 ExecutionUnit cache 上的配置（多 agent 共享）。
-//! 2. **Agent 层**：传入的 `agent_cache.get(keys::MODEL / keys::LANGUAGE)`
-//!    保留兼容老路径（持久化 / 子 agent 默认值）。
-//! 3. **运行时全局**：`llm_gateway::key_store::current()`
+//! ## 模型来源（优先级从高到低）
+//! - 默认 Agent：Conversation 模型 → Runtime 全局模型。
+//! - 子/处理 Agent：Agent 模型 → Conversation 模型 → Runtime 全局模型。
+//! - 后台 Agent 在创建时先把任务参数 `model_id` 或 profile 默认模型写入 Agent
+//!   模型槽，因此自然遵循：任务参数 → profile 默认 → Conversation → Runtime 全局。
 //!    只接受显式选择的当前模型；不会从内置模型目录或索引中自动兜底。
 //! 写入路径：`AIAssistant::set_model` / 未来 `Conversation::set_summary_model`
 //! 都写到 conversation 层，从而避免多会话并行下的"全局变更被静默传染"。
@@ -33,38 +32,58 @@ fn conversation_cache() -> Option<Arc<dyn Cache>> {
     crate::conversation::Conversation::global().map(|c| c.ledger().cache())
 }
 
-/// 解析推理模型的 `model_uid`。
-/// 顺序：conversation cache `config:model` → agent cache `keys::MODEL` →
-/// runtime 全局 `key_store::current()`。
-/// `agent_cache` 通常为 `agent.sm.unit().cache()` 或 thinking on_enter 内
-/// 拿到的 scoped cache。返回 `None` 表示无任何可用模型。
-pub async fn resolve_inference_model_uid(agent_cache: &Arc<dyn Cache>) -> Option<u32> {
-    let scoped_name = agent_cache
-        .get::<String>(conversation_keys::CONFIG_MODEL)
+async fn registered_model_from_cache(cache: &Arc<dyn Cache>, key: &str) -> Option<u32> {
+    let name = cache
+        .get::<String>(key)
         .await
         .ok()
         .flatten()
-        .filter(|name| !name.is_empty());
-    let agent_name = match scoped_name {
-        Some(name) => Some(name),
-        None => agent_cache
-            .get::<String>(keys::MODEL)
-            .await
-            .ok()
-            .flatten()
-            .filter(|name| !name.is_empty()),
-    };
-    if let Some(name) = agent_name {
-        if let Some(uid) = llm_gateway::key_store::find_by_name(&name) {
-            return Some(uid);
-        } else {
+        .filter(|name| !name.trim().is_empty())?;
+    match llm_gateway::key_store::find_by_name(&name) {
+        Some(uid) => Some(uid),
+        None => {
             tracing::warn!(
-                "scoped config:model='{}' 未在 key_store 中找到，且不会回退到未显式选择的模型",
-                name
+                cache_key = key,
+                model = %name,
+                "configured model is not registered; continuing model fallback"
             );
+            None
         }
     }
+}
+
+/// 按 Agent 身份解析推理模型的 `model_uid`。
+///
+/// `conversation_cache` 必须是 cluster 默认 Agent 的 cache。后台任务的显式
+/// `model_id` 和 profile 默认模型都在创建时归一化到其 `agent_cache.keys::MODEL`。
+pub async fn resolve_inference_model_uid_for_agent(
+    agent_cache: &Arc<dyn Cache>,
+    conversation_cache: Option<&Arc<dyn Cache>>,
+    is_default_agent: bool,
+) -> Option<u32> {
+    if !is_default_agent {
+        if let Some(uid) = registered_model_from_cache(agent_cache, keys::MODEL).await {
+            return Some(uid);
+        }
+    }
+
+    let conversation_cache = conversation_cache.unwrap_or(agent_cache);
+    if let Some(uid) =
+        registered_model_from_cache(conversation_cache, conversation_keys::CONFIG_MODEL).await
+    {
+        return Some(uid);
+    }
+    if let Some(uid) = registered_model_from_cache(conversation_cache, keys::MODEL).await {
+        return Some(uid);
+    }
+
     llm_gateway::key_store::current()
+}
+
+/// Default-Agent compatibility wrapper. Runtime routing code should prefer
+/// `resolve_inference_model_uid_for_agent` and pass the verified Agent scope.
+pub async fn resolve_inference_model_uid(agent_cache: &Arc<dyn Cache>) -> Option<u32> {
+    resolve_inference_model_uid_for_agent(agent_cache, Some(agent_cache), true).await
 }
 
 /// 解析摘要模型的 `model_uid`，缺省时回退到推理模型 `fallback_uid`。

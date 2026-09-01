@@ -17,6 +17,10 @@ handoff 更稳定；只有 Skill 上下文明显过大时，才用隔离收益�
 
 前台调用 `CreateBackgroundAgentTask`，Runtime 从 resources 中的 Agent profile 创建
 唯一后台实例，写入 task created/assigned 事件和任务契约。后台 Agent 不改变 focus，
+工具可选参数 `model_id` 可为本次后台任务指定已注册的 uint32 模型 UID。模型选择按
+“任务 `model_id` → profile 默认 `model_uid` → conversation 模型 → Runtime 全局模型”回退；
+普通子/处理 Agent按“Agent 默认 → conversation → Runtime 全局”回退，默认 Agent按
+“conversation → Runtime 全局”回退。
 新任务的 `task_id` 由 Runtime 独占生成并使用 `agent_task_` 命名空间，AI 不能自定义；旧快照中的
 任务标识仍可恢复。`task_id` 只表示委派关系，不能冒充后台报告 `result` 中的业务对象标识。
 阶段结果使用 `ReportAgentTaskProgress` 写入任务榜，任务保持 `running`，执行者继续工作。

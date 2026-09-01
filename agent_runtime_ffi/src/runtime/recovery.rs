@@ -587,6 +587,35 @@ pub(super) async fn apply_conversation_state_delta(
     };
 
     match op {
+        "conversation.model.set" => {
+            let Some(model_uid) = delta.get("model_uid").and_then(Value::as_u64) else {
+                return Ok(());
+            };
+            let model_uid = u32::try_from(model_uid).map_err(|_| {
+                RuntimeError::InvalidConfig("conversation model_uid exceeds uint32".to_string())
+            })?;
+            let model_name = key_store::get(model_uid)
+                .map(|entry| entry.model_name)
+                .ok_or_else(|| {
+                    RuntimeError::Llm(format!("model uid {model_uid} is not configured"))
+                })?;
+            let cache = manager
+                .default_agent_cache(conversation_id)
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            cache
+                .set(
+                    ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL,
+                    &model_name,
+                    None,
+                )
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            cache
+                .set(ai_assistant::context::keys::MODEL, &model_name, None)
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        }
         "focus.set" => {
             let Some(agent_id) = delta
                 .get("focus_agent_id")

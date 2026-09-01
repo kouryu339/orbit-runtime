@@ -112,6 +112,18 @@ role/feature Skill 白名单开放。当前不接受除 `thinking` 外的状态�
 `tool(tool_call_id)` 作为正式 Ledger 事实持久化；恢复后仍按原生协议回传，不转换成
 伪造的 user 消息。
 
+在 `native_fc` 模式下，非默认的子 Agent 每次模型决策请求都会携带“至少调用一个工具”的
+强制选择参数：OpenAI Chat/Responses 使用 `tool_choice: "required"`，Anthropic 使用
+`tool_choice: {"type":"any"}`。Runtime 同时校验响应确实含有工具调用；纯文本响应会按协议
+错误重试，不能直接让子 Agent 落入 `waiting`。子 Agent 没有任何可用工具时会产生本地
+配置错误；上游不支持该标准参数时会保留其协议拒绝错误供诊断。
+
+模型路由采用分级配置：默认 Agent 按“conversation 模型 → Runtime 全局模型”解析；
+预注册子 Agent和处理 Agent按“Agent `model_uid` → conversation 模型 → Runtime 全局模型”
+解析；`CreateBackgroundAgentTask` 创建的动态后台 Agent按“任务参数 `model_id` → profile
+默认 `model_uid` → conversation 模型 → Runtime 全局模型”解析。`model_id` 是可选的已注册
+uint32 模型 UID，非法或未注册值会在创建后台任务前被拒绝。
+
 实际协议按 conversation participant 固定，并通过 conversation snapshot 顶层的
 `tool_protocols` 映射持久化。导入时以该映射为准，不使用当前 Agent 注册表的新默认值。
 前两个受支持版本生成的 snapshot 没有这个映射，恢复时按 `exec_legacy` 处理。构造原生

@@ -325,6 +325,7 @@ impl Conversation {
             )));
         }
 
+        let configured_model = config.model.clone();
         let mut assistant = AIAssistant::new(config).with_parent_unit(self.ledger.clone());
         assistant.init().await?;
         assistant.activate_skills(skill_names).await?;
@@ -345,6 +346,9 @@ impl Conversation {
         );
         runtime.set_conversation_id(&self.conversation_id).await?;
         let cache = runtime.sm.unit().cache();
+        if !configured_model.trim().is_empty() {
+            cache.set(keys::MODEL, &configured_model, None).await?;
+        }
         cache
             .set(keys::MAX_THINKING_ROUNDS, &max_thinking_rounds, None)
             .await?;
@@ -554,31 +558,25 @@ impl Conversation {
     }
 
     pub async fn set_model(&self, model: &str) -> Result<()> {
-        llm_gateway::key_store::find_by_name(model).ok_or_else(|| {
+        let model_uid = llm_gateway::key_store::find_by_name(model).ok_or_else(|| {
             crate::Error::Other(anyhow::anyhow!("model '{}' uid not found", model))
         })?;
-        self.ledger
-            .cache()
+        let agent_id = self.cluster.default_agent_id().to_string();
+        let agent = self.cluster.get(&agent_id).await.ok_or_else(|| {
+            crate::Error::Other(anyhow::anyhow!("default agent '{}' not found", agent_id))
+        })?;
+        let cache = agent.sm.unit().cache();
+        cache
             .set(
                 crate::config_resolver::conversation_keys::CONFIG_MODEL,
                 &model.to_string(),
                 None,
             )
             .await?;
-        for agent_id in self.cluster.list_agent_ids().await {
-            let Some(agent) = self.cluster.get(&agent_id).await else {
-                continue;
-            };
-            let cache = agent.sm.unit().cache();
-            cache
-                .set(
-                    crate::config_resolver::conversation_keys::CONFIG_MODEL,
-                    &model.to_string(),
-                    None,
-                )
-                .await?;
-            cache.set(keys::MODEL, &model.to_string(), None).await?;
-        }
+        cache.set(keys::MODEL, &model.to_string(), None).await?;
+        self.gateway
+            .publish_conversation_model_state_delta(model_uid, model)
+            .await;
         self.publish_current_state().await;
         Ok(())
     }

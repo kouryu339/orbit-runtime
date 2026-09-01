@@ -26,6 +26,12 @@ definitions, permissions, tools, Skills, and model policy remain registry-owned
 canonical configuration; a conversation snapshot does not duplicate or
 override them.
 
+Model selection is layered. The default Agent resolves conversation then
+Runtime-global model. Child/processing Agents resolve their Agent default,
+conversation, then Runtime global. A dynamic background task resolves its
+optional `CreateBackgroundAgentTask.model_id`, profile `model_uid`, conversation,
+then Runtime global; both ids are registered uint32 model UIDs.
+
 ## 5.4 Recovery Entry
 
 Recovery rebuilds the state-machine site from the ledger tail instead of

@@ -127,6 +127,23 @@ Native `assistant(tool_calls)`, provider `call_id`, and `tool(tool_call_id)`
 records are canonical Ledger facts and remain native after restoration rather
 than being converted into synthetic user messages.
 
+In `native_fc` mode, every model decision made by a non-default child Agent
+requires at least one tool call. OpenAI Chat/Responses receive
+`tool_choice: "required"`; Anthropic receives `tool_choice: {"type":"any"}`.
+Runtime also validates that the response actually contains a tool call, so a
+plain-text response is retried as a protocol violation instead of parking the
+child in `waiting`. A child with no available tools fails with a local
+configuration error; an upstream that rejects the standard parameter preserves
+that protocol error for diagnosis.
+
+Model routing uses layered configuration. The default Agent resolves
+conversation model, then Runtime-wide global model. Registered child/processing
+Agents resolve Agent `model_uid`, conversation model, then Runtime global model.
+Dynamic background Agents created by `CreateBackgroundAgentTask` resolve its
+optional task `model_id`, profile default `model_uid`, conversation model, then
+Runtime global model. `model_id` is a registered uint32 model UID; invalid or
+unknown values are rejected before the background task is created.
+
 The effective protocol is fixed per conversation participant and exported in
 the conversation snapshot's `tool_protocols` map. Import uses this persisted
 value instead of the current Agent registry default. Snapshots produced by the

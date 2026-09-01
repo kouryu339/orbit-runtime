@@ -46,6 +46,9 @@ conversation-level deltas continuously:
   gateway facts such as LLM usage/error for background Agents.
 - `conversation.state_delta`: Agent runtime instance, focus, agent task, agent
   skills, agent plan, and dynamic snapshot mirrors. In particular:
+  - `conversation.model.set` persists the model selected for the conversation's
+    default Agent. It does not apply to child Agents and must not overwrite a
+    child Agent's registered or instance model;
   - `agent.upsert` persists only the conversation-scoped `agent_id`,
     `definition_id`, display name, and runtime state;
   - `agent.retired` removes the live instance mirror without deleting historical

@@ -24,10 +24,12 @@ payload.ledger_delta.record
 is the optional message delta carried by the snapshot. When `ledger_delta` is absent, the event only means state, capability flags, or other snapshot fields changed.
 
 The snapshot fields `model` and `model_uid` identify the inference model of the
-current conversation. A model switcher's outer label, selected option, and
+conversation's default Agent, not an independently configured focused child
+Agent. A model switcher's outer label, selected option, and
 mutation command must all use these conversation fields. The provider
 definitions' `current_model_uid` is only the default for new conversations.
-Switch an existing conversation with `conversation.set_model`.
+Switch an existing conversation with `conversation.set_model`; that command
+must not change any child Agent model.
 
 ### 6.2.1 Focused Assistant Stream
 

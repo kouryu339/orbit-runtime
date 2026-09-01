@@ -65,6 +65,8 @@ struct AgentResourceProfile {
     role: Option<String>,
     #[serde(default)]
     features: Vec<String>,
+    #[serde(alias = "modelUid", default)]
+    model_uid: Option<u32>,
     #[serde(default)]
     retrieval: Option<crate::RetrievalConfig>,
 }
@@ -2347,14 +2349,22 @@ fn generated_agent_task_id() -> String {
     )
 }
 
+fn effective_background_model_uid(
+    requested_model_uid: Option<u32>,
+    profile_model_uid: Option<u32>,
+) -> Option<u32> {
+    requested_model_uid.or(profile_model_uid)
+}
+
 #[define_operation(
     name = "CreateBackgroundAgentTask",
-    display_name = "为Agent {name}创建任务{task_id}，标题{title}、目标{objective}、验收{acceptance}",
+    display_name = "为Agent {name}使用模型{model_id}创建任务{task_id}，标题{title}、目标{objective}、验收{acceptance}",
     category = "Agent Collaboration",
     system_only,
     description = "Create a conversation-scoped delegated task, spawn a temporary background agent, and assign the task to it.",
     params {
         name:       "Registered agent profile id or profile display name.",
+        model_id:   "Optional registered model uid for this background task. Overrides the profile default model.",
         title:      "Short task title.",
         objective:  "Concrete task objective for the background agent.",
         acceptance: "Optional comma-separated acceptance checklist."
@@ -2400,6 +2410,36 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
             .clone()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| profile.id.clone());
+        let requested_model_uid = match args
+            .get("model_id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => match value.parse::<u32>() {
+                Ok(uid) => Some(uid),
+                Err(_) => {
+                    return Ok(AIOutput::error(
+                        400,
+                        "model_id must be a registered uint32 model uid",
+                    ));
+                }
+            },
+            None => None,
+        };
+        let selected_model_uid =
+            effective_background_model_uid(requested_model_uid, profile.model_uid);
+        let selected_model = match selected_model_uid {
+            Some(uid) => match llm_gateway::key_store::get(uid) {
+                Some(entry) => Some((uid, entry.model_name)),
+                None => {
+                    return Ok(AIOutput::error(
+                        400,
+                        format!("model_id {} is not registered", uid),
+                    ));
+                }
+            },
+            None => None,
+        };
         let objective = match args.safe_require("objective") {
             Ok(v) => v,
             Err(e) => return Ok(e),
@@ -2484,6 +2524,9 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
         cache
             .set(agent_keys::AGENT_CLASS, &"background".to_string(), None)
             .await?;
+        if let Some((_, model_name)) = selected_model.as_ref() {
+            cache.set(keys::MODEL, model_name, None).await?;
+        }
         if let Some(conversation_id) = crate::agent::conversation_id_from_cache(&*ctx.cache).await {
             crate::agent::set_conversation_id_in_cache(&*cache, &conversation_id).await?;
         }
@@ -2595,6 +2638,8 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
                 "assignee_agent_id": agent_id,
                 "assignee_agent_name": name.clone(),
                 "profile": profile_id,
+                "model_id": selected_model.as_ref().map(|(uid, _)| *uid),
+                "model": selected_model.as_ref().map(|(_, model)| model.clone()),
                 "skills": skills,
                 "pause_tool": "PauseAgent",
                 "pause_modes": ["wait_for_tool", "detach_tool"],
@@ -2909,5 +2954,37 @@ impl SystemOperation for ReportAgentTaskProgressSystem {
 
     fn name(&self) -> &str {
         "ReportAgentTaskProgress"
+    }
+}
+
+#[cfg(test)]
+mod model_routing_tests {
+    use super::{effective_background_model_uid, AgentResourceProfile};
+
+    #[test]
+    fn background_profile_keeps_model_uid() {
+        let profile: AgentResourceProfile = serde_json::from_value(serde_json::json!({
+            "id": "researcher",
+            "model_uid": 1003
+        }))
+        .unwrap();
+        assert_eq!(profile.model_uid, Some(1003));
+
+        let camel_case: AgentResourceProfile = serde_json::from_value(serde_json::json!({
+            "id": "reviewer",
+            "modelUid": 1004
+        }))
+        .unwrap();
+        assert_eq!(camel_case.model_uid, Some(1004));
+    }
+
+    #[test]
+    fn background_task_model_overrides_profile_default() {
+        assert_eq!(
+            effective_background_model_uid(Some(2001), Some(1003)),
+            Some(2001)
+        );
+        assert_eq!(effective_background_model_uid(None, Some(1003)), Some(1003));
+        assert_eq!(effective_background_model_uid(None, None), None);
     }
 }

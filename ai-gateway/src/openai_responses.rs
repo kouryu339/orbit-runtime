@@ -249,6 +249,7 @@ pub async fn call_inner_streaming<F>(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
+    require_tool_call: bool,
     mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
@@ -266,6 +267,9 @@ where
         max_tokens,
         force_tool_name,
     );
+    if require_tool_call && force_tool_name.is_none() {
+        body["tool_choice"] = json!("required");
+    }
     body["stream"] = json!(true);
     let body = std::sync::Arc::new(body);
     let key = std::sync::Arc::new(api_key.to_string());

@@ -100,6 +100,7 @@ pub use dispatch::{
     call_llm, call_llm_cancellable, call_llm_decide, call_llm_decide_cancellable,
     call_llm_decide_streaming, call_llm_decide_streaming_cancellable, call_llm_json_cancellable,
     call_llm_with_tools, call_llm_with_tools_cancellable,
-    call_llm_with_tools_stream_events_cancellable, call_llm_with_tools_streaming_cancellable,
-    model_supports_tool_choice, model_tool_choice_style,
+    call_llm_with_tools_stream_events_cancellable,
+    call_llm_with_tools_stream_events_with_requirement_cancellable,
+    call_llm_with_tools_streaming_cancellable, model_supports_tool_choice, model_tool_choice_style,
 };

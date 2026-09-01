@@ -225,6 +225,7 @@ pub async fn call_inner_streaming<F>(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
+    require_tool_call: bool,
     mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
@@ -272,6 +273,8 @@ where
     }
     if let Some(name) = force_tool_name {
         body["tool_choice"] = json!({"type": "tool", "name": name});
+    } else if require_tool_call {
+        body["tool_choice"] = json!({"type": "any"});
     }
     let body = std::sync::Arc::new(body);
     let url = std::sync::Arc::new(url);

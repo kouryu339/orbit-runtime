@@ -92,6 +92,7 @@ async fn dispatch(
                 max_tokens,
                 force_tool_name,
                 provider.tool_choice_style,
+                false,
                 force_json,
             )
             .await
@@ -302,6 +303,40 @@ pub async fn call_llm_with_tools_stream_events_cancellable<F>(
 where
     F: FnMut(LlmStreamEvent) + Send,
 {
+    call_llm_with_tools_stream_events_with_requirement_cancellable(
+        model_id,
+        messages,
+        tools,
+        temperature,
+        top_p,
+        max_tokens,
+        false,
+        cancel,
+        on_event,
+    )
+    .await
+}
+
+/// Native FC streaming with an optional "at least one tool" requirement.
+pub async fn call_llm_with_tools_stream_events_with_requirement_cancellable<F>(
+    model_id: u32,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    require_tool_call: bool,
+    cancel: tokio_util::sync::CancellationToken,
+    on_event: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(LlmStreamEvent) + Send,
+{
+    if require_tool_call && tools.is_empty() {
+        return Err(ApiError::Fatal(FatalError::config_error(
+            "delegated child Agent requires at least one available tool".to_string(),
+        )));
+    }
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(crate::error::ApiError::Cancelled),
@@ -312,6 +347,7 @@ where
             temperature,
             top_p,
             max_tokens,
+            require_tool_call,
             on_event,
         ) => result,
     }
@@ -324,6 +360,7 @@ async fn dispatch_streaming_with_tools<F>(
     temperature: Option<f64>,
     top_p: Option<f64>,
     max_tokens: Option<u32>,
+    require_tool_call: bool,
     on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
@@ -360,6 +397,7 @@ where
                 max_tokens,
                 None,
                 provider.tool_choice_style,
+                require_tool_call,
                 false,
                 false,
                 on_event,
@@ -377,6 +415,7 @@ where
                 top_p,
                 max_tokens,
                 None,
+                require_tool_call,
                 on_event,
             )
             .await
@@ -392,6 +431,7 @@ where
                 top_p,
                 max_tokens,
                 None,
+                require_tool_call,
                 on_event,
             )
             .await
@@ -599,6 +639,7 @@ where
                 max_tokens,
                 Some(&force_name),
                 provider.tool_choice_style,
+                false,
                 force_json,
                 true,
                 move |event| {
