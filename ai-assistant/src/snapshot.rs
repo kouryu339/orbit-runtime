@@ -172,16 +172,13 @@ impl SnapshotBuilder {
             .get(cluster.default_agent_id())
             .await
             .map(|agent| agent.sm.unit().cache());
-        let model = read_string_config(
-            default_cache.as_ref(),
-            crate::config_resolver::conversation_keys::CONFIG_MODEL,
-            Some(keys::MODEL),
-        )
-        .await;
         let model_uid = match default_cache.as_ref() {
             Some(cache) => crate::config_resolver::resolve_inference_model_uid(cache).await,
             None => None,
         };
+        let model = model_uid
+            .and_then(llm_gateway::key_store::get)
+            .map(|entry| entry.model_name);
         let summary_model = read_string_config(
             active_cache.as_ref(),
             crate::config_resolver::conversation_keys::CONFIG_SUMMARY_MODEL,

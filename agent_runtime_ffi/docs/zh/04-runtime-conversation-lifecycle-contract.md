@@ -36,6 +36,14 @@ accepted 只说明命令获准，后续事实由 pull event 流观察。`convers
 - `conversation.materialize` 把已登记状态实例化为可运行 conversation。
 - `runtime.export_snapshot` 导出 Runtime 级观察快照。
 
+`agent-runtime-conversation-snapshot/v1.model_uid` 保存该 conversation 当时实际解析出的模型。
+导出时依次解析 conversation 覆盖、Runtime 全局模型，不经过 Agent 模型；Agent 模型只参与
+子/后台 Agent 的解析；
+`spawn_from_snapshot` 与 `import_snapshot` 在恢复时把最终 UID 写回 conversation 状态，
+并发布恢复后的前端投影。旧快照字段缺失或为 `null` 时仍按正常规则回退；恢复过程绝不修改 Runtime 的
+`current_model_uid`。两阶段 materialize 流程先用 `conversation.materialize` 创建目标，
+再用 `conversation.import_snapshot` 应用持久化快照。
+
 宿主动态文本通过 `conversation.set_dynamic_snapshot` 按 conversation/agent/field 写入，
 不通过独立 C 函数。动态文本不是长期业务真相，恢复后由宿主重新发布。
 

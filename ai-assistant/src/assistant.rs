@@ -398,10 +398,9 @@ impl AIAssistant {
     }
 
     /// 切换当前会话使用的推理模型。
-    /// 写入路径优先级（见 docs/AGENT_GATEWAY_ADMISSION.md §5）：
-    /// 1. 当前 `Conversation::global()` 存在 → 写入 conversation 层
-    ///    `config:model`，作用域仅本会话；
-    /// 2. 同步写入 default agent 自身 cache 的 `keys::MODEL`，便于持久化。
+    /// 当前 `Conversation::global()` 存在时只写入 conversation 层
+    /// `config:model`，作用域仅本会话。默认 Agent 的 `keys::MODEL` 是 Agent
+    /// 配置槽，不参与根会话模型解析，也不能充当会话持久化来源。
     /// 不再写入全局 `llm_gateway::key_store::set_current`，避免在
     /// multi-conversation 场景下"一会话切换 → 其它会话被静默传染"。
     pub async fn set_model(&self, model: &str) -> Result<()> {
@@ -410,13 +409,10 @@ impl AIAssistant {
             FrameworkError::InvalidOperation(format!("未找到模型 '{}' 的 uid", model).into())
         })?;
         crate::config_resolver::write_conversation_model(model).await?;
-        if let Some(cache) = self.cache() {
-            cache.set(keys::MODEL, &model.to_string(), None).await?;
-        }
         Ok(())
     }
 
-    /// 获取当前会话使用的推理模型名（按 §5 三层 fallback 解析）。
+    /// 获取当前根会话使用的推理模型名：conversation → Runtime 全局。
     pub async fn get_model(&self) -> Result<String> {
         if let Some(cache) = self.cache() {
             if let Some(uid) = crate::config_resolver::resolve_inference_model_uid(&cache).await {

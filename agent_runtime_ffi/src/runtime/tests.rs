@@ -4850,7 +4850,7 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
                     "id": "agent-a",
                     "name": "Agent A",
                     "role": "browser_operator",
-                    "model_uid": 1001
+                    "model_uid": 1003
                 }, {
                     "id": "agent-b",
                     "name": "Agent B",
@@ -4884,6 +4884,43 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
     assert_eq!(key_store::current(), Some(1001));
 
     let manager = facade.manager().unwrap();
+    let snapshot_json = facade
+        .export_conversation_snapshot(&first.conversation_id, "{}")
+        .unwrap();
+    let snapshot: Value = serde_json::from_str(&snapshot_json).unwrap();
+    assert_eq!(snapshot["model_uid"], json!(1002));
+
+    let global_fallback_snapshot: Value = serde_json::from_str(
+        &facade
+            .export_conversation_snapshot(&second.conversation_id, "{}")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        global_fallback_snapshot["model_uid"],
+        json!(1001),
+        "conversation export must ignore the root Agent model and use the Runtime global fallback"
+    );
+
+    let restored = facade
+        .spawn_conversation_from_snapshot(&spawn, &snapshot_json)
+        .unwrap();
+    let mut legacy_snapshot = snapshot.clone();
+    legacy_snapshot.as_object_mut().unwrap().remove("model_uid");
+    let legacy_restored = facade
+        .spawn_conversation_from_snapshot(&spawn, &legacy_snapshot.to_string())
+        .unwrap();
+    let materialized = facade
+        .materialize_conversation("materialized-model-restore", "{}")
+        .unwrap();
+    facade
+        .import_conversation_snapshot(
+            &snapshot_json,
+            &json!({ "conversation_id": materialized.conversation_id }).to_string(),
+        )
+        .unwrap();
+    assert_eq!(key_store::current(), Some(1001));
+
     facade.rt.block_on(async {
         let first_cache = manager
             .default_agent_cache(&first.conversation_id)
@@ -4906,6 +4943,51 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
                 .await
                 .unwrap(),
             None
+        );
+        assert_eq!(
+            second_cache
+                .get::<String>(ai_assistant::context::keys::MODEL)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("model-child"),
+            "the root Agent model remains registered in its own slot"
+        );
+        assert_eq!(
+            ai_assistant::config_resolver::resolve_inference_model_uid(&second_cache).await,
+            Some(1001),
+            "a root conversation must ignore the Agent slot and fall back directly to Runtime global"
+        );
+        for restored_id in [&restored.conversation_id, &materialized.conversation_id] {
+            let restored_cache = manager.default_agent_cache(restored_id).await.unwrap();
+            assert_eq!(
+                restored_cache
+                    .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL,)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("model-b")
+            );
+            assert_eq!(
+                ai_assistant::config_resolver::resolve_inference_model_uid(&restored_cache).await,
+                Some(1002)
+            );
+        }
+        let legacy_cache = manager
+            .default_agent_cache(&legacy_restored.conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            legacy_cache
+                .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            ai_assistant::config_resolver::resolve_inference_model_uid(&legacy_cache).await,
+            Some(1001),
+            "a legacy snapshot without model_uid must use the Runtime global fallback"
         );
         let child_cache = manager
             .agent_cache(&first.conversation_id, "agent-b")
@@ -4981,9 +5063,26 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
             && event["payload"]["model_uid"] == 1002
             && event["payload"]["model"] == "model-b"
     }));
+    for restored_id in [&restored.conversation_id, &materialized.conversation_id] {
+        assert!(events.iter().any(|event| {
+            event["type"] == "frontend:state_snapshot"
+                && event["conversation_id"] == *restored_id
+                && event["payload"]["model_uid"] == 1002
+                && event["payload"]["model"] == "model-b"
+        }));
+    }
 
     facade.close_conversation(&first.conversation_id).unwrap();
     facade.close_conversation(&second.conversation_id).unwrap();
+    facade
+        .close_conversation(&restored.conversation_id)
+        .unwrap();
+    facade
+        .close_conversation(&materialized.conversation_id)
+        .unwrap();
+    facade
+        .close_conversation(&legacy_restored.conversation_id)
+        .unwrap();
     facade.shutdown().unwrap();
     let _ = fs::remove_dir_all(root);
 }

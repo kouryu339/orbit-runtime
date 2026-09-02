@@ -7,8 +7,8 @@
 //! - 后台 Agent 在创建时先把任务参数 `model_id` 或 profile 默认模型写入 Agent
 //!   模型槽，因此自然遵循：任务参数 → profile 默认 → Conversation → Runtime 全局。
 //!    只接受显式选择的当前模型；不会从内置模型目录或索引中自动兜底。
-//! 写入路径：`AIAssistant::set_model` / 未来 `Conversation::set_summary_model`
-//! 都写到 conversation 层，从而避免多会话并行下的"全局变更被静默传染"。
+//! 写入路径：`Conversation::set_model` / `AIAssistant::set_model` 都只写入
+//! conversation 层，从而避免多会话并行下的"全局变更被静默传染"。
 
 use std::sync::Arc;
 
@@ -73,9 +73,6 @@ pub async fn resolve_inference_model_uid_for_agent(
     {
         return Some(uid);
     }
-    if let Some(uid) = registered_model_from_cache(conversation_cache, keys::MODEL).await {
-        return Some(uid);
-    }
 
     llm_gateway::key_store::current()
 }
@@ -104,8 +101,8 @@ pub async fn resolve_summary_model_uid(agent_cache: &Arc<dyn Cache>, fallback_ui
     fallback_uid
 }
 
-/// 写入 conversation 层配置。返回写入成功与否。
-/// `Conversation::global()` 缺失时（极少见，单元测试场景）写入 agent 层兜底。
+/// 写入当前 conversation 层配置。
+/// `Conversation::global()` 缺失时不猜测 Agent 作用域，也不修改 Runtime 全局模型。
 pub async fn write_conversation_model(model_name: &str) -> crate::Result<()> {
     if let Some(cache) = conversation_cache() {
         cache

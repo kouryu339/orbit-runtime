@@ -573,7 +573,6 @@ impl Conversation {
                 None,
             )
             .await?;
-        cache.set(keys::MODEL, &model.to_string(), None).await?;
         self.gateway
             .publish_conversation_model_state_delta(model_uid, model)
             .await;

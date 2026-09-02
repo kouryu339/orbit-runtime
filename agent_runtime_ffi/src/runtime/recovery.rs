@@ -496,6 +496,12 @@ pub(super) struct ConversationSnapshotImport {
     pub(super) schema: Option<String>,
     #[allow(dead_code)]
     pub(super) conversation_id: Option<String>,
+    /// Materialized conversation model. New native exports resolve the
+    /// conversation -> Runtime global fallback chain. Agent model settings are
+    /// intentionally outside this conversation-level field.
+    /// Missing/`null` remains valid for older snapshots.
+    #[serde(default)]
+    pub(super) model_uid: Option<u32>,
     #[serde(default)]
     pub(super) ledger: Vec<ai_assistant::ledger::LedgerRecord>,
     /// Protocol is conversation history, not a current registry default. A
@@ -557,6 +563,15 @@ pub(super) fn snapshot_state_deltas(snapshot: &ConversationSnapshotImport) -> Ve
             deltas.extend(items.iter().cloned());
         }
     }
+    // The top-level field is the authoritative materialized conversation
+    // selection. Apply it last so a stale replay delta cannot override it.
+    if let Some(model_uid) = snapshot.model_uid {
+        deltas.push(json!({
+            "schema": "agent-runtime-state-delta/v1",
+            "op": "conversation.model.set",
+            "model_uid": model_uid,
+        }));
+    }
     deltas
 }
 
@@ -609,10 +624,6 @@ pub(super) async fn apply_conversation_state_delta(
                     &model_name,
                     None,
                 )
-                .await
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            cache
-                .set(ai_assistant::context::keys::MODEL, &model_name, None)
                 .await
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         }
@@ -827,6 +838,17 @@ impl RuntimeFacade {
                 .agent_tasks(&conversation_id)
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+            let conversation_cache = manager
+                .default_agent_cache(&conversation_id)
+                .await
+                .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+            let model_uid = conversation_cache
+                .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
+                .await
+                .map_err(|e| RuntimeError::Internal(e.to_string()))?
+                .filter(|model| !model.trim().is_empty())
+                .and_then(|model| key_store::find_by_name(&model))
+                .or_else(key_store::current);
             let info = manager
                 .list()
                 .await
@@ -841,6 +863,7 @@ impl RuntimeFacade {
             Ok(json!({
                 "schema": "agent-runtime-conversation-snapshot/v1",
                 "conversation_id": conversation_id,
+                "model_uid": model_uid,
                 "tenant_id": info.tenant_id,
                 "user_id": info.user_id,
                 "consistency": options.as_str(),
@@ -954,6 +977,12 @@ impl RuntimeFacade {
             for delta in state_deltas {
                 apply_conversation_state_delta(&manager, &target_conversation_id, delta).await?;
             }
+            // State replay writes Runtime-owned caches directly to avoid
+            // admission and event echo. Project the final restored state once.
+            manager
+                .publish_current_state(&target_conversation_id)
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             Ok(())
         })
     }

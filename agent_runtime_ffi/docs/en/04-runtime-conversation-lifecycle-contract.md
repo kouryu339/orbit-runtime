@@ -41,6 +41,17 @@ the manager.
 - `conversation.materialize` materializes registered state as a runnable conversation.
 - `runtime.export_snapshot` exports a Runtime-level observation snapshot.
 
+`agent-runtime-conversation-snapshot/v1.model_uid` is the materialized
+conversation model. Export resolves the conversation override first, then the
+Runtime global model. Agent model settings only participate in child/background
+Agent resolution and are not part of this conversation-level field.
+`spawn_from_snapshot` and `import_snapshot` restore the resolved UID into the
+conversation and publish the resulting frontend projection. Missing or `null`
+remains supported for older snapshots and uses the normal fallback. Recovery never writes Runtime
+`current_model_uid`. For the two-step materialization flow, create the target
+with `conversation.materialize`, then apply the durable snapshot with
+`conversation.import_snapshot`.
+
 Host dynamic text is written through `conversation.set_dynamic_snapshot` using
 conversation/agent/field. It has no separate C function. Dynamic text is not a
 durable business truth; the host must republish it after recovery.
