@@ -47,3 +47,11 @@ must reference every data input with single braces, for example `{A}+{B}` or
 Registration lets tool and workflow capabilities be linked into the binary
 without central manual wiring. For sidecar tools, the same idea is represented by
 RPC metadata returned from `AgentToolService.ListTools`.
+
+## 3.4 Workflow Availability
+
+Local and RPC AI tools expose `workflow_enabled`, which defaults to `true`.
+Set it to `false` for tools that an Agent may invoke directly but that must not
+appear in Workflow node catalogs or be accepted by scripted Workflow compilation.
+For `define_operation`, the legacy `system_only` flag remains an alias for
+`workflow_enabled = false`; new declarations should use the unified field.

@@ -46,6 +46,7 @@ async fn main() -> corework::error::Result<()> {
         idempotent: false,
         open_world: true,
         secret: false,
+        workflow_enabled: true,
         required_capabilities: vec![],
         endpoint_id: "python-demo".to_string(),
         service: "json-lines-test".to_string(),

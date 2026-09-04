@@ -617,6 +617,7 @@ mod tests {
             idempotent: true,
             open_world: false,
             secret: false,
+            workflow_enabled: true,
             required_capabilities: vec![],
             endpoint_id: "test".to_string(),
             service: "test".to_string(),

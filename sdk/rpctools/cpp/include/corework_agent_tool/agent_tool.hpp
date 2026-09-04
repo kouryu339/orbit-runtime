@@ -28,6 +28,8 @@ enum class ToolErrorCode {
 };
 
 struct Json {
+  Json() = default;
+
   template <typename T>
   Json(std::initializer_list<T>) {}
 
@@ -60,6 +62,7 @@ struct ToolDescriptor {
   bool idempotent = false;
   bool open_world = false;
   bool secret = false;
+  bool workflow_enabled = true;
   std::string category;
   std::string display_name;
   std::vector<std::string> required_capabilities;

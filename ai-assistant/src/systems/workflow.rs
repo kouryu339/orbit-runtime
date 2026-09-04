@@ -120,7 +120,7 @@ async fn active_runtime_tools(ctx: &Context) -> Result<Vec<RuntimeToolMetadata>,
         .collect::<HashSet<_>>();
     Ok(runtime_tools(ctx)
         .into_iter()
-        .filter(|tool| active_tools.contains(&tool.name))
+        .filter(|tool| tool.workflow_enabled && active_tools.contains(&tool.name))
         .collect())
 }
 

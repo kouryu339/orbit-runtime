@@ -32,6 +32,10 @@ Declare the matching `required_capability`, for example
 Corework runtime executes the actual `corework::workspace::*` logic; sidecars
 should not duplicate those rules.
 
+Tool descriptors default to `.workflow_enabled(true)`. Use
+`.workflow_enabled(false)` for an Agent-only tool that must not be used as a
+Workflow node.
+
 `ToolContext` also exposes runtime execute metadata: `call_id`, `tool_call_id`,
 `idempotency_key`, `session_id`, `provider_id`, `cluster_id`,
 `runtime_instance_id`, `conversation_id`, `agent_id`, `turn_id`, `workflow_id`,

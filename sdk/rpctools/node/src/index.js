@@ -383,6 +383,7 @@ function descriptorToProto(metadata) {
     idempotent: Boolean(metadata.idempotent),
     open_world: Boolean(metadata.open_world),
     secret: Boolean(metadata.secret),
+    workflow_enabled: metadata.workflow_enabled !== false,
     category: metadata.category ?? "",
     display_name: metadata.display_name ?? "",
     required_capabilities: metadata.required_capabilities ?? [],

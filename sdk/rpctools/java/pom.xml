@@ -5,7 +5,7 @@
 
   <groupId>tech.xonion.corework</groupId>
   <artifactId>corework-agent-tool</artifactId>
-  <version>0.1.1</version>
+  <version>0.1.2</version>
   <packaging>jar</packaging>
 
   <name>corework-agent-tool</name>

@@ -2,6 +2,7 @@
 
 use corework::ai_system::{AIParameter, AISystemFactory};
 use corework::rpc_tool::RuntimeAIParameter;
+use corework::workflow::registry::NodeRegistry;
 use serde_json::{json, Map, Value};
 
 use crate::decision_line::ParsedToolCall;
@@ -134,6 +135,7 @@ fn definition(
 pub fn definitions_for_active_tools(
     names: &[String],
     strict: bool,
+    workflow_script_enabled: bool,
 ) -> Result<Vec<llm_gateway::ToolDefinition>, String> {
     let factories = inventory::iter::<AISystemFactory>
         .into_iter()
@@ -155,9 +157,22 @@ pub fn definitions_for_active_tools(
                         .collect::<Vec<_>>(),
                 )?;
             }
+            let description = tool_description(
+                factory.metadata.description,
+                workflow_script_enabled
+                    && (!factory.metadata.workflow_enabled
+                        || NodeRegistry::get(factory.metadata.name).is_none()),
+                workflow_script_enabled,
+                factory
+                    .metadata
+                    .outputs
+                    .iter()
+                    .map(|output| (output.name, output.field_type, output.description))
+                    .collect(),
+            );
             definitions.push(definition(
                 factory.metadata.name,
-                factory.metadata.description,
+                &description,
                 factory
                     .metadata
                     .parameters
@@ -179,9 +194,25 @@ pub fn definitions_for_active_tools(
                         .collect::<Vec<_>>(),
                 )?;
             }
+            let description = tool_description(
+                &metadata.description,
+                workflow_script_enabled && !metadata.workflow_enabled,
+                workflow_script_enabled,
+                metadata
+                    .outputs
+                    .iter()
+                    .map(|output| {
+                        (
+                            output.name.as_str(),
+                            output.field_type.as_str(),
+                            output.description.as_str(),
+                        )
+                    })
+                    .collect(),
+            );
             definitions.push(definition(
                 &metadata.name,
-                &metadata.description,
+                &description,
                 metadata
                     .parameters
                     .iter()
@@ -194,6 +225,50 @@ pub fn definitions_for_active_tools(
         return Err(format!("active tool '{name}' has no registered metadata"));
     }
     Ok(definitions)
+}
+
+fn tool_description(
+    description: &str,
+    ai_only: bool,
+    workflow_script_enabled: bool,
+    outputs: Vec<(&str, &str, &str)>,
+) -> String {
+    if !ai_only && (!workflow_script_enabled || outputs.is_empty()) {
+        return description.to_string();
+    }
+
+    let mut sections = vec![description.trim().to_string()];
+    if ai_only {
+        sections.push(
+            crate::prompt_assets::template("tool_ai_only_description.md")
+                .trim()
+                .to_string(),
+        );
+    }
+    if workflow_script_enabled && !outputs.is_empty() {
+        let mut output_contract = crate::prompt_assets::template("tool_output_fields_label.md")
+            .trim()
+            .to_string();
+        for (name, field_type, description) in outputs {
+            let description = if description.trim().is_empty() {
+                crate::prompt_assets::template("tool_output_value_fallback.md")
+                    .trim()
+                    .to_string()
+            } else {
+                description.trim().to_string()
+            };
+            output_contract.push_str(&format!(
+                "\n- `{name}` ({}): {description}",
+                corework::data_type::public_type_name(field_type)
+            ));
+        }
+        sections.push(output_contract);
+    }
+    sections
+        .into_iter()
+        .filter(|section| !section.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn validate_strict_parameter_compatibility(
@@ -340,6 +415,42 @@ pub fn validate_and_project_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fc_marks_system_only_local_tool_only_when_workflow_scripts_are_enabled() {
+        let names = vec!["GetSkillsList".to_string()];
+        let regular = definitions_for_active_tools(&names, false, false).unwrap();
+        let script_capable = definitions_for_active_tools(&names, false, true).unwrap();
+
+        assert_eq!(
+            regular[0].function.description,
+            "获取所有可用的 Skills 列表。返回每个 Skill 的名称和描述，供 AI 判断需要激活哪些技能。"
+        );
+        assert_ne!(
+            regular[0].function.description,
+            script_capable[0].function.description
+        );
+    }
+
+    #[test]
+    fn fc_includes_output_contract_only_when_workflow_scripts_are_enabled() {
+        let names = vec!["executeWorkflowScript".to_string()];
+        let regular = definitions_for_active_tools(&names, false, false).unwrap();
+        let script_capable = definitions_for_active_tools(&names, false, true).unwrap();
+
+        assert!(!regular[0]
+            .function
+            .description
+            .contains("`outputs` (Object)"));
+        assert!(script_capable[0]
+            .function
+            .description
+            .contains("`outputs` (Object)"));
+        assert!(script_capable[0]
+            .function
+            .description
+            .contains("`trace` (Array)"));
+    }
 
     #[test]
     fn rejects_unknown_arguments_and_projects_workflow_inputs() {

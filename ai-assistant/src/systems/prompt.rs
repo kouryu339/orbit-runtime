@@ -6,6 +6,7 @@ use corework::error::FrameworkError;
 use corework::orchestration::Context;
 use corework::rpc_tool::RuntimeToolMetadata;
 use corework::system::SystemOperation;
+use corework::workflow::registry::NodeRegistry;
 use serde::{Deserialize, Serialize};
 
 use crate::context::{AssistantContext, Message};
@@ -255,6 +256,14 @@ pub(crate) fn format_tools_section(tool_names: &[String], include_outputs: bool)
                         .to_string(),
                 );
             }
+            if include_outputs && (!meta.workflow_enabled || NodeRegistry::get(meta.name).is_none())
+            {
+                tags.push(
+                    crate::prompt_assets::template("tool_tag_ai_only.md")
+                        .trim()
+                        .to_string(),
+                );
+            }
             let tags_str = if tags.is_empty() {
                 String::new()
             } else {
@@ -355,6 +364,9 @@ fn push_runtime_tool_section(
     }
     if meta.open_world {
         tags.push("RPC");
+    }
+    if include_outputs && !meta.workflow_enabled {
+        tags.push("AI only");
     }
     let tags_str = if tags.is_empty() {
         String::new()
@@ -554,6 +566,14 @@ impl SystemOperation for BuildSystemPromptSystem {
         if !plan_execution_rules.is_empty() {
             sections.push(PromptSection::new(plan_execution_rules));
         }
+        if include_tool_outputs {
+            let workflow_tool_rules = crate::prompt_assets::template("workflow_tool_rules.md")
+                .trim()
+                .to_string();
+            if !workflow_tool_rules.is_empty() {
+                sections.push(PromptSection::new(workflow_tool_rules));
+            }
+        }
 
         sections.push(PromptSection::new(build_response_protocol_instruction()));
 
@@ -735,6 +755,7 @@ pub fn build_system_prompt_text(
         state_skill,
         frontend_widgets_enabled,
         crate::ToolProtocol::ExecLegacy,
+        false,
     )
 }
 
@@ -749,6 +770,7 @@ pub fn build_system_prompt_text_for_protocol(
     state_skill: Option<&str>,
     frontend_widgets_enabled: bool,
     tool_protocol: crate::ToolProtocol,
+    workflow_script_enabled: bool,
 ) -> String {
     let mut sections: Vec<PromptSection> = Vec::new();
 
@@ -768,6 +790,14 @@ pub fn build_system_prompt_text_for_protocol(
         .to_string();
     if !plan_execution_rules.is_empty() {
         sections.push(PromptSection::new(plan_execution_rules));
+    }
+    if workflow_script_enabled {
+        let workflow_tool_rules = crate::prompt_assets::template("workflow_tool_rules.md")
+            .trim()
+            .to_string();
+        if !workflow_tool_rules.is_empty() {
+            sections.push(PromptSection::new(workflow_tool_rules));
+        }
     }
     // Host-published dynamic context is intentionally omitted from system prompt.
     // Callers append it at the request tail to preserve reusable prompt prefixes.
@@ -1099,13 +1129,46 @@ mod tests {
 
     #[test]
     fn local_tool_outputs_are_only_projected_for_script_capable_thinking() {
-        let tools = vec!["ContinueThinking".to_string()];
+        let tools = vec!["GetSkillsList".to_string()];
 
         let regular = format_tools_section(&tools, false);
         let script_capable = format_tools_section(&tools, true);
 
-        assert!(!regular.contains("Always true, indicating"));
-        assert!(script_capable.contains("Always true, indicating"));
+        assert_ne!(regular, script_capable);
+        assert!(script_capable.len() > regular.len());
+    }
+
+    #[test]
+    fn workflow_tool_rule_is_only_injected_for_script_capable_mode() {
+        let regular = build_system_prompt_text_for_protocol(
+            "persona",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "thinking",
+            None,
+            false,
+            crate::ToolProtocol::NativeFc,
+            false,
+        );
+        let script_capable = build_system_prompt_text_for_protocol(
+            "persona",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "thinking",
+            None,
+            false,
+            crate::ToolProtocol::NativeFc,
+            true,
+        );
+
+        assert!(!regular.contains("workflow_enabled"));
+        assert!(script_capable.contains("workflow_enabled=true"));
     }
 
     #[test]
@@ -1161,6 +1224,7 @@ mod tests {
             idempotent: true,
             open_world: false,
             secret: false,
+            workflow_enabled: true,
             required_capabilities: Vec::new(),
             endpoint_id: "user-tools".to_string(),
             service: "user-service".to_string(),

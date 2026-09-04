@@ -28,6 +28,11 @@ AgentToolService
 The Rust, Python, Node.js, and C# SDKs expose this protocol through idiomatic
 authoring APIs.
 
+`ToolDescriptor.workflow_enabled` defaults to `true`. Set it to `false` when a
+tool may be called directly by an Agent but must not be exposed, compiled, or
+executed as a Workflow node. Runtime treats an absent field as `true` for
+compatibility with older Tool servers.
+
 ## 9.4 Workflow Output Projection
 
 `ToolDescriptor.outputs` is also the workflow node output schema. A successful

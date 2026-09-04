@@ -1066,6 +1066,18 @@ fn resource_definition_catalogs_are_effective_and_sanitized() {
         }))
         .unwrap(),
     );
+    facade.runtime_tools.push(
+        serde_json::from_value(json!({
+            "name": "AgentOnlyProbe",
+            "description": "Agent-only probe.",
+            "tool_kind": "rpc",
+            "workflow_enabled": false,
+            "endpoint_id": "probe-sidecar",
+            "service": "probe.Probe",
+            "method": "Run"
+        }))
+        .unwrap(),
+    );
     facade.started = true;
     let ready = invoke(&mut facade, "runtime.get_rpc_endpoint_definitions");
     assert_eq!(ready["endpoints"][0]["connection_state"], "ready");
@@ -1208,6 +1220,7 @@ fn workflow_node_definitions_unify_corework_and_runtime_tools() {
         .filter_map(|node| node["node_type"].as_str())
         .collect::<BTreeSet<_>>();
     assert_eq!(node_types.len(), nodes.len());
+    assert!(!node_types.contains("AgentOnlyProbe"));
 
     let contains = nodes
         .iter()
@@ -1386,6 +1399,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         idempotent: false,
         open_world: true,
         secret: false,
+        workflow_enabled: true,
         required_capabilities: Vec::new(),
         endpoint_id: "browser-test".to_string(),
         service: "browser.Browser".to_string(),
@@ -1413,6 +1427,12 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert!(local["description"]
         .as_str()
         .is_some_and(|text| !text.is_empty()));
+    let agent_only_local = tools
+        .iter()
+        .find(|tool| tool["name"] == "GetSkillsList")
+        .expect("Agent-only local tool definition");
+    assert_eq!(agent_only_local["workflow_enabled"], false);
+    assert_eq!(agent_only_local["workflow_node_capable"], false);
     let browser = tools
         .iter()
         .find(|tool| tool["name"] == "BrowserOpenPageWorkflowTest")
@@ -1421,6 +1441,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert_eq!(browser["transport"]["endpoint_id"], "browser-test");
     assert_eq!(browser["transport"]["service"], "browser.Browser");
     assert_eq!(browser["workflow_node_capable"], true);
+    assert_eq!(browser["workflow_enabled"], true);
     assert_eq!(browser["open_world"], true);
     assert!(browser["parameters"]
         .as_array()
@@ -3323,6 +3344,7 @@ fn restored_ledger_readonly_open_tool_has_no_recovery_result() {
         idempotent: true,
         open_world: false,
         secret: false,
+        workflow_enabled: true,
         required_capabilities: vec![],
         endpoint_id: "test".to_string(),
         service: "test".to_string(),

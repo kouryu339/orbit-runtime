@@ -1495,6 +1495,7 @@ mod tests {
             idempotent: false,
             open_world: true,
             secret: false,
+            workflow_enabled: true,
             required_capabilities: Vec::new(),
             endpoint_id: "browser".to_string(),
             service: "browser.Browser".to_string(),
@@ -1544,6 +1545,7 @@ mod tests {
             idempotent: false,
             open_world: true,
             secret: false,
+            workflow_enabled: true,
             required_capabilities: Vec::new(),
             endpoint_id: "workflow-value-test".to_string(),
             service: "test.WorkflowValue".to_string(),
@@ -2674,6 +2676,19 @@ return result=$total
             body_runs >= 3,
             "expected successful trace entries for the loop body"
         );
+    }
+
+    #[test]
+    fn workflow_disabled_runtime_tool_is_rejected_by_script_compiler() {
+        let mut tool = browser_tool_metadata("AgentOnlyCompileTest");
+        tool.workflow_enabled = false;
+        let error = compile_chain_v2_with_runtime_tools(
+            "input\n1: EXEC AgentOnlyCompileTest --url https://example.com\nreturn",
+            &[tool],
+        )
+        .unwrap_err();
+
+        assert!(!error.message.trim().is_empty());
     }
 
     #[test]

@@ -85,6 +85,7 @@ pub struct ToolDescriptor {
     pub idempotent: bool,
     pub open_world: bool,
     pub secret: bool,
+    pub workflow_enabled: bool,
     pub category: String,
     pub display_name: String,
     pub required_capabilities: Vec<String>,
@@ -189,6 +190,7 @@ impl ToolDescriptor {
                 idempotent: false,
                 open_world: false,
                 secret: false,
+                workflow_enabled: true,
                 category: String::new(),
                 display_name: String::new(),
                 required_capabilities: Vec::new(),
@@ -261,6 +263,11 @@ impl ToolDescriptorBuilder {
 
     pub fn secret(mut self, value: bool) -> Self {
         self.descriptor.secret = value;
+        self
+    }
+
+    pub fn workflow_enabled(mut self, value: bool) -> Self {
+        self.descriptor.workflow_enabled = value;
         self
     }
 
@@ -786,6 +793,7 @@ fn descriptor_to_proto(descriptor: &ToolDescriptor) -> ProtoToolDescriptor {
         idempotent: descriptor.idempotent,
         open_world: descriptor.open_world,
         secret: descriptor.secret,
+        workflow_enabled: Some(descriptor.workflow_enabled),
         category: descriptor.category.clone(),
         display_name: descriptor.display_name.clone(),
         required_capabilities: descriptor.required_capabilities.clone(),
@@ -927,6 +935,10 @@ mod tests {
             |ctx: ToolContext, key: Option<String>| async move {
                 assert_eq!(ctx.conversation_id, "session");
                 assert_eq!(ctx.agent_id, "agent-test");
+                assert_eq!(ctx.turn_id, "turn-7");
+                assert_eq!(ctx.workflow_id, "workflow-1");
+                assert_eq!(ctx.workflow_run_id, "workflow-run-1");
+                assert_eq!(ctx.node_id, "1.2");
                 Ok(AIOutput {
                     result: serde_json::json!({ "key": key, "ok": true }),
                     to_ai: "rust sdk smoke ok".to_string(),
@@ -957,7 +969,12 @@ mod tests {
             .unwrap()
             .into_inner();
         assert_eq!(tools.schema, SCHEMA);
-        assert!(tools.tools.iter().any(|tool| tool.name == "RustSdkSmoke"));
+        let smoke = tools
+            .tools
+            .iter()
+            .find(|tool| tool.name == "RustSdkSmoke")
+            .unwrap();
+        assert_eq!(smoke.workflow_enabled, Some(true));
 
         let request = ToolStreamMessage {
             call_id: "rust-sdk-smoke-call".to_string(),
@@ -975,10 +992,10 @@ mod tests {
                     runtime_instance_id: String::new(),
                     conversation_id: "session".to_string(),
                     agent_id: "agent-test".to_string(),
-                    turn_id: String::new(),
-                    workflow_id: String::new(),
-                    workflow_run_id: String::new(),
-                    node_id: String::new(),
+                    turn_id: "turn-7".to_string(),
+                    workflow_id: "workflow-1".to_string(),
+                    workflow_run_id: "workflow-run-1".to_string(),
+                    node_id: "1.2".to_string(),
                     permissions: Vec::new(),
                     host_context_json: "{}".to_string(),
                 },

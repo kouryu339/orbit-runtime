@@ -48,10 +48,15 @@ type ToolDescriptor struct {
 	Idempotent           bool              `json:"idempotent"`
 	OpenWorld            bool              `json:"open_world"`
 	Secret               bool              `json:"secret"`
+	// WorkflowEnabled is nil by default, which means true for backward compatibility.
+	// Use Bool(false) to make this an Agent-only tool.
+	WorkflowEnabled      *bool             `json:"workflow_enabled,omitempty"`
 	Category             string            `json:"category,omitempty"`
 	DisplayName          string            `json:"display_name,omitempty"`
 	RequiredCapabilities []string          `json:"required_capabilities,omitempty"`
 }
+
+func Bool(value bool) *bool { return &value }
 
 type AIOutput struct {
 	Result    any

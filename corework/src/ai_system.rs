@@ -64,6 +64,11 @@ pub struct AISystemMetadata {
     /// 是否处理敏感信息（密钥/凭据/秘密等）
     /// 默认 false（假设无敏感数据）
     pub secret: bool,
+
+    /// Whether this AI-callable system may also be used as a Workflow node.
+    /// Defaults to true in registration macros. `system_only` is the legacy
+    /// `define_operation` spelling for false.
+    pub workflow_enabled: bool,
 }
 
 pub struct AISystemFactory {

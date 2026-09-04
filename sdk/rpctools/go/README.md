@@ -33,3 +33,6 @@ handlers can read call/session fields such as `CallID`, `ToolCallID`,
 
 Dynamic AI context is host-owned and updated through the runtime FFI.
 The removed RPC `snapshot.*` helpers are not compatible with this version.
+
+`ToolDescriptor.WorkflowEnabled` defaults to `nil`, which Runtime interprets as
+`true`. Set it to `agenttool.Bool(false)` for an Agent-only tool.

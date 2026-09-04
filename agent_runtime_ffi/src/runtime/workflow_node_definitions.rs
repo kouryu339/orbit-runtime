@@ -83,7 +83,7 @@ pub(crate) fn workflow_node_definition_values(runtime_tools: &[RuntimeToolMetada
 
     // Runtime registrations are the effective implementation when they replace
     // a statically known node type.
-    for tool in runtime_tools {
+    for tool in runtime_tools.iter().filter(|tool| tool.workflow_enabled) {
         let source = if tool.tool_kind == "rpc" {
             "rpc"
         } else {

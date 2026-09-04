@@ -46,6 +46,8 @@ tool_filter: "all"
 - 当前思考执行模型只开放 `executeWorkflowScript`；临时脚本不会创建、更新或注册持久化 Workflow。
 - 持久化目录能力只能由宿主通过其他角色或功能配置单独开放。
 - 脚本只能编排当前 Agent 已激活的工具；编译器会拒绝未激活或注册信息不完整的节点。
+- Available Tools 中标记为“仅限 AI 直接调用”或 `workflow_enabled=false` 的工具只能在脚本外直接调用，不得写入 Workflow。只有未带该标记且可作为 Workflow 节点的工具，才允许出现在 `N: EXEC ToolName ...` 中。
+- 工作流模式下工具描述会额外提供脚本编排所需的输出字段；只引用这些真实声明的输出，不得从普通工具返回文本中猜测字段。
 
 ## 临时 Workflow 脚本语法
 

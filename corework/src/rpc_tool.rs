@@ -79,6 +79,8 @@ pub struct RuntimeToolMetadata {
     pub open_world: bool,
     #[serde(default)]
     pub secret: bool,
+    #[serde(default = "default_workflow_enabled")]
+    pub workflow_enabled: bool,
     #[serde(default)]
     pub required_capabilities: Vec<String>,
     #[serde(default)]
@@ -87,6 +89,10 @@ pub struct RuntimeToolMetadata {
     pub service: String,
     #[serde(default)]
     pub method: String,
+}
+
+fn default_workflow_enabled() -> bool {
+    true
 }
 
 impl RuntimeToolMetadata {
@@ -697,6 +703,7 @@ pub fn runtime_tool_metadata_from_descriptor(
         idempotent: descriptor.idempotent,
         open_world: descriptor.open_world,
         secret: descriptor.secret,
+        workflow_enabled: descriptor.workflow_enabled.unwrap_or(true),
         required_capabilities: descriptor.required_capabilities,
         endpoint_id: endpoint_id.to_string(),
         service: RPC_TOOL_SERVICE_V1.to_string(),
@@ -863,6 +870,16 @@ impl DynamicExecute for RpcStubSystem {
                 self.tool_name
             ))
         })?;
+        if !metadata.workflow_enabled {
+            let workflow_run_id = resolve_rpc_tool_workflow_run_id(ctx).await?;
+            let node_id = resolve_rpc_tool_node_id(ctx).await?;
+            if !workflow_run_id.is_empty() || !node_id.is_empty() {
+                return Err(FrameworkError::InvalidOperation(format!(
+                    "Runtime tool '{}' is Agent-only because workflow_enabled=false",
+                    self.tool_name
+                )));
+            }
+        }
         let endpoint = self.endpoints.get(&metadata.endpoint_id).ok_or_else(|| {
             FrameworkError::InvalidOperation(format!(
                 "RPC endpoint '{}' for tool '{}' is not registered",
@@ -1861,6 +1878,7 @@ mod tests {
             idempotent: true,
             open_world: false,
             secret: false,
+            workflow_enabled: true,
             required_capabilities: vec![CAPABILITY_WORKSPACE_RESOLVE_PATH.to_string()],
             endpoint_id: "test".to_string(),
             service: "corework-agent-tool/v1".to_string(),
@@ -1938,6 +1956,118 @@ mod tests {
             "wf-run-1"
         );
         assert_eq!(resolve_rpc_tool_node_id(&ctx).await.unwrap(), "1.2");
+    }
+
+    #[tokio::test]
+    async fn workflow_context_reaches_json_line_rpc_tool_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+
+            let WireMessage::Execute { request, .. } =
+                serde_json::from_str::<WireMessage>(line.trim_end()).unwrap()
+            else {
+                panic!("expected execute request");
+            };
+            assert_eq!(request.conversation_id, "conversation-1");
+            assert_eq!(request.agent_id, "agent-1");
+            assert_eq!(request.turn_id, "7");
+            assert_eq!(request.workflow_id, "workflow-1");
+            assert_eq!(request.workflow_run_id, "workflow-run-1");
+            assert_eq!(request.node_id, "1.2");
+
+            write_wire(
+                &mut writer,
+                &WireMessage::AiOutput {
+                    output: RemoteAIOutput {
+                        result: serde_json::json!({ "received": true }),
+                        to_ai: "workflow identity received".to_string(),
+                        error_code: ToolErrorCode::Ok as i32,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let endpoints = Arc::new(RpcEndpointRegistry::new());
+        endpoints
+            .insert(RpcEndpointInfo {
+                endpoint_id: "test".to_string(),
+                address: address.to_string(),
+                timeout_ms: 1_000,
+            })
+            .unwrap();
+        let tools = Arc::new(RuntimeToolRegistry::new());
+        tools.insert(test_tool()).unwrap();
+        let stub = RpcStubSystem::new("Probe", endpoints, tools, Arc::new(JsonLineRpcToolClient));
+
+        let base = Context::new(
+            Arc::new(InMemoryCache::new()),
+            Arc::new(InMemoryEventBus::new()),
+            Arc::new(NoopTelemetry),
+        )
+        .with_conversation_id("conversation-1");
+        base.set("agent_id", "agent-1").unwrap();
+        base.set("turn_id", 7u64).unwrap();
+        let mut workflow_ctx = crate::workflow::execution::ExecutionContext::from_context(base);
+        workflow_ctx
+            .bind_workflow_identity(
+                "workflow-1",
+                "workflow-run-1",
+                HashMap::from([("runtime-node".to_string(), "1.2".to_string())]),
+            )
+            .unwrap();
+        workflow_ctx
+            .bind_current_node_identity("runtime-node")
+            .unwrap();
+
+        let output = stub
+            .execute_dynamic(
+                HashMap::from([("key".to_string(), serde_json::json!("value"))]),
+                workflow_ctx.inner(),
+            )
+            .await
+            .unwrap();
+        assert!(output["to_ai"]
+            .as_str()
+            .is_some_and(|message| message.contains("workflow identity received")));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_disabled_rpc_tool_rejects_workflow_context_before_transport() {
+        let endpoints = Arc::new(RpcEndpointRegistry::new());
+        endpoints
+            .insert(RpcEndpointInfo {
+                endpoint_id: "test".to_string(),
+                address: "127.0.0.1:1".to_string(),
+                timeout_ms: 100,
+            })
+            .unwrap();
+        let tools = Arc::new(RuntimeToolRegistry::new());
+        let mut tool = test_tool();
+        tool.workflow_enabled = false;
+        tools.insert(tool).unwrap();
+        let stub = RpcStubSystem::new("Probe", endpoints, tools, Arc::new(JsonLineRpcToolClient));
+        let ctx = Context::new(
+            Arc::new(InMemoryCache::new()),
+            Arc::new(InMemoryEventBus::new()),
+            Arc::new(NoopTelemetry),
+        );
+        ctx.set("workflow_run_id", "workflow-run-1").unwrap();
+        ctx.set("node_id", "1.2").unwrap();
+
+        let error = stub
+            .execute_dynamic(HashMap::new(), &ctx)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("workflow_enabled=false"));
     }
 
     #[tokio::test]
@@ -2192,6 +2322,7 @@ mod tests {
                 idempotent: true,
                 open_world: false,
                 secret: false,
+                workflow_enabled: None,
                 category: "debug".to_string(),
                 display_name: "Remote Probe".to_string(),
                 required_capabilities: vec![CAPABILITY_WORKSPACE_RESOLVE_PATH.to_string()],
@@ -2205,6 +2336,7 @@ mod tests {
         assert_eq!(tools[0].endpoint_id, "test");
         assert_eq!(tools[0].service, RPC_TOOL_SERVICE_V1);
         assert_eq!(tools[0].method, RPC_TOOL_EXECUTE_METHOD);
+        assert!(tools[0].workflow_enabled);
         assert_eq!(
             tools[0].parameters[0].default_value.as_deref(),
             Some("rpc:default")

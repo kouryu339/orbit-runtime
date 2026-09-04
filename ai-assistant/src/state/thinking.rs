@@ -899,6 +899,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 .as_ref()
                 .map(|provider| provider.strict_tool_schema)
                 .unwrap_or(false),
+            include_tool_outputs,
         )
         .map_err(corework::error::FrameworkError::InvalidOperation)?
     } else {
@@ -948,6 +949,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         Some(thinking_skill),
         frontend_widgets_enabled,
         tool_protocol,
+        include_tool_outputs,
     );
 
     #[cfg(debug_assertions)]

@@ -56,6 +56,8 @@ service AgentToolService {
 3. `outputs.name` 必须非空，同一工具内不得重复。
 4. `required_capabilities` 只能声明 v1 支持的能力。
 5. 已删除的 snapshot capability 声明必须被拒绝。
+6. `workflow_enabled` 默认是 `true`。设为 `false` 时工具仍可由 Agent 直接调用，
+   但不会进入工作流节点目录，脚本编译和工作流运行也必须拒绝它。
 
 ## 9.5 错误码
 
@@ -128,6 +130,9 @@ Corework 展开 AIOutput envelope，并把声明字段直接暴露为节点引�
 ```
 
 Workflow 脚本使用 `step.page_id` 和 `step.url`。`result_json` 不会产生 `Result` 引脚。
+
+只有 `workflow_enabled=true` 的工具使用上述投影。该字段缺失时 Runtime 按 `true`
+处理，以兼容旧版 Tool 服务。
 缺少任何已注册字段都属于非法输出，应让执行失败，不能静默生成 null 引脚。
 
 ## 9.7 Execute 流

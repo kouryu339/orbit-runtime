@@ -238,6 +238,7 @@ class _AgentToolService:
             idempotent=bool(metadata.get("idempotent", False)),
             open_world=bool(metadata.get("open_world", False)),
             secret=bool(metadata.get("secret", False)),
+            workflow_enabled=bool(metadata.get("workflow_enabled", True)),
             category=metadata.get("category", ""),
             display_name=metadata.get("display_name", ""),
             required_capabilities=list(metadata.get("required_capabilities", [])),

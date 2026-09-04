@@ -570,6 +570,7 @@ pub(super) fn install_retrieval_system_from_config(
             idempotent: true,
             open_world: false,
             secret: false,
+            workflow_enabled: false,
             required_capabilities: Vec::new(),
             endpoint_id: String::new(),
             service: "runtime.retrieval".to_string(),

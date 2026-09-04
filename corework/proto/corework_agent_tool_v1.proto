@@ -78,6 +78,9 @@ message ToolDescriptor {
   // Optional UX/workflow projection hints.
   string category = 20;
   string display_name = 21;
+  // Whether this tool may be used as a Workflow node. Runtime treats absence
+  // as true for compatibility with older Tool servers.
+  optional bool workflow_enabled = 22;
 
   // Host capability declarations. v1 supports:
   // - "workspace.resolve_path"

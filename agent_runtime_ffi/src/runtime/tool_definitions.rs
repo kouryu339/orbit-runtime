@@ -63,7 +63,8 @@ fn static_tool_definition(metadata: &corework::ai_system::AISystemMetadata) -> V
         "open_world": metadata.open_world,
         "secret": metadata.secret,
         "required_capabilities": [],
-        "workflow_node_capable": workflow_node.is_some(),
+        "workflow_enabled": metadata.workflow_enabled,
+        "workflow_node_capable": metadata.workflow_enabled && workflow_node.is_some(),
         "workflow_node": workflow_node,
         "transport": Value::Null
     })
@@ -109,7 +110,8 @@ fn runtime_tool_definition(metadata: &RuntimeToolMetadata) -> Value {
         "open_world": metadata.open_world,
         "secret": metadata.secret,
         "required_capabilities": metadata.required_capabilities,
-        "workflow_node_capable": true,
+        "workflow_enabled": metadata.workflow_enabled,
+        "workflow_node_capable": metadata.workflow_enabled,
         "workflow_node": workflow_node,
         "transport": transport
     })

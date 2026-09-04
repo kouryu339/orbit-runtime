@@ -70,6 +70,7 @@ public sealed class ToolDescriptor
     public bool Idempotent { get; set; }
     public bool OpenWorld { get; set; }
     public bool Secret { get; set; }
+    public bool WorkflowEnabled { get; set; } = true;
     public string Category { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public List<string> RequiredCapabilities { get; set; } = [];
@@ -349,6 +350,7 @@ public sealed class ToolApp
                 Idempotent = descriptor.Idempotent,
                 OpenWorld = descriptor.OpenWorld,
                 Secret = descriptor.Secret,
+                WorkflowEnabled = descriptor.WorkflowEnabled,
                 Category = descriptor.Category,
                 DisplayName = descriptor.DisplayName,
             };

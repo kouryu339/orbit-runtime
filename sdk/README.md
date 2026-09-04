@@ -79,11 +79,16 @@ RPC Tool SDK:
 corework/proto/corework_agent_tool_v1.proto
 ```
 
-The RPC Tool SDK source set in `v0.4.8-beta.1` is revision `0.1.1` for
+The RPC Tool SDK source set in `v0.4.8-beta.1` is revision `0.1.2` for
 versioned packages (Rust, Python, Node.js, C#, and Java). All supported
 language SDKs expose `workflow_id`, `workflow_run_id`, and `node_id` alongside
 the existing optional Agent-origin fields. Upgrade the SDK and protocol file
 together; temporary Script runs may intentionally leave `workflow_id` empty.
+
+RPC Tool descriptors also expose `workflow_enabled` (default `true`). Set it to
+`false` for Agent-only tools that must not appear in Workflow node catalogs or
+be accepted by scripted Workflow compilation/execution. Local tools use the
+same metadata field; the legacy `system_only` macro flag maps to `false`.
 
 Runtime Host SDK:
 

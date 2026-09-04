@@ -736,7 +736,9 @@ mod tests {
         let mgr = SkillManager::new_with_embedded_system("/tmp/skills");
 
         assert!(!mgr.system_skill_declares_tool("thinking", "executeWorkflowScript"));
+        assert!(!mgr.system_skill_declares_tool("thinking-fc", "executeWorkflowScript"));
         assert!(mgr.system_skill_declares_tool("thinking-pro", "executeWorkflowScript"));
+        assert!(mgr.system_skill_declares_tool("thinking-pro-fc", "executeWorkflowScript"));
     }
 
     #[tokio::test]

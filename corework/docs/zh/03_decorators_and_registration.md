@@ -170,16 +170,20 @@ pub struct ClickElement;
 - workflow `NodeMetadata`
 - workflow `NodeFactory`
 
-如果只希望生成系统，不生成节点：
+`workflow_enabled` 默认是 `true`。如果只希望生成系统、不生成节点，应显式关闭：
 
 ```rust
 #[define_operation(
     name = "InternalTool",
     description = "内部工具",
-    system_only,
+    workflow_enabled = false,
 )]
 pub struct InternalTool;
 ```
+
+旧的裸标志 `system_only` 继续兼容，等价于 `workflow_enabled = false`；新代码使用
+统一字段 `workflow_enabled`。该字段也会进入 AI 工具元数据，供 Runtime 的工具目录、
+脚本编译和提示词投影使用。
 
 工作流节点的 `display_name` 同时承担可读模板语义。Pure 节点使用单层花括号引用全部
 数据输入，例如 `{A}+{B}` 或 `{Value}是否包含{Pattern}`；控制节点使用
@@ -239,6 +243,7 @@ pub struct RuntimeToolMetadata {
     pub idempotent: bool,
     pub open_world: bool,
     pub secret: bool,
+    pub workflow_enabled: bool, // 默认 true；false 表示只能由 Agent 直接调用
     pub required_capabilities: Vec<String>,
     pub endpoint_id: String,
     pub service: String,

@@ -333,6 +333,7 @@ impl ChainCompiler {
         let mut compiler = Self::new();
         compiler.runtime_tools = runtime_tools
             .iter()
+            .filter(|tool| tool.workflow_enabled)
             .cloned()
             .map(|tool| (tool.name.clone(), tool))
             .collect();
