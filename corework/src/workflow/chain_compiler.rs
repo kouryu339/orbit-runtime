@@ -2974,7 +2974,20 @@ impl ChainCompiler {
 
         if !pure {
             // exec 输出前进
-            self.set_exec_prev(&node_id, "Then");
+            let output_pin = self
+                .nodes
+                .iter()
+                .find(|node| node.id == node_id)
+                .and_then(|node| {
+                    node.pins
+                        .iter()
+                        .find(|pin| pin.kind == "ExecOutput" && pin.name == "Then")
+                        .or_else(|| node.pins.iter().find(|pin| pin.kind == "ExecOutput"))
+                })
+                .map(|pin| pin.name.clone());
+            if let Some(output_pin) = output_pin {
+                self.set_exec_prev(&node_id, &output_pin);
+            }
         }
 
         // 步骤绑定：将 step_id 映射到 (node_id, first_data_output_pin)
@@ -3122,9 +3135,10 @@ impl ChainCompiler {
 
         self.wire_exec_to(&node_id, "In");
 
-        // Array 数据连线
-        let (arr_node, arr_pin) = self.compile_value(array)?;
-        self.add_connection(&arr_node, &arr_pin, &node_id, "Array", "Data");
+        // Literal arrays belong on the input pin, not on a synthetic source node.
+        let array_inputs = vec![("Array".to_string(), array.clone())];
+        self.wire_data_inputs(&node_id, &array_inputs)?;
+        self.set_literal_defaults(&node_id, &array_inputs)?;
 
         // $item / $index 是隐式固定变量，保存外层绑定（支持嵌套 ForEach/ForLoop）
         let saved_item = self.step_map.remove("item");
@@ -3645,6 +3659,12 @@ fn compile_chain_from_ast_with_compiler(
     bp.connections
         .extend(std::mem::take(&mut compiler.connections));
     annotate_source_refs(&mut bp, &chain.steps);
+    bp.validate_graph().map_err(|error| {
+        ChainError::new(
+            compiler.current_line,
+            format!("编译后的蓝图结构无效: {error}"),
+        )
+    })?;
     Ok(bp)
 }
 

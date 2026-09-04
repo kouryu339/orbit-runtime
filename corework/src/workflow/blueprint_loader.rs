@@ -880,13 +880,18 @@ impl BlueprintLoader {
             dt if dt.starts_with("Array<") || dt.starts_with("Vec<") => {
                 // 数组必须是JSON数组
                 if value.is_array() {
-                    let json_str = serde_json::to_string(value).map_err(|e| {
-                        FrameworkError::WorkflowError(format!("JSON序列化失败: {}", e))
-                    })?;
-                    Ok(DataValue::from_string(json_str))
+                    Ok(DataValue::new(dt, value.clone()))
                 } else if let Some(s) = value.as_str() {
                     // 或者是JSON字符串表示的数组
-                    Ok(DataValue::from_string(s.to_string()))
+                    let array: serde_json::Value = serde_json::from_str(s).map_err(|e| {
+                        FrameworkError::WorkflowError(format!("数组默认值解析失败: {e}"))
+                    })?;
+                    if !array.is_array() {
+                        return Err(FrameworkError::WorkflowError(
+                            "数组默认值必须是 JSON 数组".into(),
+                        ));
+                    }
+                    Ok(DataValue::new(dt, array))
                 } else {
                     Err(FrameworkError::WorkflowError(format!(
                         "无法将 {:?} 转换为数组类型 {}",

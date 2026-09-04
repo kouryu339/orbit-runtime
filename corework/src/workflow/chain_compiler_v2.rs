@@ -2595,6 +2595,66 @@ return result=$total
     }
 
     #[tokio::test]
+    async fn execute_foreach_literal_arrays() {
+        for (array, expected_count, expected_last) in [
+            (r#"["SKU-001","SKU-002","SKU-003"]"#, 3, "SKU-003"),
+            ("[]", 0, ""),
+        ] {
+            let script = format!(
+                "input\n$count = 0\n$last = \"\"\n1: FOR {array}\n1.1: setvar count = add($count, 1)\n1.2: setvar last = $item\nEND\nreturn count=$count last=$last"
+            );
+            let blueprint = compile_chain_v2(&script).unwrap();
+            blueprint.validate_graph().unwrap();
+            assert!(!blueprint
+                .connections
+                .iter()
+                .any(|c| c.source_node == "__literal__"));
+            let node = blueprint.nodes.iter().find(|n| n.id == "1").unwrap();
+            let pin = node.pins.iter().find(|p| p.name == "Array").unwrap();
+            assert_eq!(
+                pin.default_value,
+                Some(serde_json::from_str(array).unwrap())
+            );
+            let framework = FrameworkState::initialize().unwrap();
+            let ctx = framework.create_context();
+            let loaded = BlueprintLoader::new()
+                .load_from_blueprint_json(blueprint, &ctx)
+                .unwrap();
+            let mut exec_ctx = ExecutionContext::from_context(ctx);
+            exec_ctx.enable_trace("literal_array", loaded.compiled.source_map.clone());
+            loaded
+                .compiled
+                .initialize_defaults(&mut exec_ctx)
+                .await
+                .unwrap();
+            let outputs = loaded
+                .compiled
+                .executor()
+                .execute_with_params(&mut exec_ctx, HashMap::new())
+                .await
+                .unwrap();
+            assert_eq!(
+                outputs["count"].as_f64(),
+                Some(expected_count as f64),
+                "outputs={outputs:?}, trace={:?}",
+                exec_ctx.take_trace()
+            );
+            assert_eq!(outputs["last"].as_str(), Some(expected_last));
+        }
+    }
+
+    #[test]
+    fn graph_validation_rejects_missing_nodes_without_requiring_layout() {
+        let mut blueprint = compile_chain_v2("input\nreturn").unwrap();
+        blueprint.validate_graph().unwrap();
+        blueprint.connections[0].source_node = "__literal__".to_string();
+        assert!(blueprint
+            .validate_graph()
+            .unwrap_err()
+            .contains("__literal__"));
+    }
+
+    #[tokio::test]
     async fn execute_if_for_setvar_trace() {
         let mut blueprint = compile_chain_v2(
             r#"

@@ -584,6 +584,17 @@ impl BlueprintJson {
             }
         }
 
+        self.validate_graph()
+    }
+
+    /// Validate execution references without requiring editor layout to be finalized.
+    pub fn validate_graph(&self) -> Result<(), String> {
+        let mut node_ids = std::collections::HashSet::new();
+        for node in &self.nodes {
+            if !node_ids.insert(&node.id) {
+                return Err(format!("节点 ID 重复: {}", node.id));
+            }
+        }
         // 检查连接引用的节点存在
         let mut connection_ids = std::collections::HashSet::new();
         for conn in &self.connections {
