@@ -37,8 +37,9 @@ type RuntimeEvent struct {
 }
 
 type WorkflowEvent struct {
-	EventLine  string `json:"event_line"`
-	WorkflowID string `json:"workflow_id"`
+	EventLine     string `json:"event_line"`
+	WorkflowID    string `json:"workflow_id"`
+	WorkflowRunID string `json:"workflow_run_id"`
 }
 
 type LedgerDelta struct {

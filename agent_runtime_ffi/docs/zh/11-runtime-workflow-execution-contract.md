@@ -19,6 +19,9 @@ Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resourc
 | `workflow.convert.blueprint_to_script` | `blueprint` | 校验并反编译，不修改目录。 |
 | `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 执行 Registered；Draft 仅允许 `mode=test`。 |
 | `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 不注册，直接编译并执行临时脚本文本。 |
+| `workflow.describe_inputs` | `id` 或 `script` | 返回宿主生成输入表单所需的结构化参数元数据。 |
+| `workflow.start` | 无 | 创建一次执行通道并返回 `workflow_run_id`，但不执行工作流。 |
+| `workflow.run` | `workflow_run_id`, `id` 或 `script`, `mode?`, `inputs?`, `conversation_id?`, `agent_id?`, `turn_id?` | 在已经创建且已监听的执行通道上启动工作流；同一 ID 只能调用一次。 |
 
 目录命令要求 Runtime 已经 `start`。只有 Draft 可以创建；无效脚本可以作为草稿保存，
 但编译成功前不能提升为 Registered。提升时保持稳定 id。Draft 与 Registered 的 name
@@ -148,11 +151,41 @@ AI 工具入口 `executeWorkflow` 和 `executeWorkflowScript` 都声明为 `dest
 3. `workflow.node_completed` 或 `workflow.node_failed`
 4. `workflow.execution_completed`
 
-节点事件是增量而不是不断增长的完整 Trace，携带稳定 Blueprint `node_id`、显示/运行时
-`node_name`、`run_id`、运行内单调递增的 `sequence`、节点状态、实际 `output_pin`、耗时、
+节点事件是增量而不是不断增长的完整 Trace，携带稳定 Blueprint `node_id`、原始
+`display_name`、内部防重名 `node_name`、每次实际调用唯一的 `execution_id`、可选 `parent_execution_id`、`run_id`、运行内单调递增的 `sequence`、节点状态、实际 `output_pin`、耗时、
 源码引用和有界输入/结果预览。`workflow.execution_completed` 携带相同 `run_id` 及终态
 `sequence`。前端应以 `run_id` 隔离并发运行、以 `sequence` 排序，并以 `node_id` 关联画布；
 不要使用可重复的 `node_name` 作为画布主键。
+
+对普通工具节点，前端应把真实 `to_ai` 作为默认的“执行结果”正文；`result_preview` 只是
+输出引脚值的有界结构化摘要，供详情和诊断使用，不参与 DAG 传值，也不能在有 `to_ai` 时
+取代它。纯节点和控制节点没有 `to_ai` 时，前端再使用分支、循环事实或结果摘要组织展示。
+
+异步运行采用两阶段协议。宿主先调用 `workflow.start` 得到 `workflow_run_id`，再建立按该 ID
+过滤的事件监听，最后调用 `workflow.run`。因此 `workflow.run` 返回前产生首个事件也不会形成
+丢失窗口。`workflow.start` 的 `created` 只代表通道身份已经创建；`workflow.run` 的 `running`
+只代表执行已经派发，编译、输入校验或执行仍可能通过终态事件报告失败。同一 ID 是一次性的，
+重复调用 `workflow.run` 会失败。事件按 `(workflow_run_id, sequence)` 排序和去重。
+
+统一 Trace payload 使用 `agent-runtime-workflow-trace/v1`。节点事件的 `trace_type` 为
+`node.started`、`node.completed` 或 `node.failed`；IF 产生 `branch.selected`；循环产生
+`loop.started`、`loop.iteration.started`、`loop.iteration.completed`、可选失败事件及
+`loop.completed`。循环内同一 `node_id` 每次执行都有新的 `execution_id`，循环体节点以
+迭代身份作为 `parent_execution_id`。循环节点只有在实际循环体结束后才完成。
+
+Runtime 不保存 Trace 历史、执行详情或终态结果，只在执行期间保留小型控制记录，并在收到
+终态事件后释放。活动记录最多 128 个；仅调用 `workflow.start` 后长期不执行的记录会在
+10 分钟后惰性清理。宿主负责监听、持久化、补读接口和按 `execution_id` 建立索引。Core 到事件
+总线的转发队列有界；若队列溢出或关闭，本次运行以明确的 Trace 投递错误
+失败，并停在最后连续 `sequence`，不会静默丢弃中间事件后继续报告成功。
+End 节点最终结果通过终态事件发布，单结果上限 16 MiB；超过上限会以
+`WORKFLOW_RESULT_TOO_LARGE` 明确失败。宿主需要更小的事件载荷时，应由工具先把大数据保存到
+自己的存储并让工作流返回引用，而不能生成指向 Runtime 内存的伪 `result_ref`。
+
+输入元数据包含 `name`、`display_name`、`type`、`required`、`default`、`description`、
+`sensitive`、`element_type` 和 `format`。旧 Blueprint 缺少扩展字段时仍可读取：默认显示名
+取参数名，是否必填由是否存在默认值推导。`format=file` 是宿主 UI/传输提示，不自动扩大
+Runtime 基础数据类型，也不自动授予读取宿主文件系统的能力。
 
 这些事件都位于全局 `event_line: "workflow"`，涉及目录资源时
 携带 `workflow_id`，事件信封仍不携带 `conversation_id`，也不进入 Conversation

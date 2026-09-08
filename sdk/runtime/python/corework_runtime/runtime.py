@@ -19,6 +19,11 @@ LEDGER_DELTA_SCHEMA = "agent-runtime-ledger-delta/v1"
 STATE_DELTA_EVENT_TYPE = "conversation.state_delta"
 STATE_DELTA_SCHEMA = "agent-runtime-state-delta/v1"
 WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE = "workflow.resource_changed"
+WORKFLOW_EXECUTION_STARTED_EVENT_TYPE = "workflow.execution_started"
+WORKFLOW_NODE_STARTED_EVENT_TYPE = "workflow.node_started"
+WORKFLOW_NODE_COMPLETED_EVENT_TYPE = "workflow.node_completed"
+WORKFLOW_NODE_FAILED_EVENT_TYPE = "workflow.node_failed"
+WORKFLOW_TRACE_EVENT_TYPE = "workflow.trace_event"
 WORKFLOW_EXECUTION_COMPLETED_EVENT_TYPE = "workflow.execution_completed"
 PUBLIC_RUNTIME_EVENT_TYPES = frozenset(
     (
@@ -28,6 +33,11 @@ PUBLIC_RUNTIME_EVENT_TYPES = frozenset(
         STATE_DELTA_EVENT_TYPE,
         FRONTEND_STATE_SNAPSHOT_EVENT_TYPE,
         WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE,
+        WORKFLOW_EXECUTION_STARTED_EVENT_TYPE,
+        WORKFLOW_NODE_STARTED_EVENT_TYPE,
+        WORKFLOW_NODE_COMPLETED_EVENT_TYPE,
+        WORKFLOW_NODE_FAILED_EVENT_TYPE,
+        WORKFLOW_TRACE_EVENT_TYPE,
         WORKFLOW_EXECUTION_COMPLETED_EVENT_TYPE,
     )
 )
@@ -139,6 +149,22 @@ def workflow_id_from_event(event: Mapping[str, Any] | str) -> str | None:
     if event_line == "workflow" and isinstance(workflow_id, str) and workflow_id:
         return workflow_id
     return None
+
+
+def workflow_run_id_from_event(event: Mapping[str, Any] | str) -> str | None:
+    if not isinstance(event, Mapping):
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return None
+    workflow_run_id = payload.get("workflow_run_id", payload.get("run_id"))
+    return workflow_run_id if isinstance(workflow_run_id, str) and workflow_run_id else None
+
+
+def is_workflow_run_event(
+    event: Mapping[str, Any] | str, workflow_run_id: str
+) -> bool:
+    return bool(workflow_run_id) and workflow_run_id_from_event(event) == workflow_run_id
 
 
 def is_workflow_event(event: Mapping[str, Any] | str) -> bool:
@@ -744,6 +770,61 @@ class Runtime:
             },
         )
 
+    def start_workflow_run(self) -> Any:
+        return self.invoke("workflow.start", {})
+
+    def run_workflow(
+        self,
+        workflow_run_id: str,
+        workflow_id: str,
+        inputs: Mapping[str, Any] | None = None,
+    ) -> Any:
+        return self.invoke(
+            "workflow.run",
+            {
+                "workflow_run_id": workflow_run_id,
+                "id": workflow_id,
+                "inputs": dict(inputs or {}),
+            },
+        )
+
+    def run_workflow_draft_test(
+        self,
+        workflow_run_id: str,
+        workflow_id: str,
+        inputs: Mapping[str, Any] | None = None,
+    ) -> Any:
+        return self.invoke(
+            "workflow.run",
+            {
+                "workflow_run_id": workflow_run_id,
+                "id": workflow_id,
+                "mode": "test",
+                "inputs": dict(inputs or {}),
+            },
+        )
+
+    def run_workflow_script(
+        self,
+        workflow_run_id: str,
+        script: str,
+        inputs: Mapping[str, Any] | None = None,
+    ) -> Any:
+        return self.invoke(
+            "workflow.run",
+            {
+                "workflow_run_id": workflow_run_id,
+                "script": script,
+                "inputs": dict(inputs or {}),
+            },
+        )
+
+    def describe_workflow_inputs(self, workflow_id: str) -> Any:
+        return self.invoke("workflow.describe_inputs", {"id": workflow_id})
+
+    def describe_workflow_script_inputs(self, script: str) -> Any:
+        return self.invoke("workflow.describe_inputs", {"script": script})
+
     def register_llm_file(self, path: str | Path) -> Any:
         return self.invoke("runtime.register_llm", {"input": str(path)})
 
@@ -1015,6 +1096,14 @@ class RuntimeApp:
     ) -> RuntimeEventSubscription:
         return self.event_bus.subscribe(
             lambda event: workflow_id_from_event(event) == workflow_id,
+            maxsize=maxsize,
+        )
+
+    def subscribe_workflow_run(
+        self, workflow_run_id: str, *, maxsize: int = 1000
+    ) -> RuntimeEventSubscription:
+        return self.event_bus.subscribe(
+            lambda event: workflow_run_id_from_event(event) == workflow_run_id,
             maxsize=maxsize,
         )
 

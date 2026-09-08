@@ -12,10 +12,10 @@ mod registry;
 pub mod release;
 
 pub use events::{
-    conversation_id_from_event, is_public_runtime_event, is_workflow_event, RuntimeDiagnostic,
-    RuntimeDiagnosticLevel, RuntimeEventBus, RuntimeEventFilter, RuntimeEventPump,
-    RuntimeEventPumpHandle, RuntimeEventPumpOptions, RuntimeEventSubscription,
-    PUBLIC_RUNTIME_EVENT_TYPES,
+    conversation_id_from_event, is_public_runtime_event, is_workflow_event, is_workflow_run_event,
+    workflow_run_id_from_event, RuntimeDiagnostic, RuntimeDiagnosticLevel, RuntimeEventBus,
+    RuntimeEventFilter, RuntimeEventPump, RuntimeEventPumpHandle, RuntimeEventPumpOptions,
+    RuntimeEventSubscription, PUBLIC_RUNTIME_EVENT_TYPES,
 };
 pub use host::{
     normalize_llm_registration, read_llm_registration_path, RuntimeApp, RuntimeHostBuilder,
@@ -49,6 +49,7 @@ pub const WORKFLOW_EXECUTION_STARTED_EVENT_TYPE: &str = "workflow.execution_star
 pub const WORKFLOW_NODE_STARTED_EVENT_TYPE: &str = "workflow.node_started";
 pub const WORKFLOW_NODE_COMPLETED_EVENT_TYPE: &str = "workflow.node_completed";
 pub const WORKFLOW_NODE_FAILED_EVENT_TYPE: &str = "workflow.node_failed";
+pub const WORKFLOW_TRACE_EVENT_TYPE: &str = "workflow.trace_event";
 pub const WORKFLOW_EXECUTION_COMPLETED_EVENT_TYPE: &str = "workflow.execution_completed";
 
 pub type AgentRuntimeHandle = u64;
@@ -518,6 +519,54 @@ impl Runtime {
             "workflow.execute_script",
             json!({ "script": script, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
         )
+    }
+
+    pub fn start_workflow_run(&mut self) -> Result<Value> {
+        self.invoke("workflow.start", json!({}))
+    }
+
+    pub fn run_workflow(
+        &mut self,
+        workflow_run_id: &str,
+        id: &str,
+        inputs: Value,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.run",
+            json!({"workflow_run_id": workflow_run_id, "id": id, "inputs": inputs}),
+        )
+    }
+
+    pub fn run_workflow_draft_test(
+        &mut self,
+        workflow_run_id: &str,
+        id: &str,
+        inputs: Value,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.run",
+            json!({"workflow_run_id": workflow_run_id, "id": id, "mode": "test", "inputs": inputs}),
+        )
+    }
+
+    pub fn run_workflow_script(
+        &mut self,
+        workflow_run_id: &str,
+        script: &str,
+        inputs: Value,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.run",
+            json!({"workflow_run_id": workflow_run_id, "script": script, "inputs": inputs}),
+        )
+    }
+
+    pub fn describe_workflow_inputs(&mut self, id: &str) -> Result<Value> {
+        self.invoke("workflow.describe_inputs", json!({"id": id}))
+    }
+
+    pub fn describe_workflow_script_inputs(&mut self, script: &str) -> Result<Value> {
+        self.invoke("workflow.describe_inputs", json!({"script": script}))
     }
 
     pub fn register_llm(&mut self, registration: Value) -> Result<Value> {

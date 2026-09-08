@@ -50,6 +50,7 @@ pub const WORKFLOW_EXECUTION_STARTED_EVENT: &str = "workflow.execution_started";
 pub const WORKFLOW_NODE_STARTED_EVENT: &str = "workflow.node_started";
 pub const WORKFLOW_NODE_COMPLETED_EVENT: &str = "workflow.node_completed";
 pub const WORKFLOW_NODE_FAILED_EVENT: &str = "workflow.node_failed";
+pub const WORKFLOW_TRACE_EVENT: &str = "workflow.trace_event";
 pub const WORKFLOW_EXECUTION_COMPLETED_EVENT: &str = "workflow.execution_completed";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

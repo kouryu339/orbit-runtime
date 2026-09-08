@@ -13,6 +13,16 @@ impl corework::workflow::dynamic_node::DynamicExecute for WorkflowResultExpansio
         input: HashMap<String, Value>,
         _ctx: &corework::orchestration::Context,
     ) -> corework::error::Result<Value> {
+        if input.get("url").and_then(Value::as_str) == Some("https://slow.example") {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        if input.get("url").and_then(Value::as_str) == Some("https://business-error.example") {
+            return Ok(json!({
+                "result": {"page_id": null, "url": "https://business-error.example"},
+                "to_ai": "the page could not be opened",
+                "error_code": 42
+            }));
+        }
         Ok(json!({
             "result": {
                 "page_id": "page-ffi-42",
@@ -1320,6 +1330,95 @@ fn display_name_placeholders(display_name: &str) -> BTreeSet<&str> {
 #[test]
 fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     fn invoke(facade: &mut RuntimeFacade, command: &str, payload: Value) -> Value {
+        // Keep the older assertions below focused on Trace contents while the
+        // production API uses start -> subscribe -> run and keeps no Run journal.
+        if command == "workflow.run.start" {
+            let started = crate::invoke_command(
+                facade,
+                "workflow.start",
+                json!({}).as_object().unwrap(),
+                "workflow-sdk-test",
+            )
+            .unwrap();
+            let workflow_run_id = started["workflow_run_id"].as_str().unwrap();
+            let mut run_payload = payload;
+            run_payload["workflow_run_id"] = Value::String(workflow_run_id.to_string());
+            crate::invoke_command(
+                facade,
+                "workflow.run",
+                run_payload.as_object().unwrap(),
+                "workflow-sdk-test",
+            )
+            .unwrap();
+            let mut compatibility = started;
+            compatibility["status"] = Value::String("accepted".to_string());
+            return compatibility;
+        }
+        if command == "workflow.run.get"
+            || command == "workflow.run.read_events"
+            || command == "workflow.run.get_execution"
+        {
+            let workflow_run_id = payload["workflow_run_id"].as_str().unwrap();
+            let events = facade
+                .event_log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|event| event.get("payload"))
+                .filter(|event| event["workflow_run_id"].as_str() == Some(workflow_run_id))
+                .map(|event| {
+                    let mut event = event.clone();
+                    if let Some(trace_type) = event["trace_type"].as_str() {
+                        event["type"] = Value::String(trace_type.to_string());
+                    }
+                    event
+                })
+                .collect::<Vec<_>>();
+            if command == "workflow.run.read_events" {
+                return json!({"events": events});
+            }
+            if command == "workflow.run.get_execution" {
+                let execution_id = payload["execution_id"].as_str().unwrap();
+                let matches = events
+                    .into_iter()
+                    .filter(|event| {
+                        event.pointer("/node/execution_id").and_then(Value::as_str)
+                            == Some(execution_id)
+                            || event
+                                .pointer("/detail/execution_id")
+                                .and_then(Value::as_str)
+                                == Some(execution_id)
+                    })
+                    .collect::<Vec<_>>();
+                return json!({"execution_id": execution_id, "events": matches});
+            }
+            let last = events.last();
+            let terminal = last.is_some_and(|event| {
+                matches!(
+                    event["trace_type"].as_str(),
+                    Some("workflow.completed" | "workflow.failed")
+                )
+            });
+            let failed = last.is_some_and(|event| event["trace_type"] == "workflow.failed");
+            let mut status = json!({
+                "status": if failed { "failed" } else if terminal { "completed" } else { "running" },
+                "terminal": terminal,
+                "result": last.and_then(|event| event.get("result")).cloned(),
+                "error": last.and_then(|event| event.get("error")).cloned(),
+                "current_event_type": last.and_then(|event| event.get("trace_type")).cloned()
+            });
+            if failed {
+                status["current_node_id"] = last
+                    .and_then(|event| event.pointer("/error/node_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                status["current_execution_id"] = last
+                    .and_then(|event| event.pointer("/error/execution_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+            }
+            return status;
+        }
         crate::invoke_command(
             facade,
             command,
@@ -1505,6 +1604,18 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     let read_draft = invoke(&mut facade, "workflow.read", json!({"id": "echo-workflow"}));
     assert_eq!(read_draft["script"], "input name\nreturn result=$name");
     assert!(read_draft["blueprint"]["nodes"].is_array());
+    let described_inputs = invoke(
+        &mut facade,
+        "workflow.describe_inputs",
+        json!({"id": "echo-workflow"}),
+    );
+    assert_eq!(
+        described_inputs["schema"],
+        "agent-runtime-workflow-inputs/v1"
+    );
+    assert_eq!(described_inputs["inputs"][0]["name"], "name");
+    assert_eq!(described_inputs["inputs"][0]["display_name"], "name");
+    assert_eq!(described_inputs["inputs"][0]["required"], true);
     let converted = invoke(
         &mut facade,
         "workflow.convert.script_to_blueprint",
@@ -1711,6 +1822,409 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert_eq!(inline["result"]["outputs"]["result"], "Grace");
     assert!(inline["run_id"].is_string());
     assert!(inline["result"].get("node_trace").is_none());
+
+    let staged = invoke(&mut facade, "workflow.start", json!({}));
+    assert_eq!(staged["status"], "created", "{staged}");
+    let staged_run_id = staged["workflow_run_id"].as_str().unwrap().to_string();
+    assert!(!facade.event_log.lock().unwrap().iter().any(|event| {
+        event
+            .pointer("/payload/workflow_run_id")
+            .and_then(Value::as_str)
+            == Some(staged_run_id.as_str())
+    }));
+    let staged_run = invoke(
+        &mut facade,
+        "workflow.run",
+        json!({
+            "workflow_run_id": staged_run_id,
+            "script": "input name\nreturn result=$name",
+            "inputs": {"name": "Two phase"}
+        }),
+    );
+    assert_eq!(staged_run["status"], "running", "{staged_run}");
+    let duplicate = crate::invoke_command(
+        &mut facade,
+        "workflow.run",
+        json!({
+            "workflow_run_id": staged_run_id,
+            "script": "input name\nreturn result=$name",
+            "inputs": {"name": "Must not run twice"}
+        })
+        .as_object()
+        .unwrap(),
+        "workflow-sdk-test",
+    );
+    assert!(duplicate.is_err());
+
+    let async_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "input name\nreturn result=$name",
+            "inputs": {"name": "Streaming Grace"}
+        }),
+    );
+    assert_eq!(async_start["status"], "accepted", "{async_start}");
+    let async_run_id = async_start["workflow_run_id"].as_str().unwrap().to_string();
+    assert_ne!(async_run_id, staged_run_id);
+    let mut async_status = Value::Null;
+    for _ in 0..100 {
+        async_status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": async_run_id}),
+        );
+        if async_status["terminal"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(async_status["status"], "completed", "{async_status}");
+    assert_eq!(async_status["result"]["result"], "Streaming Grace");
+    assert_eq!(async_status["current_event_type"], "workflow.completed");
+    assert!(async_status.get("current_node_id").is_none());
+    assert!(async_status.get("current_execution_id").is_none());
+    let async_events = invoke(
+        &mut facade,
+        "workflow.run.read_events",
+        json!({"workflow_run_id": async_run_id, "after_sequence": 0, "limit": 100}),
+    );
+    let events = async_events["events"].as_array().unwrap();
+    assert!(!events.is_empty(), "{async_events}");
+    assert_eq!(events.first().unwrap()["type"], "workflow.started");
+    assert_eq!(
+        events.first().unwrap()["inputs_summary"]["name"],
+        "Streaming Grace"
+    );
+    assert_eq!(events.last().unwrap()["type"], "workflow.completed");
+    assert!(events.windows(2).all(|pair| {
+        pair[0]["sequence"].as_u64().unwrap() < pair[1]["sequence"].as_u64().unwrap()
+    }));
+    assert!(events.iter().any(|event| {
+        event["type"] == "node.completed"
+            && event["node"]["execution_id"].is_string()
+            && event["node"]["started_at"].is_string()
+            && event["node"]["finished_at"].is_string()
+    }));
+    let completed_execution_id = events
+        .iter()
+        .find(|event| event["type"] == "node.completed")
+        .and_then(|event| event.pointer("/node/execution_id"))
+        .and_then(Value::as_str)
+        .unwrap();
+    let execution_detail = invoke(
+        &mut facade,
+        "workflow.run.get_execution",
+        json!({
+            "workflow_run_id": async_run_id,
+            "execution_id": completed_execution_id
+        }),
+    );
+    assert_eq!(execution_detail["execution_id"], completed_execution_id);
+    assert!(!execution_detail["events"].as_array().unwrap().is_empty());
+
+    let large_value = "x".repeat(70 * 1024);
+    let large_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "input value\nreturn result=$value",
+            "inputs": {"value": large_value}
+        }),
+    );
+    let large_run_id = large_start["workflow_run_id"].as_str().unwrap().to_string();
+    let mut large_status = Value::Null;
+    for _ in 0..100 {
+        large_status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": large_run_id}),
+        );
+        if large_status["terminal"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(large_status["status"], "completed", "{large_status}");
+    assert_eq!(
+        large_status["result"]["result"].as_str().unwrap().len(),
+        70 * 1024
+    );
+    let large_events = invoke(
+        &mut facade,
+        "workflow.run.read_events",
+        json!({"workflow_run_id": large_run_id, "after_sequence": 0, "limit": 100}),
+    );
+    let large_terminal = large_events["events"].as_array().unwrap().last().unwrap();
+    assert_eq!(large_terminal["type"], "workflow.completed");
+    assert_eq!(
+        large_terminal["result"]["result"].as_str().unwrap().len(),
+        70 * 1024
+    );
+    assert!(large_terminal.get("result_ref").is_none());
+
+    let branch_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "INPUT\n$result = 0\n1: IF gt(3, 0)\n    1.1.1: setvar result = 1\n1.0: ELSE\n    1.0.1: setvar result = 2\nEND\nRETURN result=$result",
+            "inputs": {}
+        }),
+    );
+    let branch_run_id = branch_start["workflow_run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut branch_status = Value::Null;
+    for _ in 0..100 {
+        branch_status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": branch_run_id}),
+        );
+        if branch_status["terminal"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(branch_status["status"], "completed", "{branch_status}");
+    let branch_events = invoke(
+        &mut facade,
+        "workflow.run.read_events",
+        json!({"workflow_run_id": branch_run_id, "after_sequence": 0, "limit": 100}),
+    );
+    assert!(
+        branch_events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["type"] == "branch.selected"
+                    && event["detail"]["selected_pin"] == "True"
+                    && event["detail"]["condition_value"] == true
+            }),
+        "{branch_events}"
+    );
+
+    let loop_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "INPUT\n$result = \"\"\n1: FOR [\"A\",\"B\"]\n    1.1: setvar result = $item\nEND\nRETURN result=$result",
+            "inputs": {}
+        }),
+    );
+    let loop_run_id = loop_start["workflow_run_id"].as_str().unwrap().to_string();
+    let mut loop_status = Value::Null;
+    for _ in 0..100 {
+        loop_status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": loop_run_id}),
+        );
+        if loop_status["terminal"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(loop_status["status"], "completed", "{loop_status}");
+    let loop_events = invoke(
+        &mut facade,
+        "workflow.run.read_events",
+        json!({"workflow_run_id": loop_run_id, "after_sequence": 0, "limit": 100}),
+    );
+    let loop_events = loop_events["events"].as_array().unwrap();
+    assert_eq!(
+        loop_events
+            .iter()
+            .filter(|event| event["type"] == "loop.iteration.started")
+            .count(),
+        2
+    );
+    let body_execution_ids = loop_events
+        .iter()
+        .filter(|event| {
+            event["type"] == "node.started" && event["node"]["parent_execution_id"].is_string()
+        })
+        .filter_map(|event| event.pointer("/node/execution_id").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(body_execution_ids.len(), 2, "{loop_events:?}");
+
+    let nested_loop_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "INPUT groups:Array<Any>\n$result = \"\"\n1: FOR input.groups\n    1.1: FOR $item\n        1.1.1: setvar result = $item\n    END\nEND\nRETURN result=$result",
+            "inputs": {"groups": [["A", "B"], ["C"]]}
+        }),
+    );
+    let nested_loop_run_id = nested_loop_start["workflow_run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut nested_loop_status = Value::Null;
+    for _ in 0..100 {
+        nested_loop_status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": nested_loop_run_id}),
+        );
+        if nested_loop_status["terminal"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        nested_loop_status["status"], "completed",
+        "{nested_loop_status}"
+    );
+    let nested_loop_events = invoke(
+        &mut facade,
+        "workflow.run.read_events",
+        json!({"workflow_run_id": nested_loop_run_id, "after_sequence": 0, "limit": 200}),
+    );
+    let nested_loop_events = nested_loop_events["events"].as_array().unwrap();
+    let outer_iteration_ids = nested_loop_events
+        .iter()
+        .filter(|event| {
+            event["type"] == "loop.iteration.started" && event["detail"]["node_id"] == "1"
+        })
+        .filter_map(|event| {
+            event
+                .pointer("/detail/iteration_execution_id")
+                .and_then(Value::as_str)
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(outer_iteration_ids.len(), 2, "{nested_loop_events:?}");
+    let inner_loop_nodes = nested_loop_events
+        .iter()
+        .filter(|event| event["type"] == "node.started" && event["node"]["node_id"] == "1.1")
+        .collect::<Vec<_>>();
+    assert_eq!(inner_loop_nodes.len(), 2, "{nested_loop_events:?}");
+    assert!(inner_loop_nodes.iter().all(|event| {
+        event
+            .pointer("/node/parent_execution_id")
+            .and_then(Value::as_str)
+            .is_some_and(|parent| outer_iteration_ids.contains(parent))
+    }));
+    let inner_iteration_ids = nested_loop_events
+        .iter()
+        .filter(|event| {
+            event["type"] == "loop.iteration.started" && event["detail"]["node_id"] == "1.1"
+        })
+        .filter_map(|event| {
+            event
+                .pointer("/detail/iteration_execution_id")
+                .and_then(Value::as_str)
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(inner_iteration_ids.len(), 3, "{nested_loop_events:?}");
+    assert!(nested_loop_events
+        .iter()
+        .filter(|event| event["type"] == "node.started" && event["node"]["node_id"] == "1.1.1")
+        .all(|event| {
+            event
+                .pointer("/node/parent_execution_id")
+                .and_then(Value::as_str)
+                .is_some_and(|parent| inner_iteration_ids.contains(parent))
+        }));
+
+    let slow_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "INPUT\n1: EXEC BrowserOpenPageWorkflowTest --url \"https://slow.example\"\nRETURN page_id=1.page_id",
+            "inputs": {}
+        }),
+    );
+    let slow_run_id = slow_start["workflow_run_id"].as_str().unwrap().to_string();
+    let mut observed_in_flight_node = false;
+    for _ in 0..100 {
+        let status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": slow_run_id}),
+        );
+        let page = invoke(
+            &mut facade,
+            "workflow.run.read_events",
+            json!({"workflow_run_id": slow_run_id, "after_sequence": 0, "limit": 100}),
+        );
+        if status["terminal"] == false
+            && page["events"]
+                .as_array()
+                .is_some_and(|events| events.iter().any(|event| event["type"] == "node.started"))
+        {
+            observed_in_flight_node = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        observed_in_flight_node,
+        "expected a node event before terminal state"
+    );
+    let mut slow_terminal = false;
+    for _ in 0..100 {
+        let status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": slow_run_id}),
+        );
+        if status["terminal"] == true {
+            assert_eq!(status["status"], "completed", "{status}");
+            slow_terminal = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(slow_terminal, "slow workflow did not reach terminal state");
+
+    let business_failure_start = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "INPUT\n1: EXEC BrowserOpenPageWorkflowTest --url \"https://business-error.example\"\nRETURN page_id=1.page_id",
+            "inputs": {}
+        }),
+    );
+    let business_failure_run_id = business_failure_start["workflow_run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut business_failure_status = Value::Null;
+    for _ in 0..100 {
+        business_failure_status = invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id": business_failure_run_id}),
+        );
+        if business_failure_status["terminal"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        business_failure_status["status"], "failed",
+        "{business_failure_status}"
+    );
+    assert!(business_failure_status["error"]["node_id"].is_string());
+    assert!(business_failure_status["error"]["execution_id"].is_string());
+    let business_failure_events = invoke(
+        &mut facade,
+        "workflow.run.read_events",
+        json!({"workflow_run_id": business_failure_run_id, "after_sequence": 0, "limit": 100}),
+    );
+    let business_failure_events = business_failure_events["events"].as_array().unwrap();
+    assert!(business_failure_events.iter().any(|event| {
+        event["type"] == "node.failed"
+            && event["node"]["error_code"] == 42
+            && event["node"]["to_ai"] == "the page could not be opened"
+    }));
+    assert_eq!(
+        business_failure_events.last().unwrap()["type"],
+        "workflow.failed"
+    );
 
     let branched = invoke(
         &mut facade,

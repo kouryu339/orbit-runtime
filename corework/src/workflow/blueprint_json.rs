@@ -110,7 +110,7 @@ pub struct BlueprintMetadata {
 /// 引脚元数据 - 用于蓝图元数据中描述输入/输出参数
 ///
 /// 这是简化版本，只包含设计时需要的信息，不包含运行时字段
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PinMetadata {
     /// 引脚名称
     pub name: String,
@@ -125,6 +125,30 @@ pub struct PinMetadata {
     /// 默认值 (对于输入引脚)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<JsonValue>,
+
+    /// Optional user-facing label used by host-generated forms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
+    /// Explicit requiredness. When omitted, callers may derive it from the
+    /// absence of a default value for compatibility with older blueprints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+
+    /// Sensitive values are redacted before workflow trace persistence.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sensitive: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_type: Option<String>,
+
+    /// UI/transport hint such as `file`; it does not change the core value type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// 节点引脚 - 完整的运行时引脚定义

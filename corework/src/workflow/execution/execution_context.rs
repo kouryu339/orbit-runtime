@@ -57,6 +57,9 @@ pub struct ExecutionContext {
 
     /// Runtime node name -> stable Blueprint node id for the active workflow run.
     workflow_node_ids: HashMap<String, String>,
+
+    /// Dynamic control-flow parents (branch, loop iteration, nested scopes).
+    trace_scope_stack: Vec<String>,
 }
 
 impl ExecutionContext {
@@ -71,6 +74,7 @@ impl ExecutionContext {
             trace_recorder: None,
             workflow_variables: HashSet::new(),
             workflow_node_ids: HashMap::new(),
+            trace_scope_stack: Vec::new(),
         }
     }
 
@@ -285,6 +289,12 @@ impl ExecutionContext {
         Ok(())
     }
 
+    pub fn workflow_node_id(&self, runtime_node_name: &str) -> Option<&str> {
+        self.workflow_node_ids
+            .get(runtime_node_name)
+            .map(String::as_str)
+    }
+
     /// 获取 SystemRegistry
     pub fn registry(&self) -> Arc<crate::system::SystemRegistry> {
         // registry 字段已私有化，但 Context 提供了访问方法
@@ -401,14 +411,32 @@ impl ExecutionContext {
         workflow_name: impl Into<String>,
         source_map: HashMap<String, WorkflowSourceRef>,
         node_ids: HashMap<String, String>,
-        event_sender: tokio::sync::mpsc::UnboundedSender<
-            crate::workflow::execution::WorkflowTraceEvent,
-        >,
+        event_sender: tokio::sync::mpsc::Sender<crate::workflow::execution::WorkflowTraceEvent>,
     ) -> String {
-        self.workflow_trace.clear();
-        let recorder = WorkflowTraceRecorder::new_with_events(
+        self.enable_trace_with_events_for_run(
             workflow_id,
             workflow_name,
+            crate::workflow::execution::trace::new_workflow_run_id(),
+            source_map,
+            node_ids,
+            event_sender,
+        )
+    }
+
+    pub fn enable_trace_with_events_for_run(
+        &mut self,
+        workflow_id: impl Into<String>,
+        workflow_name: impl Into<String>,
+        run_id: impl Into<String>,
+        source_map: HashMap<String, WorkflowSourceRef>,
+        node_ids: HashMap<String, String>,
+        event_sender: tokio::sync::mpsc::Sender<crate::workflow::execution::WorkflowTraceEvent>,
+    ) -> String {
+        self.workflow_trace.clear();
+        let recorder = WorkflowTraceRecorder::new_with_run_id(
+            workflow_id,
+            workflow_name,
+            run_id,
             source_map,
             node_ids,
             Some(event_sender),
@@ -424,21 +452,37 @@ impl ExecutionContext {
             .map(WorkflowTraceRecorder::finish)
     }
 
-    pub fn trace_begin_node(&mut self, node_name: impl Into<String>, node_type: impl Into<String>) {
+    pub fn trace_begin_node(
+        &mut self,
+        node_name: impl Into<String>,
+        node_type: impl Into<String>,
+    ) -> Option<String> {
+        let parent = self.trace_scope_stack.last().cloned();
+        self.trace_recorder
+            .as_mut()
+            .map(|recorder| recorder.begin_node(node_name, node_type, parent))
+    }
+
+    pub fn trace_finish_node(&mut self, execution_id: &str, output_pin: Option<String>) {
         if let Some(recorder) = self.trace_recorder.as_mut() {
-            recorder.begin_node(node_name, node_type);
+            recorder.finish_node(execution_id, output_pin);
         }
     }
 
-    pub fn trace_finish_node(&mut self, node_name: &str, output_pin: Option<String>) {
+    pub fn trace_fail_node(&mut self, execution_id: &str, error: impl Into<String>) {
         if let Some(recorder) = self.trace_recorder.as_mut() {
-            recorder.finish_node(node_name, output_pin);
+            recorder.fail_node(execution_id, error);
         }
     }
 
-    pub fn trace_fail_node(&mut self, node_name: &str, error: impl Into<String>) {
-        if let Some(recorder) = self.trace_recorder.as_mut() {
-            recorder.fail_node(node_name, error);
+    pub fn trace_fail_current_node(&mut self, error: impl Into<String>) {
+        let execution_id = self
+            .trace_recorder
+            .as_ref()
+            .and_then(WorkflowTraceRecorder::current_execution_id)
+            .map(str::to_string);
+        if let Some(execution_id) = execution_id {
+            self.trace_fail_node(&execution_id, error);
         }
     }
 
@@ -455,12 +499,34 @@ impl ExecutionContext {
 
     pub fn trace_record_node_values(
         &mut self,
-        node_name: &str,
+        execution_id: &str,
         input_preview: Option<JsonValue>,
         result_preview: Option<JsonValue>,
     ) {
         if let Some(recorder) = self.trace_recorder.as_mut() {
-            recorder.record_node_values(node_name, input_preview, result_preview);
+            recorder.record_node_values(execution_id, input_preview, result_preview);
+        }
+    }
+
+    pub fn trace_emit_control(&mut self, event_type: &str, detail: JsonValue) {
+        if let Some(recorder) = self.trace_recorder.as_mut() {
+            recorder.emit_control_event(event_type, detail);
+        }
+    }
+
+    pub fn trace_push_scope(&mut self, execution_id: String) {
+        self.trace_scope_stack.push(execution_id);
+    }
+
+    pub fn trace_pop_scope(&mut self, execution_id: &str) {
+        if self
+            .trace_scope_stack
+            .last()
+            .is_some_and(|id| id == execution_id)
+        {
+            self.trace_scope_stack.pop();
+        } else {
+            self.trace_scope_stack.retain(|id| id != execution_id);
         }
     }
 
@@ -726,6 +792,7 @@ impl Clone for ExecutionContext {
             trace_recorder: None,
             workflow_variables: self.workflow_variables.clone(),
             workflow_node_ids: self.workflow_node_ids.clone(),
+            trace_scope_stack: Vec::new(),
         }
     }
 }

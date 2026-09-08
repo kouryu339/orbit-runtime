@@ -225,6 +225,13 @@ impl RuntimeApp {
         self.inner.event_bus.subscribe_workflow(workflow_id)
     }
 
+    pub fn subscribe_workflow_run(
+        &self,
+        workflow_run_id: impl Into<String>,
+    ) -> RuntimeEventSubscription {
+        self.inner.event_bus.subscribe_workflow_run(workflow_run_id)
+    }
+
     pub fn version(&self) -> Result<String> {
         Ok(self.lock_runtime()?.version().to_string())
     }
@@ -359,6 +366,49 @@ impl RuntimeApp {
             "workflow.execute_script",
             json!({ "script": script, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
         )
+    }
+
+    pub fn start_workflow_run(&self) -> Result<Value> {
+        self.invoke("workflow.start", json!({}))
+    }
+
+    pub fn run_workflow(&self, workflow_run_id: &str, id: &str, inputs: Value) -> Result<Value> {
+        self.invoke(
+            "workflow.run",
+            json!({"workflow_run_id": workflow_run_id, "id": id, "inputs": inputs}),
+        )
+    }
+
+    pub fn run_workflow_draft_test(
+        &self,
+        workflow_run_id: &str,
+        id: &str,
+        inputs: Value,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.run",
+            json!({"workflow_run_id": workflow_run_id, "id": id, "mode": "test", "inputs": inputs}),
+        )
+    }
+
+    pub fn run_workflow_script(
+        &self,
+        workflow_run_id: &str,
+        script: &str,
+        inputs: Value,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.run",
+            json!({"workflow_run_id": workflow_run_id, "script": script, "inputs": inputs}),
+        )
+    }
+
+    pub fn describe_workflow_inputs(&self, id: &str) -> Result<Value> {
+        self.invoke("workflow.describe_inputs", json!({"id": id}))
+    }
+
+    pub fn describe_workflow_script_inputs(&self, script: &str) -> Result<Value> {
+        self.invoke("workflow.describe_inputs", json!({"script": script}))
     }
 
     pub fn invoke(&self, command_type: &str, payload: Value) -> Result<Value> {

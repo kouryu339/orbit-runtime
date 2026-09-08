@@ -19,6 +19,9 @@ after `start`; workflow resources are the intentional mutable exception.
 | `workflow.convert.blueprint_to_script` | `blueprint` | Validate and decompile without changing the catalog. |
 | `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Execute Registered, or Draft with `mode=test`. |
 | `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Compile and execute temporary text without registration. |
+| `workflow.describe_inputs` | `id` or `script` | Return structured input metadata for host-generated forms. |
+| `workflow.start` | none | Create an execution channel and return `workflow_run_id` without running a workflow. |
+| `workflow.run` | `workflow_run_id`, `id` or `script`, `mode?`, `inputs?`, optional caller identity | Start work on a previously created and observed channel; each id is one-shot. |
 
 Catalog commands require a started Runtime. Only Draft can be created. A Draft
 may preserve invalid script for editing, but it cannot be promoted until
@@ -180,12 +183,47 @@ it emits the following ordered lifecycle:
 4. `workflow.execution_completed`
 
 Node events are bounded deltas rather than an ever-growing trace. They carry a
-stable Blueprint `node_id`, display/runtime `node_name`, `run_id`, a run-local
+stable Blueprint `node_id`, the original `display_name`, an internal
+collision-safe `node_name`, a per-invocation
+`execution_id`, an optional `parent_execution_id`, `run_id`, a run-local
 monotonic `sequence`, node status, selected `output_pin`, duration, source
 reference, and bounded input/result previews. The completion event carries the
 same `run_id` and terminal `sequence`. Frontends must isolate concurrent runs by
 `run_id`, order deltas by `sequence`, and address canvas nodes by `node_id`, not
 by the potentially duplicated `node_name`.
+
+For an ordinary tool node, the frontend should render the tool's real `to_ai`
+as the default execution-result text. `result_preview` is only a bounded,
+structured summary of output-pin values for details and diagnostics; it neither
+transfers DAG data nor replaces an available `to_ai`. Pure and control nodes may
+fall back to control-flow facts or result previews when no `to_ai` exists.
+
+Asynchronous execution is two-phase. The host calls `workflow.start`, subscribes
+to events filtered by the returned `workflow_run_id`, and only then calls
+`workflow.run`. This removes the first-event race even when execution emits before
+`workflow.run` returns. `created` means only that the identity exists; `running`
+means dispatch succeeded, while compilation, validation, or execution may still
+fail through a terminal event. Each id is one-shot. Hosts order and deduplicate
+events by `(workflow_run_id, sequence)`.
+
+Control-flow facts use `workflow.trace_event`: `branch.selected`, `loop.started`,
+`loop.iteration.started`, `loop.iteration.completed`, optional iteration failure,
+and `loop.completed`. Repeated execution of the same static node receives a fresh
+`execution_id`; loop-body nodes use the iteration identity as their parent. The
+loop node completes only after its actual body execution finishes.
+
+Runtime stores no Trace history, execution details, or terminal results. It keeps
+only a small active control record and releases it after the terminal event. At
+most 128 records may be active; a channel that was created but never run expires
+lazily after ten minutes. The host owns event persistence, replay APIs, and
+indexes by `execution_id`.
+The Core-to-event-bus forwarding queue is bounded as well. Queue overflow or
+closure fails the run with an explicit Trace-delivery error at the last contiguous
+sequence instead of silently dropping events and reporting success.
+The End-node result is published in the terminal event with a 16 MiB limit.
+Exceeding it fails explicitly with `WORKFLOW_RESULT_TOO_LARGE`. For smaller event
+payloads, tools should persist large data themselves and return a durable reference;
+Runtime must not manufacture a reference to an in-memory result store.
 
 All workflow events use the global `event_line: "workflow"` and carry
 `workflow_id` when a catalog resource is

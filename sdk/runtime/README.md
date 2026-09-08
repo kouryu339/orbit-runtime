@@ -200,6 +200,13 @@ workflow. Names are unique across both kinds.
 | `workflow.convert.blueprint_to_script` | Validate and decompile Blueprint JSON without catalog mutation. |
 | `workflow.execute` | Execute Registered by id; Draft requires explicit `mode=test`. |
 | `workflow.execute_script` | Compile and execute temporary workflow script text without registration. |
+| `workflow.describe_inputs` | Read structured input metadata for host-generated forms. |
+| `workflow.start` | Create a one-shot execution channel and return its `workflow_run_id` without running work. |
+| `workflow.run` | Start a registered, draft-test, or temporary-script workflow on that pre-observed channel. |
+
+For asynchronous execution, call `workflow.start`, subscribe by the returned
+`workflow_run_id`, and then call `workflow.run`. Runtime emits ordered Trace
+events but does not retain their history; host applications own persistence and replay.
 
 Only Draft can be created. Create and update require exactly one source
 representation: `script` or `blueprint`. When that representation is valid,
@@ -288,7 +295,7 @@ healthy:
   snapshot mirrors;
 - `conversation:created` and `conversation:closed` for lifecycle routing.
 - `workflow.resource_changed`, `workflow.execution_started`,
-  `workflow.node_started`, `workflow.node_completed`, `workflow.node_failed`,
+  `workflow.node_started`, `workflow.node_completed`, `workflow.node_failed`, `workflow.trace_event`,
   and `workflow.execution_completed` for workflow catalog and ordered execution audit.
 
 LLM usage/error facts are carried by `conversation.ledger_delta` records with

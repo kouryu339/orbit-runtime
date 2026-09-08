@@ -235,6 +235,14 @@ impl WorkflowsModule {
         self.unit.create_context()
     }
 
+    fn create_run_context(&self) -> corework::orchestration::Context {
+        let mut ctx = self.create_context();
+        // Node pins and variables belong to one execution, not the module cache.
+        ctx.cache = Arc::new(crate::cache::InMemoryCache::new());
+        ctx.cache_scope_id = None;
+        ctx
+    }
+
     // =========================================================================
     // 启动扫描：本地目录 → 自动注册
     // =========================================================================
@@ -581,6 +589,22 @@ impl WorkflowsModule {
         inputs: HashMap<String, JsonValue>,
         execution_context: &WorkflowExecutionContext,
     ) -> Result<WorkflowExecutionOutcome> {
+        self.execute_registered_outcome_with_context_and_run_id(
+            selector,
+            inputs,
+            execution_context,
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_registered_outcome_with_context_and_run_id(
+        &self,
+        selector: &str,
+        inputs: HashMap<String, JsonValue>,
+        execution_context: &WorkflowExecutionContext,
+        workflow_run_id: Option<String>,
+    ) -> Result<WorkflowExecutionOutcome> {
         let selector = selector.trim();
         if selector.is_empty() {
             return Err(FrameworkError::InvalidOperation(
@@ -603,8 +627,13 @@ impl WorkflowsModule {
             })?;
         let blueprint = BlueprintJson::from_workflow_file(&entry.file_path)
             .map_err(FrameworkError::SystemError)?;
-        self.execute_from_blueprint_outcome_with_context(blueprint, inputs, execution_context)
-            .await
+        self.execute_from_blueprint_outcome_with_context_and_run_id(
+            blueprint,
+            inputs,
+            execution_context,
+            workflow_run_id,
+        )
+        .await
     }
 
     /// 从文件加载并执行工作流（即用即弃）。
@@ -642,7 +671,7 @@ impl WorkflowsModule {
         let workflow_name = blueprint.metadata.name.clone();
         tracing::debug!(workflow_name = %workflow_name, "inline workflow execution started");
         let t = std::time::Instant::now();
-        let ctx = self.create_context();
+        let ctx = self.create_run_context();
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         let run_id = crate::workflow::execution::trace::new_workflow_run_id();
@@ -678,7 +707,7 @@ impl WorkflowsModule {
         let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
         tracing::debug!(workflow_name = %workflow_name, "inline workflow report started");
-        let ctx = self.create_context();
+        let ctx = self.create_run_context();
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         let run_id = if trace_enabled {
@@ -721,19 +750,37 @@ impl WorkflowsModule {
         inputs: HashMap<String, JsonValue>,
         execution_context: &WorkflowExecutionContext,
     ) -> Result<WorkflowExecutionOutcome> {
+        self.execute_from_blueprint_outcome_with_context_and_run_id(
+            blueprint,
+            inputs,
+            execution_context,
+            None,
+        )
+        .await
+    }
+
+    pub async fn execute_from_blueprint_outcome_with_context_and_run_id(
+        &self,
+        blueprint: BlueprintJson,
+        inputs: HashMap<String, JsonValue>,
+        execution_context: &WorkflowExecutionContext,
+        workflow_run_id: Option<String>,
+    ) -> Result<WorkflowExecutionOutcome> {
+        let inputs_summary = workflow_inputs_summary(&inputs, &blueprint.metadata.inputs);
         let workflow_inputs = inputs
             .into_iter()
             .map(|(key, value)| (key, DataValue::new("JsonValue", value)))
             .collect();
         let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
-        let ctx = execution_context.apply_to(self.create_context())?;
+        let ctx = execution_context.apply_to(self.create_run_context())?;
         let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
-        let (trace_event_tx, mut trace_event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let run_id = exec_ctx.enable_trace_with_events(
+        let (trace_event_tx, mut trace_event_rx) = tokio::sync::mpsc::channel(1024);
+        let run_id = exec_ctx.enable_trace_with_events_for_run(
             workflow_id.clone(),
             workflow_name.clone(),
+            workflow_run_id.unwrap_or_else(crate::workflow::execution::trace::new_workflow_run_id),
             loaded.compiled.source_map.clone(),
             loaded.compiled.node_ids.clone(),
             trace_event_tx,
@@ -746,11 +793,15 @@ impl WorkflowsModule {
         self.publish_event(
             crate::workflow::workflows::WORKFLOW_EXECUTION_STARTED_EVENT,
             serde_json::json!({
-                "schema": "agent-runtime-workflow-execution/v1",
+                "schema": "agent-runtime-workflow-trace/v1",
+                "trace_type": "workflow.started",
                 "workflow_id": workflow_id,
                 "workflow_name": workflow_name,
+                "workflow_run_id": run_id,
                 "run_id": run_id,
-                "sequence": 0
+                "sequence": 1,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "inputs_summary": inputs_summary
             }),
         )
         .await;
@@ -763,12 +814,14 @@ impl WorkflowsModule {
         });
 
         if let Err(error) = loaded.compiled.initialize_defaults(&mut exec_ctx).await {
+            let execution_error = error.to_string();
+            let trace = exec_ctx.take_trace();
             let outcome = WorkflowExecutionOutcome {
                 report: WorkflowExecutionReport {
                     outputs: HashMap::new(),
-                    trace: exec_ctx.take_trace(),
+                    trace,
                 },
-                error: Some(error.to_string()),
+                error: Some(execution_error),
             };
             let _ = trace_forwarder.await;
             return Ok(outcome);
@@ -781,17 +834,40 @@ impl WorkflowsModule {
             .await;
         let trace = exec_ctx.take_trace();
         let _ = trace_forwarder.await;
+        let trace_delivery_error = trace.as_ref().and_then(|trace| trace.event_error.clone());
+        let trace_node_error = trace.as_ref().and_then(|trace| {
+            trace
+                .nodes
+                .iter()
+                .rev()
+                .find(|node| matches!(node.status, WorkflowNodeStatus::Failed))
+                .map(|node| {
+                    node.error.clone().unwrap_or_else(|| {
+                        format!("workflow node '{}' reported failure", node.display_name)
+                    })
+                })
+        });
+        let trace_error = match (trace_node_error, trace_delivery_error) {
+            (Some(node_error), Some(delivery_error)) => {
+                Some(format!("{node_error}; {delivery_error}"))
+            }
+            (Some(error), None) | (None, Some(error)) => Some(error),
+            (None, None) => None,
+        };
         match execution {
             Ok(outputs) => Ok(WorkflowExecutionOutcome {
                 report: WorkflowExecutionReport { outputs, trace },
-                error: None,
+                error: trace_error,
             }),
             Err(error) => Ok(WorkflowExecutionOutcome {
                 report: WorkflowExecutionReport {
                     outputs: HashMap::new(),
                     trace,
                 },
-                error: Some(error.to_string()),
+                error: Some(match trace_error {
+                    Some(trace_error) => format!("{error}; {trace_error}"),
+                    None => error.to_string(),
+                }),
             }),
         }
     }
@@ -1059,37 +1135,76 @@ async fn publish_trace_event(
     workflow_id: &str,
     event: WorkflowTraceEvent,
 ) {
-    let (event_type, status) = match event.node.status {
-        WorkflowNodeStatus::Started => (
+    let (event_type, status) = match event.node.as_ref().map(|node| node.status) {
+        Some(WorkflowNodeStatus::Started) => (
             crate::workflow::workflows::WORKFLOW_NODE_STARTED_EVENT,
             "started",
         ),
-        WorkflowNodeStatus::Failed => (
+        Some(WorkflowNodeStatus::Failed) => (
             crate::workflow::workflows::WORKFLOW_NODE_FAILED_EVENT,
             "failed",
         ),
-        WorkflowNodeStatus::Succeeded | WorkflowNodeStatus::Skipped => (
+        Some(WorkflowNodeStatus::Succeeded) | Some(WorkflowNodeStatus::Skipped) => (
             crate::workflow::workflows::WORKFLOW_NODE_COMPLETED_EVENT,
-            if matches!(event.node.status, WorkflowNodeStatus::Skipped) {
+            if event
+                .node
+                .as_ref()
+                .is_some_and(|node| matches!(node.status, WorkflowNodeStatus::Skipped))
+            {
                 "skipped"
             } else {
                 "succeeded"
             },
         ),
+        None => (crate::workflow::workflows::WORKFLOW_TRACE_EVENT, "running"),
     };
     let payload = serde_json::json!({
-        "schema": "agent-runtime-workflow-node/v1",
+        "schema": "agent-runtime-workflow-trace/v1",
         "event_line": "workflow",
         "workflow_id": workflow_id,
         "workflow_name": event.workflow_name,
+        "workflow_run_id": event.run_id,
         "run_id": event.run_id,
         "sequence": event.sequence,
+        "timestamp": event.timestamp,
+        "trace_type": event.event_type,
         "status": status,
-        "node": event.node
+        "node": event.node,
+        "detail": event.detail
     });
     let _ = event_bus
         .publish(corework::event::BaseEvent::new(event_type, payload))
         .await;
+}
+
+fn workflow_inputs_summary(
+    inputs: &HashMap<String, JsonValue>,
+    metadata: &[crate::workflow::blueprint_json::PinMetadata],
+) -> JsonValue {
+    let mut keys = inputs.keys().collect::<Vec<_>>();
+    keys.sort();
+    let mut summary = serde_json::Map::new();
+    for key in keys {
+        let value = &inputs[key];
+        let pin = metadata.iter().find(|pin| pin.name == *key);
+        let summarized = if pin.is_some_and(|pin| pin.sensitive) {
+            JsonValue::String("<redacted>".to_string())
+        } else if pin.is_some_and(|pin| {
+            pin.format.as_deref() == Some("file")
+                || pin.data_type == "File"
+                || pin.element_type.as_deref() == Some("File")
+                || pin.data_type == "Array<File>"
+        }) {
+            match value.as_array() {
+                Some(files) => serde_json::json!({"kind": "files", "count": files.len()}),
+                None => serde_json::json!({"kind": "file", "present": !value.is_null()}),
+            }
+        } else {
+            value.clone()
+        };
+        summary.insert(key.clone(), summarized);
+    }
+    crate::workflow::execution::trace::bounded_json_preview(JsonValue::Object(summary))
 }
 
 #[cfg(test)]
@@ -1141,5 +1256,40 @@ mod execution_context_tests {
         assert!(incomplete
             .apply_to(base_context(Arc::new(InMemoryCache::new())))
             .is_err());
+    }
+
+    #[test]
+    fn workflow_input_summary_redacts_declared_secrets_and_file_values() {
+        let inputs = HashMap::from([
+            (
+                "password_alias".to_string(),
+                serde_json::json!("not-visible"),
+            ),
+            (
+                "attachments".to_string(),
+                serde_json::json!(["C:/private/a.txt", "C:/private/b.txt"]),
+            ),
+            ("title".to_string(), serde_json::json!("visible")),
+        ]);
+        let metadata = vec![
+            crate::workflow::blueprint_json::PinMetadata {
+                name: "password_alias".to_string(),
+                data_type: "String".to_string(),
+                sensitive: true,
+                ..Default::default()
+            },
+            crate::workflow::blueprint_json::PinMetadata {
+                name: "attachments".to_string(),
+                data_type: "Array<File>".to_string(),
+                element_type: Some("File".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        let summary = workflow_inputs_summary(&inputs, &metadata);
+        assert_eq!(summary["password_alias"], "<redacted>");
+        assert_eq!(summary["attachments"]["count"], 2);
+        assert_eq!(summary["title"], "visible");
+        assert!(!summary.to_string().contains("private"));
     }
 }

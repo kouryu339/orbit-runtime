@@ -6,6 +6,11 @@ const ConversationCreatedEventType = "conversation:created"
 const ConversationClosedEventType = "conversation:closed"
 const FrontendStateSnapshotEventType = "frontend:state_snapshot"
 const WorkflowResourceChangedEventType = "workflow.resource_changed"
+const WorkflowExecutionStartedEventType = "workflow.execution_started"
+const WorkflowNodeStartedEventType = "workflow.node_started"
+const WorkflowNodeCompletedEventType = "workflow.node_completed"
+const WorkflowNodeFailedEventType = "workflow.node_failed"
+const WorkflowTraceEventType = "workflow.trace_event"
 const WorkflowExecutionCompletedEventType = "workflow.execution_completed"
 
 func IsPublicRuntimeEvent(event json.RawMessage) bool {
@@ -20,6 +25,11 @@ func IsPublicRuntimeEvent(event json.RawMessage) bool {
 		StateDeltaEventType,
 		FrontendStateSnapshotEventType,
 		WorkflowResourceChangedEventType,
+		WorkflowExecutionStartedEventType,
+		WorkflowNodeStartedEventType,
+		WorkflowNodeCompletedEventType,
+		WorkflowNodeFailedEventType,
+		WorkflowTraceEventType,
 		WorkflowExecutionCompletedEventType:
 		return true
 	default:
@@ -42,6 +52,28 @@ func ConversationIDFromEvent(event json.RawMessage) string {
 		return ""
 	}
 	return payload.ConversationID
+}
+
+func WorkflowRunIDFromEvent(event json.RawMessage) string {
+	var envelope RuntimeEvent
+	if err := json.Unmarshal(event, &envelope); err != nil {
+		return ""
+	}
+	var payload struct {
+		WorkflowRunID string `json:"workflow_run_id"`
+		RunID         string `json:"run_id"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return ""
+	}
+	if payload.WorkflowRunID != "" {
+		return payload.WorkflowRunID
+	}
+	return payload.RunID
+}
+
+func IsWorkflowRunEvent(event json.RawMessage, workflowRunID string) bool {
+	return workflowRunID != "" && WorkflowRunIDFromEvent(event) == workflowRunID
 }
 
 type ConversationPosition string

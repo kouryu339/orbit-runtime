@@ -39,6 +39,11 @@ constexpr const char* kConversationCreatedEventType = "conversation:created";
 constexpr const char* kConversationClosedEventType = "conversation:closed";
 constexpr const char* kFrontendStateSnapshotEventType = "frontend:state_snapshot";
 constexpr const char* kWorkflowResourceChangedEventType = "workflow.resource_changed";
+constexpr const char* kWorkflowExecutionStartedEventType = "workflow.execution_started";
+constexpr const char* kWorkflowNodeStartedEventType = "workflow.node_started";
+constexpr const char* kWorkflowNodeCompletedEventType = "workflow.node_completed";
+constexpr const char* kWorkflowNodeFailedEventType = "workflow.node_failed";
+constexpr const char* kWorkflowTraceEventType = "workflow.trace_event";
 constexpr const char* kWorkflowExecutionCompletedEventType = "workflow.execution_completed";
 
 using AgentRuntimeHandle = uint64_t;
@@ -351,6 +356,11 @@ inline bool is_public_runtime_event(const RuntimeEvent& event)
         || event.type == kStateDeltaEventType
         || event.type == kFrontendStateSnapshotEventType
         || event.type == kWorkflowResourceChangedEventType
+        || event.type == kWorkflowExecutionStartedEventType
+        || event.type == kWorkflowNodeStartedEventType
+        || event.type == kWorkflowNodeCompletedEventType
+        || event.type == kWorkflowNodeFailedEventType
+        || event.type == kWorkflowTraceEventType
         || event.type == kWorkflowExecutionCompletedEventType;
 }
 
@@ -373,6 +383,22 @@ inline std::string workflow_id_from_event(const RuntimeEvent& event)
     return is_workflow_event(event)
         ? detail::find_string_field(event.payload_json, "workflow_id")
         : std::string();
+}
+
+inline std::string workflow_run_id_from_event(const RuntimeEvent& event)
+{
+    auto workflow_run_id = detail::find_string_field(event.payload_json, "workflow_run_id");
+    return workflow_run_id.empty()
+        ? detail::find_string_field(event.payload_json, "run_id")
+        : workflow_run_id;
+}
+
+inline bool is_workflow_run_event(
+    const RuntimeEvent& event,
+    const std::string& workflow_run_id)
+{
+    return !workflow_run_id.empty()
+        && workflow_run_id_from_event(event) == workflow_run_id;
 }
 
 enum class ConversationPosition {
@@ -764,6 +790,61 @@ public:
                 + ",\"trace\":" + (trace ? "true" : "false")
                 + ",\"conversation_id\":" + detail::quote(conversation_id)
                 + ",\"agent_id\":" + detail::quote(agent_id) + "}");
+    }
+
+    std::string start_workflow_run()
+    {
+        return invoke("workflow.start", "{}");
+    }
+
+    std::string run_workflow(
+        const std::string& workflow_run_id,
+        const std::string& id,
+        const std::string& inputs_json = "{}")
+    {
+        return invoke(
+            "workflow.run",
+            std::string("{\"workflow_run_id\":") + detail::quote(workflow_run_id)
+                + ",\"id\":" + detail::quote(id)
+                + ",\"inputs\":" + object_or_empty(inputs_json) + "}");
+    }
+
+    std::string run_workflow_draft_test(
+        const std::string& workflow_run_id,
+        const std::string& id,
+        const std::string& inputs_json = "{}")
+    {
+        return invoke(
+            "workflow.run",
+            std::string("{\"workflow_run_id\":") + detail::quote(workflow_run_id)
+                + ",\"id\":" + detail::quote(id)
+                + ",\"mode\":\"test\",\"inputs\":" + object_or_empty(inputs_json) + "}");
+    }
+
+    std::string run_workflow_script(
+        const std::string& workflow_run_id,
+        const std::string& script,
+        const std::string& inputs_json = "{}")
+    {
+        return invoke(
+            "workflow.run",
+            std::string("{\"workflow_run_id\":") + detail::quote(workflow_run_id)
+                + ",\"script\":" + detail::quote(script)
+                + ",\"inputs\":" + object_or_empty(inputs_json) + "}");
+    }
+
+    std::string describe_workflow_inputs(const std::string& id)
+    {
+        return invoke(
+            "workflow.describe_inputs",
+            std::string("{\"id\":") + detail::quote(id) + "}");
+    }
+
+    std::string describe_workflow_script_inputs(const std::string& script)
+    {
+        return invoke(
+            "workflow.describe_inputs",
+            std::string("{\"script\":") + detail::quote(script) + "}");
     }
 
     void register_llm_path(const std::string& path)

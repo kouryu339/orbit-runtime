@@ -29,12 +29,17 @@ conversation event buses + global workflow projector -> Runtime export -> handle
 ```
 
 `conversation_id` 与 `conversation_event_seq` 只属于 Conversation 事件。全局 Workflow
-事件使用 `event_line: "workflow"`，并在 payload 中携带 `workflow_id`；它不会被绑定到
-Conversation。二者可以共用同一个 pull queue，但语义事件线与聚合根保持分离。
+事件使用 `event_line: "workflow"`，并在 payload 中携带 `workflow_run_id`；持久化资源还会
+携带 `workflow_id`，临时 Script 允许没有该字段。Workflow 事件不会被绑定到 Conversation。
+二者可以共用同一个 pull queue，但语义事件线与聚合根保持分离。
 
-两个 sequence 只在当前 Runtime 实例内辅助排序，不是跨进程持久 cursor。event queue
+Envelope 的两个 sequence 只在当前 Runtime 实例内辅助排序，不是跨进程持久 cursor。event queue
 是消费式队列；TIMEOUT 不是错误事件。宿主需要重放、全局 cursor、SSE heartbeat、
 鉴权或 fan-out 时，在取出 JSON 后自行实现。
+
+Workflow Trace 另外在 payload 中使用运行内 `sequence`。宿主按 `workflow_run_id` 监听并
+持久化后，可自行提供补读接口；该序号不能和全局 `event_seq` 或
+`conversation_event_seq` 混用。Runtime 不保存 Trace 历史。
 
 ## 5.2 事件出口
 

@@ -380,13 +380,10 @@ impl DynamicSystemNode {
                             error_code,
                             message
                         );
-                        ctx.trace_fail_node(
-                            &self.name,
-                            format!(
-                                "{} returned error_code={}: {}",
-                                self.system_name, error_code, message
-                            ),
-                        );
+                        ctx.trace_fail_current_node(format!(
+                            "{} returned error_code={}: {}",
+                            self.system_name, error_code, message
+                        ));
                         return Ok(NodeOutput::ExecPin("Error".to_string()));
                     }
                     return Err(FrameworkError::SystemError(format!(

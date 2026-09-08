@@ -11,7 +11,7 @@ pub use catalog::{
     WorkflowResourceKind, WorkflowResourceSummary, WorkflowResourceView, WorkflowValidation,
     WORKFLOW_EXECUTION_COMPLETED_EVENT, WORKFLOW_EXECUTION_STARTED_EVENT,
     WORKFLOW_NODE_COMPLETED_EVENT, WORKFLOW_NODE_FAILED_EVENT, WORKFLOW_NODE_STARTED_EVENT,
-    WORKFLOW_RESOURCE_CHANGED_EVENT,
+    WORKFLOW_RESOURCE_CHANGED_EVENT, WORKFLOW_TRACE_EVENT,
 };
 pub use executor::{WorkflowExecutionContext, WorkflowsModule};
 

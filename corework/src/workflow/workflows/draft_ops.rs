@@ -1931,6 +1931,7 @@ impl SystemOperation for DraftDeclareInputSystem {
             data_type: input.data_type,
             description: input.comment.unwrap_or_default(),
             default_value: None,
+            ..PinMetadata::default()
         });
         draft.blueprint.update_modified_time();
         write_draft_with_undo(ctx, &draft)?;
@@ -1982,6 +1983,7 @@ impl SystemOperation for DraftDeclareReturnSystem {
             data_type: input.data_type,
             description: input.comment.unwrap_or_default(),
             default_value: None,
+            ..PinMetadata::default()
         });
         draft.blueprint.update_modified_time();
         write_draft_with_undo(ctx, &draft)?;

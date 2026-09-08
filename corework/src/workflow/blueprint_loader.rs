@@ -124,6 +124,7 @@ impl BlueprintLoader {
 
         // 节点 ID -> 节点类型映射（用于连接时引脚权限验证）
         let mut node_id_to_type: HashMap<String, String> = HashMap::new();
+        let mut used_runtime_names = HashSet::new();
 
         // 存储每个节点的 split pin 映射：(node_id, pin_name) -> { full_pin_name -> cache_key }
         let split_pin_mappings: HashMap<(String, String), HashMap<String, String>> = HashMap::new();
@@ -143,12 +144,14 @@ impl BlueprintLoader {
 
         // 添加 Start 节点
         let _start_name = if let Some(start) = start_node {
-            let name = start
+            let preferred_name = start
                 .display_name
                 .as_ref()
                 .filter(|s| !s.is_empty()) // 过滤空字符串
                 .map(|s| s.as_str())
                 .unwrap_or("Start");
+            let name =
+                Self::unique_runtime_name(preferred_name, &start.id, &mut used_runtime_names);
             tracing::debug!("🎬 添加StartNode: '{}' (id: {})", name, start.id);
 
             // 从 pins 构建 output mappings（DataOutput引脚）
@@ -164,9 +167,9 @@ impl BlueprintLoader {
                 .collect();
 
             if output_mappings.is_empty() {
-                builder = builder.add_start(name);
+                builder = builder.add_start(&name);
             } else {
-                builder = builder.add_start_with_outputs(name, output_mappings);
+                builder = builder.add_start_with_outputs(&name, output_mappings);
             }
 
             node_id_to_name.insert(start.id.clone(), name.to_string());
@@ -180,12 +183,13 @@ impl BlueprintLoader {
 
         // 添加 End 节点
         let _end_name = if let Some(end) = end_node {
-            let name = end
+            let preferred_name = end
                 .display_name
                 .as_ref()
                 .filter(|s| !s.is_empty()) // 过滤空字符串
                 .map(|s| s.as_str())
                 .unwrap_or("End");
+            let name = Self::unique_runtime_name(preferred_name, &end.id, &mut used_runtime_names);
 
             // 从 pins 构建 PinMapping
             let input_mappings: Vec<PinMapping> = end
@@ -199,9 +203,9 @@ impl BlueprintLoader {
                 .collect();
 
             if input_mappings.is_empty() {
-                builder = builder.add_end(name);
+                builder = builder.add_end(&name);
             } else {
-                builder = builder.add_end_with_inputs(name, input_mappings);
+                builder = builder.add_end_with_inputs(&name, input_mappings);
             }
 
             node_id_to_name.insert(end.id.clone(), name.to_string());
@@ -214,8 +218,24 @@ impl BlueprintLoader {
 
         // 第二步：添加其他节点
         for node_json in other_nodes {
-            let node_name =
-                self.add_node_to_builder(&mut builder, node_json, &blueprint_json, ctx)?;
+            let preferred_name = node_json
+                .display_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    let id_prefix = &node_json.id[..std::cmp::min(8, node_json.id.len())];
+                    format!("{}_{}", node_json.node_type, id_prefix)
+                });
+            let runtime_name =
+                Self::unique_runtime_name(&preferred_name, &node_json.id, &mut used_runtime_names);
+            let node_name = self.add_node_to_builder(
+                &mut builder,
+                node_json,
+                &blueprint_json,
+                ctx,
+                runtime_name,
+            )?;
             tracing::debug!(
                 "🔧 添加节点: '{}' (id: {}, type: {})",
                 node_name,
@@ -614,18 +634,8 @@ impl BlueprintLoader {
         node_json: &BlueprintNodeJson,
         blueprint_json: &BlueprintJson,
         ctx: &crate::orchestration::Context,
+        node_name: String,
     ) -> Result<String> {
-        // 节点名称（用于连接）- 先于注册表检查计算，以便错误信息中包含可读名称
-        let node_name = node_json
-            .display_name
-            .as_ref()
-            .filter(|s| !s.is_empty()) // 过滤空字符串
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                let id_prefix = &node_json.id[..std::cmp::min(8, node_json.id.len())];
-                format!("{}_{}", node_json.node_type, id_prefix)
-            });
-
         // 查找节点元数据（同时作存在性验证）
         let node_meta = if let Some(node_meta) = NodeRegistry::get(&node_json.node_type) {
             node_meta
@@ -714,6 +724,19 @@ impl BlueprintLoader {
             "不支持的节点 '{}' (类型: {})",
             node_name, node_json.node_type
         )))
+    }
+
+    fn unique_runtime_name(
+        preferred_name: &str,
+        node_id: &str,
+        used_names: &mut HashSet<String>,
+    ) -> String {
+        if used_names.insert(preferred_name.to_string()) {
+            return preferred_name.to_string();
+        }
+        let candidate = format!("{preferred_name} [runtime:{node_id}]");
+        used_names.insert(candidate.clone());
+        candidate
     }
 
     fn get_var_node_variable_name(

@@ -307,6 +307,7 @@ mod tests {
             data_type: "json".into(),
             description: "最终产物".into(),
             default_value: None,
+            ..PinMetadata::default()
         });
         let snap = render_snapshot(&d, 2);
         assert!(snap.text.contains("returns:"));
@@ -323,6 +324,7 @@ mod tests {
             data_type: "string".into(),
             description: String::new(),
             default_value: None,
+            ..PinMetadata::default()
         });
         let snap = render_snapshot(&d, 1);
         // 应该有 "#" 占位（不带文本）
@@ -386,12 +388,14 @@ mod tests {
             data_type: "string".into(),
             description: String::new(),
             default_value: None,
+            ..PinMetadata::default()
         });
         d.blueprint.metadata.inputs.push(PinMetadata {
             name: "long_name".into(),
             data_type: "int".into(),
             description: String::new(),
             default_value: None,
+            ..PinMetadata::default()
         });
         let snap = render_snapshot(&d, 1);
         // 两行应该对齐：冒号位置一致
@@ -410,18 +414,21 @@ mod tests {
             data_type: "string".into(),
             description: "用户ID".into(),
             default_value: None,
+            ..PinMetadata::default()
         });
         d.blueprint.metadata.inputs.push(PinMetadata {
             name: "task".into(),
             data_type: "string".into(),
             description: String::new(),
             default_value: None,
+            ..PinMetadata::default()
         });
         d.blueprint.metadata.outputs.push(PinMetadata {
             name: "result".into(),
             data_type: "json".into(),
             description: "最终产物".into(),
             default_value: None,
+            ..PinMetadata::default()
         });
         d.blueprint.variables.push(BlueprintVariable {
             name: "counter".into(),

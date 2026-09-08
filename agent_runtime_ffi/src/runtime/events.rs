@@ -5,6 +5,7 @@ pub(super) async fn install_event_forwarders(
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     projector: Arc<HostEventProjector>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
+    workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
     agent_test_event_tx: mpsc::UnboundedSender<Value>,
 ) -> Result<(), RuntimeError> {
     for event_type in forwarded_runtime_event_types() {
@@ -12,6 +13,7 @@ pub(super) async fn install_event_forwarders(
             event_sender: Arc::clone(&event_sender),
             projector: Arc::clone(&projector),
             event_log: Arc::clone(&event_log),
+            workflow_runs: Arc::clone(&workflow_runs),
             agent_test_event_tx: agent_test_event_tx.clone(),
         });
         event_bus
@@ -23,7 +25,7 @@ pub(super) async fn install_event_forwarders(
     Ok(())
 }
 
-fn forwarded_runtime_event_types() -> [&'static str; 11] {
+fn forwarded_runtime_event_types() -> [&'static str; 12] {
     [
         ai_assistant::events::types::FRONTEND_STATE_SNAPSHOT,
         ai_assistant::events::types::CONVERSATION_LEDGER_DELTA,
@@ -35,6 +37,7 @@ fn forwarded_runtime_event_types() -> [&'static str; 11] {
         WORKFLOW_NODE_STARTED_EVENT,
         WORKFLOW_NODE_COMPLETED_EVENT,
         WORKFLOW_NODE_FAILED_EVENT,
+        WORKFLOW_TRACE_EVENT,
         WORKFLOW_EXECUTION_COMPLETED_EVENT,
     ]
 }
@@ -43,6 +46,7 @@ struct RuntimeEventForwarder {
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     projector: Arc<HostEventProjector>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
+    workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
     agent_test_event_tx: mpsc::UnboundedSender<Value>,
 }
 
@@ -63,6 +67,9 @@ impl EventHandler for RuntimeEventForwarder {
             while event_log.len() > 512 {
                 event_log.pop_front();
             }
+        }
+        if let Ok(mut workflow_runs) = self.workflow_runs.lock() {
+            workflow_runs.finish_from_envelope(&envelope);
         }
         let _ = self.agent_test_event_tx.send(envelope.clone());
         if is_internal_studio_event(&envelope) {

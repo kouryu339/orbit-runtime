@@ -10,7 +10,7 @@ use crate::{
     LEDGER_DELTA_EVENT_TYPE, STATE_DELTA_EVENT_TYPE, WORKFLOW_EXECUTION_COMPLETED_EVENT_TYPE,
     WORKFLOW_EXECUTION_STARTED_EVENT_TYPE, WORKFLOW_NODE_COMPLETED_EVENT_TYPE,
     WORKFLOW_NODE_FAILED_EVENT_TYPE, WORKFLOW_NODE_STARTED_EVENT_TYPE,
-    WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE,
+    WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE, WORKFLOW_TRACE_EVENT_TYPE,
 };
 
 pub const PUBLIC_RUNTIME_EVENT_TYPES: &[&str] = &[
@@ -24,6 +24,7 @@ pub const PUBLIC_RUNTIME_EVENT_TYPES: &[&str] = &[
     WORKFLOW_NODE_STARTED_EVENT_TYPE,
     WORKFLOW_NODE_COMPLETED_EVENT_TYPE,
     WORKFLOW_NODE_FAILED_EVENT_TYPE,
+    WORKFLOW_TRACE_EVENT_TYPE,
     WORKFLOW_EXECUTION_COMPLETED_EVENT_TYPE,
 ];
 
@@ -46,6 +47,7 @@ pub enum RuntimeEventFilter {
     AllPublic,
     Conversation(String),
     Workflow(String),
+    WorkflowRun(String),
     EventType(String),
 }
 
@@ -62,6 +64,9 @@ impl RuntimeEventFilter {
             Self::Workflow(workflow_id) => {
                 is_workflow_event(event)
                     && workflow_id_from_event(event).as_deref() == Some(workflow_id.as_str())
+            }
+            Self::WorkflowRun(workflow_run_id) => {
+                workflow_run_id_from_event(event).as_deref() == Some(workflow_run_id.as_str())
             }
             Self::EventType(event_type) => {
                 event.get("type").and_then(Value::as_str) == Some(event_type.as_str())
@@ -133,6 +138,13 @@ impl RuntimeEventBus {
 
     pub fn subscribe_workflow(&self, workflow_id: impl Into<String>) -> RuntimeEventSubscription {
         self.subscribe(RuntimeEventFilter::Workflow(workflow_id.into()))
+    }
+
+    pub fn subscribe_workflow_run(
+        &self,
+        workflow_run_id: impl Into<String>,
+    ) -> RuntimeEventSubscription {
+        self.subscribe(RuntimeEventFilter::WorkflowRun(workflow_run_id.into()))
     }
 
     pub fn publish(&self, event: Value) -> usize {
@@ -338,6 +350,20 @@ pub fn workflow_id_from_event(event: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+pub fn workflow_run_id_from_event(event: &Value) -> Option<String> {
+    event
+        .pointer("/payload/workflow_run_id")
+        .or_else(|| event.pointer("/payload/run_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+pub fn is_workflow_run_event(event: &Value, workflow_run_id: &str) -> bool {
+    !workflow_run_id.is_empty()
+        && workflow_run_id_from_event(event).as_deref() == Some(workflow_run_id)
+}
+
 pub fn is_workflow_event(event: &Value) -> bool {
     event
         .get("event_line")
@@ -452,6 +478,24 @@ mod tests {
         assert_eq!(
             conversation.try_recv().unwrap()["conversation_id"],
             "conv_1"
+        );
+    }
+
+    #[test]
+    fn workflow_run_subscription_matches_only_its_run() {
+        let bus = RuntimeEventBus::new();
+        let run = bus.subscribe_workflow_run("run-1");
+        assert_eq!(
+            bus.publish(json!({
+                "type": "workflow.trace_event",
+                "event_line": "workflow",
+                "payload": {"workflow_run_id": "run-1", "trace_type": "node.started"}
+            })),
+            1
+        );
+        assert_eq!(
+            workflow_run_id_from_event(&run.try_recv().unwrap()).as_deref(),
+            Some("run-1")
         );
     }
 }

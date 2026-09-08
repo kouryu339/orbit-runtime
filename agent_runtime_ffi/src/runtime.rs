@@ -57,6 +57,7 @@ mod rpc;
 mod tool_definitions;
 mod workflow_node_definitions;
 mod workflow_operations;
+mod workflow_runs;
 
 pub(crate) use workflow_node_definitions::workflow_node_definition_values;
 
@@ -101,6 +102,7 @@ const WORKFLOW_EXECUTION_STARTED_EVENT: &str = "workflow.execution_started";
 const WORKFLOW_NODE_STARTED_EVENT: &str = "workflow.node_started";
 const WORKFLOW_NODE_COMPLETED_EVENT: &str = "workflow.node_completed";
 const WORKFLOW_NODE_FAILED_EVENT: &str = "workflow.node_failed";
+const WORKFLOW_TRACE_EVENT: &str = "workflow.trace_event";
 const WORKFLOW_EXECUTION_COMPLETED_EVENT: &str = "workflow.execution_completed";
 
 #[derive(Debug, thiserror::Error)]
@@ -231,6 +233,7 @@ pub struct RuntimeFacade {
     sidecar_children: Vec<ManagedSidecar>,
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
+    workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
     provider_bundle: Option<ProviderBundle>,
     llm_config: llm_gateway::LlmConfig,
     ai_auth_context_headers: BTreeMap<String, String>,
@@ -293,6 +296,7 @@ impl RuntimeFacade {
             sidecar_children: Vec::new(),
             event_sender: Arc::new(Mutex::new(None)),
             event_log: Arc::new(StdMutex::new(VecDeque::new())),
+            workflow_runs: Arc::new(StdMutex::new(workflow_runs::WorkflowRunRegistry::default())),
             provider_bundle: None,
             llm_config,
             ai_auth_context_headers: BTreeMap::new(),
@@ -647,6 +651,7 @@ impl RuntimeFacade {
         let event_metadata = self.event_metadata();
         let event_sender = Arc::clone(&self.event_sender);
         let event_log = Arc::clone(&self.event_log);
+        let workflow_runs = Arc::clone(&self.workflow_runs);
         let rpc_tools = self.config.rpc_tools.clone();
         let mut retrieval_configs = self
             .config
@@ -731,6 +736,7 @@ impl RuntimeFacade {
                 event_sender.clone(),
                 projector.clone(),
                 event_log.clone(),
+                workflow_runs.clone(),
                 agent_test_event_tx,
             )
             .await?;

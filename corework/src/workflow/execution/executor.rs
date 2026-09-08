@@ -176,7 +176,7 @@ impl BlueprintExecutor {
 
         for conn in next_connections {
             // Execute target node through the same trace-aware path used by normal flow.
-            let output = self.execute_single_node(ctx, &conn.to_node).await?;
+            let (output, _execution_id) = self.execute_single_node(ctx, &conn.to_node).await?;
 
             // 检查是否是 Break 信号（execute_from_node_with_break）
             match output {
@@ -214,9 +214,21 @@ impl BlueprintExecutor {
                 NodeOutput::Complete => {
                     return Ok(LoopControl::Continue);
                 }
-                NodeOutput::Loop { .. } => {
+                NodeOutput::Loop {
+                    body_pin,
+                    completed_pin,
+                    iterations,
+                } => {
                     // 嵌套循环：递归执行，内层 Break 不影响外层
-                    self.execute_node(ctx, &conn.to_node).await?;
+                    self.execute_loop_output(
+                        ctx,
+                        &conn.to_node,
+                        _execution_id,
+                        body_pin,
+                        completed_pin,
+                        iterations,
+                    )
+                    .await?;
                 }
             }
         }
@@ -271,7 +283,7 @@ impl BlueprintExecutor {
         &self,
         ctx: &mut ExecutionContext,
         node_name: &str,
-    ) -> Result<NodeOutput> {
+    ) -> Result<(NodeOutput, Option<String>)> {
         let node =
             self.nodes.get(node_name).cloned().ok_or_else(|| {
                 FrameworkError::SystemError(format!("Node not found: {}", node_name))
@@ -290,12 +302,15 @@ impl BlueprintExecutor {
             node.node_type()
         );
 
-        ctx.trace_begin_node(node_name.to_string(), format!("{:?}", node.node_type()));
+        let execution_id =
+            ctx.trace_begin_node(node_name.to_string(), format!("{:?}", node.node_type()));
 
         let inputs = match self.collect_inputs(ctx, node_name).await {
             Ok(inputs) => inputs,
             Err(e) => {
-                ctx.trace_fail_node(node_name, e.to_string());
+                if let Some(execution_id) = execution_id.as_deref() {
+                    ctx.trace_fail_node(execution_id, e.to_string());
+                }
                 return Err(FrameworkError::SystemError(format!(
                     "节点 '{}' 收集输入失败: {}",
                     node_name, e
@@ -303,7 +318,9 @@ impl BlueprintExecutor {
             }
         };
         let input_preview = bounded_json_preview(data_outputs_to_json(&inputs));
-        ctx.trace_record_node_values(node_name, Some(input_preview.clone()), None);
+        if let Some(execution_id) = execution_id.as_deref() {
+            ctx.trace_record_node_values(execution_id, Some(input_preview.clone()), None);
+        }
         tracing::debug!("   📥 [Executor] 收集到 {} 个输入", inputs.len());
 
         // Input collection may recursively execute Pure nodes. Re-bind the
@@ -313,7 +330,9 @@ impl BlueprintExecutor {
         let output = match node.execute_node(ctx, inputs).await {
             Ok(output) => output,
             Err(e) => {
-                ctx.trace_fail_node(node_name, e.to_string());
+                if let Some(execution_id) = execution_id.as_deref() {
+                    ctx.trace_fail_node(execution_id, e.to_string());
+                }
                 tracing::warn!(
                     "❌ 错误: 节点 '{}' (类型: '{}') 执行失败: {}",
                     node_name,
@@ -339,7 +358,9 @@ impl BlueprintExecutor {
             NodeOutput::Complete => Some(input_preview),
             _ => None,
         };
-        ctx.trace_record_node_values(node_name, None, result_preview);
+        if let Some(execution_id) = execution_id.as_deref() {
+            ctx.trace_record_node_values(execution_id, None, result_preview);
+        }
         tracing::debug!("   ✅ [Executor] execute_node 返回: {:?}", output);
 
         let output_pin = match &output {
@@ -350,21 +371,54 @@ impl BlueprintExecutor {
             NodeOutput::Break => Some("Break".to_string()),
             NodeOutput::Complete => Some("Complete".to_string()),
         };
-        ctx.trace_finish_node(node_name, output_pin);
+        // A loop node remains active until every actual iteration (including a
+        // nested body) has finished. Other nodes can close immediately.
+        if !matches!(output, NodeOutput::Loop { .. }) {
+            if let Some(execution_id) = execution_id.as_deref() {
+                ctx.trace_finish_node(execution_id, output_pin);
+            }
+        }
 
-        Ok(output)
+        Ok((output, execution_id))
     }
 
     /// 执行单个节点
     #[async_recursion]
     async fn execute_node(&self, ctx: &mut ExecutionContext, node_name: &str) -> Result<()> {
-        let output = self.execute_single_node(ctx, node_name).await?;
+        let (output, execution_id) = self.execute_single_node(ctx, node_name).await?;
 
         // 根据输出决定下一步执行
         match output {
             NodeOutput::ExecPin(pin_name) => {
+                let is_branch = self
+                    .nodes
+                    .get(node_name)
+                    .is_some_and(|node| node.name() == "Branch");
+                if is_branch {
+                    ctx.trace_emit_control(
+                        "branch.selected",
+                        serde_json::json!({
+                            "node_id": ctx.workflow_node_id(node_name),
+                            "execution_id": execution_id,
+                            "condition_value": pin_name == "True",
+                            "selected_pin": pin_name,
+                            "selected_label": if pin_name == "True" { "条件成立" } else { "否则" }
+                        }),
+                    );
+                }
                 // 执行单个输出引脚
-                self.execute_from_node(ctx, node_name, &pin_name).await?;
+                if is_branch {
+                    if let Some(scope_id) = execution_id.clone() {
+                        ctx.trace_push_scope(scope_id.clone());
+                        let result = self.execute_from_node(ctx, node_name, &pin_name).await;
+                        ctx.trace_pop_scope(&scope_id);
+                        result?;
+                    } else {
+                        self.execute_from_node(ctx, node_name, &pin_name).await?;
+                    }
+                } else {
+                    self.execute_from_node(ctx, node_name, &pin_name).await?;
+                }
             }
             NodeOutput::Multiple(pin_names) => {
                 // 顺序执行多个输出引脚
@@ -382,54 +436,15 @@ impl BlueprintExecutor {
                 completed_pin,
                 iterations,
             } => {
-                tracing::debug!(
-                    "   🔁 [Executor] 开始循环执行，共 {} 次迭代",
-                    iterations.len()
-                );
-
-                let mut loop_broke = false;
-
-                // 遍历所有迭代
-                for (index, iteration) in iterations.iter().enumerate() {
-                    tracing::debug!(
-                        "   🔄 [Executor] 执行迭代 {}/{}",
-                        index + 1,
-                        iterations.len()
-                    );
-
-                    // 1. 存储当前迭代的输出数据（如 Index）
-                    self.store_outputs(ctx, node_name, iteration.outputs.clone())
-                        .await?;
-
-                    // 2. 执行循环体分支，检查是否有 Break
-                    let control = self
-                        .execute_from_node_with_break(ctx, node_name, &body_pin)
-                        .await?;
-
-                    if matches!(control, LoopControl::Break) {
-                        tracing::debug!("   🛑 [Executor] 捕获到 Break 信号，提前退出循环");
-                        loop_broke = true;
-                        break;
-                    }
-
-                    // 3. 检查是否超过最大步数
-                    if ctx.flow().is_max_steps_reached() {
-                        return Err(FrameworkError::SystemError(
-                            "Max execution steps reached in loop".into(),
-                        ));
-                    }
-                }
-
-                if loop_broke {
-                    tracing::debug!(
-                        "   🛑 [Executor] Break 后执行 Completed 分支（提前退出但仍收集结果）"
-                    );
-                } else {
-                    tracing::debug!("   ✅ [Executor] 循环正常完成，执行 Completed 分支");
-                }
-                // Break 和正常结束都执行 Completed（与 UE5 Blueprint 行为一致）
-                self.execute_from_node(ctx, node_name, &completed_pin)
-                    .await?;
+                self.execute_loop_output(
+                    ctx,
+                    node_name,
+                    execution_id,
+                    body_pin,
+                    completed_pin,
+                    iterations,
+                )
+                .await?;
             }
             NodeOutput::Break => {
                 // Break 应该在循环体内部被捕获，如果到达这里说明有问题
@@ -444,6 +459,122 @@ impl BlueprintExecutor {
         }
 
         Ok(())
+    }
+
+    #[async_recursion]
+    async fn execute_loop_output(
+        &self,
+        ctx: &mut ExecutionContext,
+        node_name: &str,
+        execution_id: Option<String>,
+        body_pin: String,
+        completed_pin: String,
+        iterations: Vec<crate::workflow::core::LoopIteration>,
+    ) -> Result<()> {
+        tracing::debug!(
+            "   🔁 [Executor] 开始循环执行，共 {} 次迭代",
+            iterations.len()
+        );
+        let mut loop_broke = false;
+        let loop_execution_id = execution_id.clone().unwrap_or_else(|| {
+            crate::workflow::execution::trace::new_workflow_execution_id("loop")
+        });
+        ctx.trace_emit_control(
+            "loop.started",
+            serde_json::json!({
+                "node_id": ctx.workflow_node_id(node_name),
+                "execution_id": loop_execution_id,
+                "item_count": iterations.len()
+            }),
+        );
+        let mut completed_iterations = 0usize;
+
+        for (index, iteration) in iterations.iter().enumerate() {
+            let iteration_execution_id =
+                crate::workflow::execution::trace::new_workflow_execution_id("iteration");
+            ctx.trace_emit_control(
+                "loop.iteration.started",
+                serde_json::json!({
+                    "node_id": ctx.workflow_node_id(node_name),
+                    "execution_id": loop_execution_id,
+                    "iteration_execution_id": iteration_execution_id,
+                    "parent_execution_id": loop_execution_id,
+                    "index": index,
+                    "value_summary": bounded_json_preview(data_outputs_to_json(&iteration.outputs))
+                }),
+            );
+            ctx.trace_push_scope(iteration_execution_id.clone());
+            tracing::debug!(
+                "   🔄 [Executor] 执行迭代 {}/{}",
+                index + 1,
+                iterations.len()
+            );
+
+            let iteration_result = async {
+                self.store_outputs(ctx, node_name, iteration.outputs.clone())
+                    .await?;
+                self.execute_from_node_with_break(ctx, node_name, &body_pin)
+                    .await
+            }
+            .await;
+            let control = match iteration_result {
+                Ok(control) => control,
+                Err(error) => {
+                    ctx.trace_pop_scope(&iteration_execution_id);
+                    ctx.trace_emit_control(
+                        "loop.iteration.failed",
+                        serde_json::json!({
+                            "node_id": ctx.workflow_node_id(node_name),
+                            "execution_id": loop_execution_id,
+                            "iteration_execution_id": iteration_execution_id,
+                            "index": index,
+                            "error": error.to_string()
+                        }),
+                    );
+                    if let Some(execution_id) = execution_id.as_deref() {
+                        ctx.trace_fail_node(execution_id, error.to_string());
+                    }
+                    return Err(error);
+                }
+            };
+            ctx.trace_pop_scope(&iteration_execution_id);
+            completed_iterations += 1;
+            ctx.trace_emit_control(
+                "loop.iteration.completed",
+                serde_json::json!({
+                    "node_id": ctx.workflow_node_id(node_name),
+                    "execution_id": loop_execution_id,
+                    "iteration_execution_id": iteration_execution_id,
+                    "index": index
+                }),
+            );
+            if matches!(control, LoopControl::Break) {
+                loop_broke = true;
+                break;
+            }
+            if ctx.flow().is_max_steps_reached() {
+                let error =
+                    FrameworkError::SystemError("Max execution steps reached in loop".into());
+                if let Some(execution_id) = execution_id.as_deref() {
+                    ctx.trace_fail_node(execution_id, error.to_string());
+                }
+                return Err(error);
+            }
+        }
+
+        ctx.trace_emit_control(
+            "loop.completed",
+            serde_json::json!({
+                "node_id": ctx.workflow_node_id(node_name),
+                "execution_id": loop_execution_id,
+                "iteration_count": completed_iterations,
+                "completion_reason": if loop_broke { "break" } else { "exhausted" }
+            }),
+        );
+        if let Some(execution_id) = execution_id.as_deref() {
+            ctx.trace_finish_node(execution_id, Some(completed_pin.clone()));
+        }
+        self.execute_from_node(ctx, node_name, &completed_pin).await
     }
 
     /// 收集节点的输入数据

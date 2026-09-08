@@ -280,6 +280,30 @@ func (r *Runtime) ExecuteWorkflowScriptInContext(ctx context.Context, script str
 	})
 }
 
+func (r *Runtime) StartWorkflowRun(ctx context.Context) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.start", map[string]any{})
+}
+
+func (r *Runtime) RunWorkflow(ctx context.Context, workflowRunID string, id string, inputs map[string]any) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "id": id, "inputs": inputs})
+}
+
+func (r *Runtime) RunWorkflowDraftTest(ctx context.Context, workflowRunID string, id string, inputs map[string]any) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "id": id, "mode": "test", "inputs": inputs})
+}
+
+func (r *Runtime) RunWorkflowScript(ctx context.Context, workflowRunID string, script string, inputs map[string]any) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "script": script, "inputs": inputs})
+}
+
+func (r *Runtime) DescribeWorkflowInputs(ctx context.Context, id string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.describe_inputs", map[string]any{"id": id})
+}
+
+func (r *Runtime) DescribeWorkflowScriptInputs(ctx context.Context, script string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.describe_inputs", map[string]any{"script": script})
+}
+
 func (r *Runtime) RegisterLlmFile(ctx context.Context, path string) (json.RawMessage, error) {
 	return r.invoke(ctx, "runtime.register_llm", map[string]any{
 		"input": path,
