@@ -10,6 +10,65 @@ pub mod thinking;
 use crate::context::keys;
 use corework::cache::CacheExt;
 
+/// Close durable FC declarations before removing the pending execution state.
+/// These calls never started; unlike detached tools their effects are known.
+pub(crate) async fn close_unexecuted_calls(
+    cache: &std::sync::Arc<dyn corework::cache::Cache>,
+    event_bus: &std::sync::Arc<dyn corework::event::EventBus>,
+) -> corework::error::Result<()> {
+    let calls: Vec<crate::context::ToolCallRef> = cache
+        .get(keys::PENDING_TOOL_CALLS)
+        .await?
+        .unwrap_or_default();
+    for call in calls {
+        let content = serde_json::json!({
+            "status": "cancelled_before_execution",
+            "reason": "user_paused",
+            "executed": false,
+            "toai": "User paused the conversation. This tool call was not executed."
+        })
+        .to_string();
+        let mut metadata = crate::ledger::LedgerMessageMeta::default();
+        metadata.subtype = Some(crate::ledger::GATEWAY_SUBTYPE_TOOL_CALL_FAILED.to_string());
+        metadata.tool_name = Some(call.name.clone());
+        metadata.success = Some(false);
+        metadata
+            .extra
+            .insert("call_id".into(), serde_json::json!(call.id));
+        metadata.extra.insert(
+            "status".into(),
+            serde_json::json!("cancelled_before_execution"),
+        );
+        metadata
+            .extra
+            .insert("kind".into(), serde_json::json!("tool"));
+        crate::context::AssistantContext::push_message_with_metadata_and_display_on_event_bus(
+            cache,
+            event_bus,
+            crate::context::Message::tool_with_id(content, call.id, call.name),
+            metadata,
+            None,
+        )
+        .await?;
+    }
+    cache.delete(keys::PENDING_TOOL_CALLS).await?;
+    Ok(())
+}
+
+pub(crate) async fn consume_pause_with_results(
+    cache: &std::sync::Arc<dyn corework::cache::Cache>,
+    event_bus: &std::sync::Arc<dyn corework::event::EventBus>,
+) -> corework::error::Result<bool> {
+    if cache
+        .get::<bool>(keys::PAUSE_REQUESTED)
+        .await?
+        .unwrap_or(false)
+    {
+        close_unexecuted_calls(cache, event_bus).await?;
+    }
+    consume_pause_if_requested(cache).await
+}
+
 /// 检查并消费暂停信号。若已请求暂停，清理中间状态并返回 `true`。
 /// 调用方应在返回 `true` 后将状态机转入 `suspended`（不是 `saying`）。
 /// `saying` 承载 AI 的自然停稳，`suspended` 承载用户主动暂停。

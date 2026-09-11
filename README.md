@@ -202,7 +202,8 @@ bounded diagnostics off the Runtime event payload path:
 | `ai-gateway/` | Model gateway for LLM / VLM / ASR / OCR providers and OpenAI-compatible endpoints. |
 | `ai-assistant/` | Agent runtime: conversation state machine, skills, tool execution, ledger, and persistence. |
 | `agent_runtime_ffi/` | C ABI wrapper that builds the native runtime library. |
-| `ai-conversation-ui/` | Lit-based conversation frontend used by host integrations. |
+| `ui/lit/` | Lit implementation of the shared conversation frontend contract. |
+| `ui/svelte/` | Svelte implementation of the same contract, distributed as frontend build output. |
 | `sdk/` | Runtime Host SDKs and RPC Tool SDKs by language. |
 | `examples/guides/` | Host integration, skills, tool, frontend, and runtime guides. |
 | `scripts/` | Build, release packaging, and local development helper scripts. |

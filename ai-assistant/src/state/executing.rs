@@ -57,7 +57,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     .await;
 
     // ★ 提前检查暂停信号：工具还没执行就可以立刻停
-    if super::consume_pause_if_requested(&cache).await? {
+    if super::consume_pause_with_results(&cache, &event_bus).await? {
         // consume 已消费信号并设置了 PENDING_RESPONSE，直接指向 asking
         cache
             .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
@@ -300,7 +300,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 async fn on_transition(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<Option<String>> {
     let cache = sm_ctx.cache();
 
-    if super::consume_pause_if_requested(&cache).await? {
+    if super::consume_pause_with_results(&cache, &sm_ctx.event_bus()).await? {
         return Ok(Some(states::SUSPENDED.to_string()));
     }
 

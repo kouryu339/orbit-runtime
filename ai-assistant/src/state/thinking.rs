@@ -481,6 +481,14 @@ fn spawn_assistant_stream_projector(
             if !changed {
                 continue;
             }
+            if cache
+                .get::<bool>(keys::PAUSE_REQUESTED)
+                .await?
+                .unwrap_or(false)
+                && cache.get::<String>(keys::PAUSE_MODE).await?.as_deref() == Some("detach_tool")
+            {
+                break;
+            }
             sequence = sequence.saturating_add(1);
             cache
                 .set(
@@ -694,7 +702,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     )
     .await;
 
-    if super::consume_pause_if_requested(&cache).await? {
+    if super::consume_pause_with_results(&cache, &sm_ctx.event_bus()).await? {
         cache
             .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
             .await?;
@@ -997,8 +1005,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 serde_json::json!({}),
             ))
             .await?;
-        let compact_result =
-            crate::systems::history::compress_for_llm_call(&history, model_uid, &cache).await;
+        let compact_lease = sm_ctx
+            .resolve_shared_component::<crate::agent::runtime::AgentExecutionControl>()
+            .map(|control| control.begin_thinking_request());
+        let compact_cancel = compact_lease
+            .as_ref()
+            .map(|lease| lease.token())
+            .unwrap_or_else(take_cancel_token);
+        let compact_result = tokio::select! {
+            biased;
+            _ = compact_cancel.cancelled() => Ok(history.clone()),
+            result = crate::systems::history::compress_for_llm_call(&history, model_uid, &cache) => result,
+        };
         cache.set(keys::COMPACT_IN_PROGRESS, &false, None).await?;
         sm_ctx
             .event_bus()
@@ -1011,6 +1029,12 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     } else {
         history.clone()
     };
+    if super::consume_pause_with_results(&cache, &sm_ctx.event_bus()).await? {
+        cache
+            .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
+            .await?;
+        return Ok(());
+    }
     publish_new_summary_records(&history, &compact, &cache, &sm_ctx.event_bus()).await?;
 
     let max_msgs: usize = cache
@@ -1355,6 +1379,9 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 call,
             )
             .await;
+            if matches!(&result, Err(llm_gateway::error::ApiError::Cancelled)) {
+                stream_task.abort();
+            }
             match stream_task.await {
                 Ok(Ok(())) => result,
                 Ok(Err(error)) => {
@@ -1391,6 +1418,16 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
         match call_result {
             Ok(mut resp) => {
+                // A completed response must still close its FC declarations,
+                // but a pause must never trigger validation retries or execution.
+                if cache
+                    .get::<bool>(keys::PAUSE_REQUESTED)
+                    .await?
+                    .unwrap_or(false)
+                {
+                    llm_response = Some(resp);
+                    break;
+                }
                 let raw_content = resp.content.clone();
                 resp.content = crate::runtime::parser::normalize_response_for_ledger(&raw_content);
                 trace_llm_response(&conversation_id, turn_id, attempt, &resp).await;
@@ -1553,7 +1590,12 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     fatal = fatal,
                     "thinking llm call failed"
                 );
-                if matches!(e, llm_gateway::error::ApiError::Cancelled) {
+                if matches!(e, llm_gateway::error::ApiError::Cancelled)
+                    || cache
+                        .get::<bool>(keys::PAUSE_REQUESTED)
+                        .await?
+                        .unwrap_or(false)
+                {
                     tracing::info!(
                         conversation_id = %conversation_id,
                         turn_id,
@@ -1561,6 +1603,27 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         "llm request cancelled; suspending thinking flow"
                     );
                     if tool_protocol == crate::ToolProtocol::NativeFc {
+                        // Preserve text already projected, never incomplete FC arguments.
+                        if let Some(stream) = cache
+                            .get::<crate::snapshot::AssistantStreamView>(keys::ASSISTANT_STREAM)
+                            .await?
+                        {
+                            if !stream.content.is_empty() {
+                                let mut metadata = crate::ledger::LedgerMessageMeta::default();
+                                metadata
+                                    .extra
+                                    .insert("interrupted".into(), serde_json::json!(true));
+                                AssistantContext::push_message_with_metadata_and_display_on_event_bus(
+                                    &cache, &event_bus,
+                                    crate::context::Message {
+                                        role: crate::context::roles::ASSISTANT.into(),
+                                        content: stream.content, cache_control: false,
+                                        tool_call_id: None, name: None, tool_calls: None,
+                                        reasoning_content: None, provider_items: None,
+                                    }, metadata, None,
+                                ).await?;
+                            }
+                        }
                         clear_assistant_stream(
                             &cache,
                             &event_bus,
@@ -1595,7 +1658,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         },
                     )
                     .await;
-                    super::consume_pause_if_requested(&cache).await?;
+                    super::consume_pause_with_results(&cache, &event_bus).await?;
                     cache
                         .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
                         .await?;
@@ -1740,7 +1803,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                         wait_ms,
                         "wait before llm retry"
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+                    let retry_lease = sm_ctx
+                        .resolve_shared_component::<crate::agent::runtime::AgentExecutionControl>()
+                        .map(|control| control.begin_thinking_request());
+                    let retry_cancel = retry_lease
+                        .as_ref()
+                        .map(|lease| lease.token())
+                        .unwrap_or_else(take_cancel_token);
+                    tokio::select! {
+                        biased;
+                        _ = retry_cancel.cancelled() => {},
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {},
+                    }
                 }
             }
         }
@@ -1861,7 +1935,16 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     )
     .await;
 
-    if super::consume_pause_if_requested(&cache).await? {
+    if cache
+        .get::<bool>(keys::PAUSE_REQUESTED)
+        .await?
+        .unwrap_or(false)
+    {
+        let mode: String = cache.get(keys::PAUSE_MODE).await?.unwrap_or_default();
+        if mode != "detach_tool" && tool_protocol == crate::ToolProtocol::NativeFc {
+            persist_paused_native_response(&cache, &event_bus, &llm_response).await?;
+        }
+        super::consume_pause_with_results(&cache, &event_bus).await?;
         if tool_protocol == crate::ToolProtocol::NativeFc {
             clear_assistant_stream(
                 &cache,
@@ -2228,6 +2311,53 @@ fn append_native_fc_retry_context(
     }
 }
 
+async fn persist_paused_native_response(
+    cache: &Arc<dyn corework::cache::Cache>,
+    event_bus: &Arc<dyn EventBus>,
+    response: &llm_gateway::LlmResponse,
+) -> corework::error::Result<()> {
+    let calls = response.tool_calls.clone().unwrap_or_default();
+    let mut metadata = crate::ledger::LedgerMessageMeta::default();
+    metadata
+        .extra
+        .insert("tool_protocol".into(), serde_json::json!("native_fc"));
+    metadata.extra.insert(
+        "tool_calls".into(),
+        serde_json::json!(calls
+            .iter()
+            .map(
+                |call| serde_json::json!({"id": call.id, "function": {"name": call.function.name}})
+            )
+            .collect::<Vec<_>>()),
+    );
+    AssistantContext::push_message_with_metadata_and_display_on_event_bus(
+        cache,
+        event_bus,
+        crate::context::Message {
+            role: crate::context::roles::ASSISTANT.to_string(),
+            content: response.content.clone(),
+            cache_control: false,
+            tool_call_id: None,
+            name: None,
+            tool_calls: response.tool_calls.clone(),
+            reasoning_content: response.reasoning_content.clone(),
+            provider_items: response.provider_items.clone(),
+        },
+        metadata,
+        None,
+    )
+    .await?;
+    let refs = calls
+        .iter()
+        .map(|call| crate::context::ToolCallRef {
+            id: call.id.clone(),
+            name: call.function.name.clone(),
+        })
+        .collect::<Vec<_>>();
+    cache.set(keys::PENDING_TOOL_CALLS, &refs, None).await?;
+    super::close_unexecuted_calls(cache, event_bus).await
+}
+
 async fn build_thinking_payload_from_native_fc(
     cache: &Arc<dyn corework::cache::Cache>,
     event_bus: &Arc<dyn EventBus>,
@@ -2280,6 +2410,22 @@ async fn build_thinking_payload_from_native_fc(
     metadata
         .extra
         .insert("tool_call_ids".to_string(), serde_json::json!(call_ids));
+    // Keep durable display identity after the transient FC stream is cleared.
+    // Arguments remain canonical-only and are intentionally not projected.
+    metadata.extra.insert(
+        "tool_calls".to_string(),
+        serde_json::Value::Array(
+            tool_calls
+                .iter()
+                .map(|call| {
+                    serde_json::json!({
+                        "id": call.id,
+                        "function": { "name": call.function.name }
+                    })
+                })
+                .collect(),
+        ),
+    );
     metadata
         .extra
         .insert("tool_protocol".to_string(), serde_json::json!("native_fc"));
@@ -2632,7 +2778,7 @@ async fn build_thinking_payload_from_plain_content(
 async fn on_transition(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<Option<String>> {
     let cache = sm_ctx.cache();
 
-    if super::consume_pause_if_requested(&cache).await? {
+    if super::consume_pause_with_results(&cache, &sm_ctx.event_bus()).await? {
         return Ok(Some(states::SUSPENDED.to_string()));
     }
 
@@ -2980,6 +3126,65 @@ mod tests {
 
     struct StreamEventCounter(Arc<AtomicUsize>);
 
+    struct MessageCapture(Arc<tokio::sync::Mutex<Vec<crate::events::AgentMessageProducedPayload>>>);
+
+    #[async_trait::async_trait]
+    impl EventHandler for MessageCapture {
+        async fn handle(&self, event: &BaseEvent) -> corework::error::Result<()> {
+            self.0
+                .lock()
+                .await
+                .push(serde_json::from_value(event.payload.clone()).unwrap());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn paused_fc_response_closes_every_call_without_executing() {
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        let bus: Arc<dyn EventBus> = Arc::new(InMemoryEventBus::new());
+        let captured = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        bus.subscribe(
+            ev_types::AGENT_MESSAGE_PRODUCED.into(),
+            Arc::new(MessageCapture(captured.clone())),
+        )
+        .await
+        .unwrap();
+        let response = llm_gateway::LlmResponse {
+            content: "I will read both files.".into(),
+            finish_reason: Some("tool_calls".into()),
+            tokens: None,
+            cached_tokens: 0,
+            tool_calls: Some(vec![
+                llm_gateway::ToolCall::function("call-a", "Read", "{}"),
+                llm_gateway::ToolCall::function("call-b", "Read", "{}"),
+            ]),
+            reasoning_content: None,
+            provider_items: None,
+        };
+        persist_paused_native_response(&cache, &bus, &response)
+            .await
+            .unwrap();
+        // Cleanup must not emit duplicate results at the following state boundary.
+        super::super::close_unexecuted_calls(&cache, &bus)
+            .await
+            .unwrap();
+        let messages = captured.lock().await;
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].content, response.content);
+        for (message, id) in messages[1..].iter().zip(["call-a", "call-b"]) {
+            assert_eq!(message.tool_call_id.as_deref(), Some(id));
+            let result: serde_json::Value = serde_json::from_str(&message.content).unwrap();
+            assert_eq!(result["status"], "cancelled_before_execution");
+            assert_eq!(result["executed"], false);
+        }
+        assert!(cache
+            .get::<Vec<String>>(keys::PENDING_TOOLS)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
     #[async_trait::async_trait]
     impl EventHandler for StreamEventCounter {
         async fn handle(&self, _event: &BaseEvent) -> corework::error::Result<()> {
@@ -3134,6 +3339,38 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn detach_discards_queued_stream_while_wait_preserves_it() {
+        for (mode, expected) in [("detach_tool", ""), ("wait_for_tool", "queued")] {
+            let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+            let bus: Arc<dyn EventBus> = Arc::new(InMemoryEventBus::new());
+            let state = Arc::new(crate::conversation_state::ConversationState::new(
+                "conversation",
+                crate::conversation_state::ConversationRequestHeaders::default(),
+                "boss",
+            ));
+            start_assistant_stream(&cache, &bus, &state, "boss", 1, 1)
+                .await
+                .unwrap();
+            cache
+                .set(keys::PAUSE_MODE, &mode.to_string(), None)
+                .await
+                .unwrap();
+            cache.set(keys::PAUSE_REQUESTED, &true, None).await.unwrap();
+            let (tx, task) =
+                spawn_assistant_stream_projector(cache.clone(), bus, state, "boss".into(), 1, 1);
+            tx.send(llm_gateway::LlmStreamEvent::TextDelta {
+                text: "queued".into(),
+            })
+            .unwrap();
+            drop(tx);
+            task.await.unwrap().unwrap();
+            let stream: crate::snapshot::AssistantStreamView =
+                cache.get(keys::ASSISTANT_STREAM).await.unwrap().unwrap();
+            assert_eq!(stream.content, expected);
+        }
     }
 
     #[test]

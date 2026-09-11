@@ -26,7 +26,8 @@ Cargo.lock
 .idea
 .cargo
 node_modules/
-ai-conversation-ui/playground-dist/
+ui/lit/playground-dist/
+ui/svelte/dist/
 __pycache__/
 *.pyc
 *.egg-info/

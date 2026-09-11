@@ -7,10 +7,11 @@ impl RuntimeFacade {
         if let Ok(config_v1) = serde_json::from_str::<ProviderConfigV1>(&content) {
             if config_v1.schema == "agent-runtime-provider-config/v1" {
                 let current_model_uid = config_v1.current_model_uid;
-                let config = llm_gateway::LlmConfig {
+                let mut config = llm_gateway::LlmConfig {
                     providers: config_v1.providers.into_iter().map(Into::into).collect(),
                     current_model_uid,
                 };
+                self.preserve_provider_secrets(&mut config);
                 validate_llm_config(&config)?;
                 validate_current_model(current_model_uid, &config)?;
                 llm_gateway::build_index_and_resolver(config.clone());
@@ -27,7 +28,8 @@ impl RuntimeFacade {
             }
         }
 
-        if let Ok(config) = serde_json::from_str::<llm_gateway::LlmConfig>(&content) {
+        if let Ok(mut config) = serde_json::from_str::<llm_gateway::LlmConfig>(&content) {
+            self.preserve_provider_secrets(&mut config);
             validate_llm_config(&config)?;
             llm_gateway::build_index_and_resolver(config.clone());
             self.llm_config = config;
@@ -36,9 +38,21 @@ impl RuntimeFacade {
             return Ok(());
         }
 
-        let bundle: ProviderBundle = serde_json::from_str(&content).map_err(|e| {
+        let mut bundle: ProviderBundle = serde_json::from_str(&content).map_err(|e| {
             RuntimeError::InvalidConfig(format!("parse providers_json failed: {e}"))
         })?;
+        for provider in &mut bundle.providers {
+            if provider.api_key.is_empty() {
+                if let Some(existing) = self.provider_bundle.as_ref().and_then(|current| {
+                    current
+                        .providers
+                        .iter()
+                        .find(|item| item.uid == provider.uid)
+                }) {
+                    provider.api_key = existing.api_key.clone();
+                }
+            }
+        }
 
         let provider_map: std::collections::HashMap<u32, ProviderConfig> = bundle
             .providers
@@ -113,7 +127,9 @@ impl RuntimeFacade {
                 }
                 // Keep provider display metadata in sync with imported host config.
                 existing.name = provider.name;
-                existing.api_key = provider.api_key;
+                if !provider.api_key.is_empty() {
+                    existing.api_key = provider.api_key;
+                }
                 if !provider.base_url.is_empty() {
                     existing.base_url = provider.base_url;
                 }
@@ -166,6 +182,21 @@ impl RuntimeFacade {
             .llm_config
             .current_model_uid
             .or_else(key_store::current);
+    }
+
+    fn preserve_provider_secrets(&self, config: &mut llm_gateway::LlmConfig) {
+        for provider in &mut config.providers {
+            if provider.api_key.is_empty() {
+                if let Some(existing) = self
+                    .llm_config
+                    .providers
+                    .iter()
+                    .find(|item| item.id == provider.id)
+                {
+                    provider.api_key = existing.api_key.clone();
+                }
+            }
+        }
     }
 
     pub fn provider_definitions(&self) -> Result<String, RuntimeError> {

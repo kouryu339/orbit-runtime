@@ -32,10 +32,10 @@ impl DelegatedTaskInputDisposition {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentPauseMode {
-    /// Preserve the current tool result and suspend at the next state-machine boundary.
+    /// Wait for the current LLM request or tool batch, then suspend without starting more work.
     #[default]
     WaitForTool,
-    /// Stop waiting for the current tool and synthesize an indeterminate result.
+    /// Discard the current LLM request, or detach tools with indeterminate results.
     DetachTool,
 }
 
@@ -65,6 +65,7 @@ struct AgentExecutionControlState {
     detach_requested: bool,
     thinking_generation: u64,
     active_thinking: Option<(u64, CancellationToken)>,
+    thinking_pause: Option<AgentPauseMode>,
     wait_generation: u64,
     active_wait: Option<(u64, CancellationToken)>,
     user_input_wait_wakeup_pending: bool,
@@ -136,6 +137,9 @@ impl AgentExecutionControl {
         state.thinking_generation = state.thinking_generation.saturating_add(1);
         let generation = state.thinking_generation;
         let token = CancellationToken::new();
+        if state.thinking_pause.is_some() {
+            token.cancel();
+        }
         state.active_thinking = Some((generation, token.clone()));
         ThinkingExecutionLease {
             control: Arc::clone(self),
@@ -144,13 +148,21 @@ impl AgentExecutionControl {
         }
     }
 
+    #[cfg(test)]
     fn request_thinking_cancel(&self) {
-        let state = self
+        self.request_thinking_pause(AgentPauseMode::DetachTool);
+    }
+
+    fn request_thinking_pause(&self, mode: AgentPauseMode) {
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((_, token)) = state.active_thinking.as_ref() {
-            token.cancel();
+        state.thinking_pause = Some(mode);
+        if mode == AgentPauseMode::DetachTool {
+            if let Some((_, token)) = state.active_thinking.as_ref() {
+                token.cancel();
+            }
         }
     }
 
@@ -191,6 +203,7 @@ impl AgentExecutionControl {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.detach_requested = false;
+        state.thinking_pause = None;
     }
 }
 
@@ -356,7 +369,12 @@ impl AgentRuntime {
             if self.sm.current_state() == states::EXECUTING {
                 self.execution_control.notify_user_input_during_execution();
             }
-            self.execution_control.clear_pause_request();
+            if matches!(
+                self.sm.current_state().as_str(),
+                states::SAYING | states::SUSPENDED
+            ) {
+                self.execution_control.clear_pause_request();
+            }
             let cache = self.sm.unit().cache();
             cache
                 .set(keys::TASK_STATUS, &"running".to_string(), None)
@@ -657,10 +675,11 @@ impl AgentRuntime {
         // 先发一次 stopping 快照（pause_requested=true 但 LLM/工具还未真正停下），
         // 让前端立刻把按钮切成"正在暂停"，不必等到状态机真正进入 suspended。
         if busy {
-            cache.set(keys::PAUSE_REQUESTED, &true, None).await?;
             cache
                 .set(keys::PAUSE_MODE, &mode.as_str().to_string(), None)
                 .await?;
+            cache.set(keys::PAUSE_REQUESTED, &true, None).await?;
+            self.execution_control.request_thinking_pause(mode);
             let event_bus = self.sm.unit().event_bus();
             crate::agent::publish_focus_status_for_cache(
                 self.sm.unit().as_ref(),
@@ -672,9 +691,6 @@ impl AgentRuntime {
         }
         if state == states::EXECUTING && mode == AgentPauseMode::DetachTool {
             self.execution_control.request_detach();
-        }
-        if state == states::THINKING {
-            self.execution_control.request_thinking_cancel();
         }
         if busy {
             // The per-agent control above interrupts only this runtime. The
@@ -884,6 +900,50 @@ mod tests {
 
         assert!(first_lease.token().is_cancelled());
         assert!(!second_lease.token().is_cancelled());
+    }
+
+    #[test]
+    fn thinking_pause_before_request_prevents_dispatch_for_both_modes() {
+        for mode in [AgentPauseMode::WaitForTool, AgentPauseMode::DetachTool] {
+            let control = Arc::new(AgentExecutionControl::default());
+            control.request_thinking_pause(mode);
+            assert!(control.begin_thinking_request().token().is_cancelled());
+            control.clear_pause_request();
+            assert!(!control.begin_thinking_request().token().is_cancelled());
+        }
+    }
+
+    #[test]
+    fn wait_preserves_inflight_request_but_blocks_next_request() {
+        let control = Arc::new(AgentExecutionControl::default());
+        let current = control.begin_thinking_request();
+        control.request_thinking_pause(AgentPauseMode::WaitForTool);
+        assert!(!current.token().is_cancelled());
+        drop(current);
+        assert!(control.begin_thinking_request().token().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn detach_interrupts_pending_request_without_waiting_for_response() {
+        let control = Arc::new(AgentExecutionControl::default());
+        let current = control.begin_thinking_request();
+        let token = current.token();
+        control.request_thinking_pause(AgentPauseMode::DetachTool);
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {},
+                _ = std::future::pending::<()>() => panic!("request returned"),
+            }
+        })
+        .await
+        .unwrap();
+        control.clear_pause_request();
+        assert!(
+            token.is_cancelled(),
+            "resume must not revive an old request"
+        );
+        assert!(!control.begin_thinking_request().token().is_cancelled());
     }
 
     #[test]

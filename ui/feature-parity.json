@@ -1,0 +1,51 @@
+{
+  "schema": "orbit-conversation-ui-parity/v1",
+  "implementations": ["lit", "svelte"],
+  "features": [
+    "conversation.connect",
+    "conversation.disconnect",
+    "conversation.create",
+    "conversation.switch",
+    "conversation.send",
+    "conversation.send.defer_until_snapshot",
+    "conversation.send.abort",
+    "conversation.pause",
+    "conversation.close",
+    "conversation.stream",
+    "conversation.focus_composer",
+    "conversation.persistence.save",
+    "conversation.persistence.restore",
+    "conversation.persistence.history",
+    "conversation.model.select",
+    "conversation.provider.configure",
+    "conversation.provider.edit",
+    "tool.exec.status",
+    "tool.native_fc.status",
+    "tool.permission.resolve",
+    "tool.permission.safe_summary",
+    "content.markdown",
+    "content.katex",
+    "content.mermaid",
+    "content.widgets",
+    "content.presentation.insert",
+    "content.presentation.update",
+    "content.presentation.remove",
+    "content.presentation.progressive",
+    "host.capabilities",
+    "host.extensions",
+    "theme.color_scheme",
+    "theme.named_theme",
+    "theme.density"
+  ],
+  "public_api": [
+    "connect", "disconnect", "openConversation", "createConversation", "send",
+    "pause", "resolveToolPermission", "closeConversation", "saveConversation",
+    "restoreConversation", "refreshConversationHistory", "focusComposer",
+    "insertPresetMarkdown", "insertPresentationItem", "updatePresentationItem",
+    "removePresentationItem", "clearPresentationItems"
+  ],
+  "verification": {
+    "lit": ["npm test", "npm run check", "npm run build"],
+    "svelte": ["npm test", "npm run check", "npm run build"]
+  }
+}

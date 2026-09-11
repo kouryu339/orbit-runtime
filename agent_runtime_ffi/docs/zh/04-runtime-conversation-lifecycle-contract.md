@@ -72,8 +72,12 @@ reported -> CompleteAgentTask -> completed 或 failed
 与内部子任务唤醒共用每 Agent 调度门和单一 driver 槽位。
 
 验收或取消会回收临时 worker，但任务、revision、阶段进度、输入请求、报告和 ledger 事实
-继续保留用于审计。`detach_tool` 暂停返回 `interrupted_unknown`；宿主在重试前必须核验
-外部状态和幂等性。
+继续保留用于审计。暂停模式保持原有参数名，但覆盖 LLM 与工具两个阶段：
+
+- `wait_for_tool`：等待当前在途 LLM（包括历史压缩）或工具完成，然后暂停；不再发起下一次请求或执行返回的工具调用。
+- `detach_tool`：停止等待在途 LLM，丢弃迟到响应和未处理流式数据；已展示文本保留。已启动工具按原机制脱离，结果为 `interrupted_unknown`，宿主在重试前必须核验外部状态和幂等性。
+- 两种模式在 LLM 尚未登记请求时均阻止新请求。完整 FC 响应因暂停未执行时，为每个 `tool_call_id` 写入 `role:tool` 的 `cancelled_before_execution` 结果（`executed:false`）；不完整流式调用不会写入正式 FC 历史。
+- 暂停终态为 `suspended`；`stopping` 只表示暂停已受理。本地退出不保证上游停止计算。
 
 ## 4.5 事件
 

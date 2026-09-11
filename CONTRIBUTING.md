@@ -19,7 +19,7 @@ cargo test --workspace
 For the conversation UI:
 
 ```text
-cd ai-conversation-ui
+cd ui/lit
 npm run check
 npm test
 npm run build

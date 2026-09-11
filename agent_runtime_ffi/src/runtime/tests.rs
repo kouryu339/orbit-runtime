@@ -790,6 +790,7 @@ fn resource_registration_rejects_external_prompts_field() {
 
 #[test]
 fn resource_registration_initializes_skill_manager_and_rpc_pool() {
+    let _guard = runtime_start_test_guard();
     let root = unique_test_dir("resource-registration");
     let skills_dir = root.join("skills");
     write_role_skill(
@@ -870,6 +871,7 @@ fn resource_registration_initializes_skill_manager_and_rpc_pool() {
 
 #[test]
 fn resource_registration_file_resolves_paths_from_resource_file_dir() {
+    let _guard = runtime_start_test_guard();
     let root = unique_test_dir("resource-registration-file");
     let resources_dir = root.join("resources");
     let skills_dir = resources_dir.join("skills");
@@ -977,6 +979,8 @@ fn resource_registration_file_resolves_paths_from_resource_file_dir() {
 
 #[test]
 fn resource_definition_catalogs_are_effective_and_sanitized() {
+    let _guard = runtime_start_test_guard();
+
     fn invoke(facade: &mut RuntimeFacade, command: &str) -> Value {
         crate::invoke_command(facade, command, &serde_json::Map::new(), "catalog-test").unwrap()
     }
@@ -1181,6 +1185,7 @@ fn pure_workflow_node_display_names_are_valid_input_templates() {
 
 #[test]
 fn workflow_node_definitions_unify_corework_and_runtime_tools() {
+    let _guard = runtime_start_test_guard();
     let root = unique_test_dir("workflow-node-definitions");
     let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
     facade.runtime_tools.push(
@@ -2483,6 +2488,44 @@ fn llm_registration_builds_gateway_config_and_registry() {
     assert_eq!(restarted.registered_llm().unwrap().id, "default-llm");
     assert_eq!(restarted.llm_config.current_model_uid, Some(1001));
 
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn provider_editor_blank_keys_preserve_existing_secrets() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("provider-editor-preserves-key");
+    let create_options = minimal_runtime_create_options(&root);
+    let mut facade = RuntimeFacade::create(&create_options).unwrap();
+    let registration = |api_key: &str, model_id: &str| {
+        json!({
+            "schema": "agent-runtime-llm-registration/v1",
+            "id": "provider-editor",
+            "current_model_uid": 1001,
+            "providers": [{
+                "id": 1, "name": "provider", "type": "openai",
+                "base_url": "https://example.invalid", "api_key": api_key,
+                "api_paradigm": "openai_chat_completions",
+                "enabled_models": [{"uid": 1001, "model_id": model_id, "max_context_tokens": 8192}]
+            }]
+        })
+    };
+    facade
+        .register_llm_json(&registration("secret-value", "model-a").to_string())
+        .unwrap();
+    facade
+        .configure_providers(&registration("", "model-b").to_string())
+        .unwrap();
+    assert_eq!(facade.llm_config.providers[0].api_key, "secret-value");
+    assert_eq!(
+        facade.llm_config.providers[0].enabled_models[0].model_id,
+        "model-b"
+    );
+
+    facade
+        .configure_providers(&registration("replacement", "model-b").to_string())
+        .unwrap();
+    assert_eq!(facade.llm_config.providers[0].api_key, "replacement");
     let _ = fs::remove_dir_all(root);
 }
 

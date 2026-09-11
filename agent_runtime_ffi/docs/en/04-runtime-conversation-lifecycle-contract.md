@@ -88,8 +88,12 @@ dispatch gate and driver slot.
 
 Completing or canceling a task retires its temporary worker while preserving the
 task, revisions, progress, requests, reports, and ledger facts for audit. A
-`detach_tool` pause returns `interrupted_unknown`; hosts must verify external
-state and idempotency before retrying the detached operation.
+Pause modes retain their names and cover both LLM requests and tool execution:
+
+- `wait_for_tool` waits for the in-flight LLM request (including history compaction) or tool batch, then suspends without starting another request or executing returned calls.
+- `detach_tool` stops awaiting the LLM and discards late responses and queued stream data, preserving already projected text. Started tools retain the existing `interrupted_unknown` behavior; hosts must verify external state and idempotency before retrying.
+- Both modes prevent requests registered after pause. Complete FC responses skipped because of pause receive one `role:tool` result per call ID with `status:cancelled_before_execution` and `executed:false`. Incomplete streamed calls are not committed as canonical FC declarations.
+- The terminal pause state is `suspended`; `stopping` only acknowledges admission. Local cancellation does not guarantee that the provider stops computing.
 
 ## 4.5 Events
 

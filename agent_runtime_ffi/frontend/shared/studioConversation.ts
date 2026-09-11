@@ -2,7 +2,7 @@ import {
   AgentRuntimeConversationElement,
   HttpSseConversationTransport,
   type ConversationTransport,
-} from '../../../ai-conversation-ui/src/index.js';
+} from '../../../ui/lit/src/index.js';
 
 export type StudioConversationOptions = {
   token: string;
