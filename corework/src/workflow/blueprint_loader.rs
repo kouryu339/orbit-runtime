@@ -27,12 +27,20 @@ pub struct LoadedBlueprint {
 }
 
 /// 蓝图加载器
-pub struct BlueprintLoader;
+pub struct BlueprintLoader {
+    workflows: Option<std::sync::Arc<super::workflows::WorkflowsModule>>,
+}
 
 impl BlueprintLoader {
     /// 创建新的加载器
     pub fn new() -> Self {
-        Self
+        Self { workflows: None }
+    }
+
+    pub fn with_workflows(workflows: std::sync::Arc<super::workflows::WorkflowsModule>) -> Self {
+        Self {
+            workflows: Some(workflows),
+        }
     }
 
     /// 从 JSON 字符串加载蓝图（返回元数据和实例）
@@ -637,6 +645,17 @@ impl BlueprintLoader {
         node_name: String,
     ) -> Result<String> {
         // 查找节点元数据（同时作存在性验证）
+        if super::workflows::reference::is_reference(&node_json.node_type) {
+            let module = self.workflows.as_ref().ok_or_else(|| {
+                FrameworkError::WorkflowError(
+                    "Workflow reference nodes require the registered workflow catalog".into(),
+                )
+            })?;
+            let node = module.reference_node(node_json, &node_name)?;
+            let previous = std::mem::replace(builder, BlueprintBuilder::new(""));
+            *builder = previous.add_dynamic_node(&node_name, std::sync::Arc::new(node));
+            return Ok(node_name);
+        }
         let node_meta = if let Some(node_meta) = NodeRegistry::get(&node_json.node_type) {
             node_meta
         } else {

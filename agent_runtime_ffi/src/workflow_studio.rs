@@ -633,7 +633,7 @@ fn handle_workflow_studio_request(
         }
         ("POST", "/api/decompile") => studio_decompile_response(state, &request.body),
         ("POST", "/api/nodes/instantiate") => {
-            StudioResponse::Json(200, studio_instantiate_node_json(&request.body))
+            StudioResponse::Json(200, studio_instantiate_node_json(&state, &request.body))
         }
         ("POST", "/api/normalize") => {
             StudioResponse::Json(200, studio_normalize_json(state, &request.body))
@@ -748,6 +748,10 @@ fn studio_request_authorized(state: &WorkflowStudioState, request: &StudioReques
 }
 
 fn studio_context_json(state: &WorkflowStudioState) -> Value {
+    let nodes = match studio_reference_capabilities(state) {
+        Ok(nodes) => nodes,
+        Err(error) => return json!({"error":error.to_string()}),
+    };
     let snapshot = state
         .event_log
         .lock()
@@ -790,7 +794,7 @@ fn studio_context_json(state: &WorkflowStudioState) -> Value {
         },
         "workflows_dir": state.workflows.workflows_dir().to_string_lossy(),
         "workflow_name": state.workflow_name,
-        "node_capabilities": state.node_capabilities,
+        "node_capabilities": nodes,
         "readonly": state.readonly,
         "tool_execution_policy": state.tool_execution_policy
     })
@@ -971,11 +975,38 @@ fn set_workflow_studio_current_draft(
 }
 
 fn studio_tools_json(state: &WorkflowStudioState) -> Value {
+    let nodes = match studio_reference_capabilities(state) {
+        Ok(nodes) => nodes,
+        Err(error) => return json!({"error":error.to_string()}),
+    };
     json!({
         "schema": "workflow-studio-tools/v1",
         "rpc_tools": state.runtime_tools,
-        "node_capabilities": state.node_capabilities
+        "node_capabilities": nodes
     })
+}
+
+fn studio_reference_capabilities(
+    state: &WorkflowStudioState,
+) -> corework::error::Result<Vec<Value>> {
+    let mut nodes = state.node_capabilities.clone();
+    for definition in state.workflows.workflow_reference_definitions()? {
+        let mut node = definition["node"].clone();
+        node["category"] = json!("workflow/reference");
+        node["source"] = json!("workflow");
+        node["pure"] = json!(false);
+        node["editor_callable"] = json!(true);
+        nodes.push(node);
+    }
+    Ok(nodes)
+}
+
+fn studio_compiler_tools(
+    state: &WorkflowStudioState,
+) -> corework::error::Result<Vec<RuntimeToolMetadata>> {
+    let mut tools = state.runtime_tools.clone();
+    tools.extend(state.workflows.workflow_reference_tools()?);
+    Ok(tools)
 }
 
 fn studio_skills_json(state: &WorkflowStudioState) -> Value {
@@ -1055,6 +1086,10 @@ fn studio_workflow_detail_json(state: &WorkflowStudioState, id: &str) -> Value {
 }
 
 fn studio_compile_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
+    let tools = match studio_compiler_tools(state) {
+        Ok(tools) => tools,
+        Err(error) => return json!({"error":error.to_string()}),
+    };
     let input: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(e) => return json!({"error": format!("invalid JSON body: {e}")}),
@@ -1063,14 +1098,14 @@ fn studio_compile_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
     if script.trim().is_empty() {
         return json!({"error": "script must not be empty"});
     }
-    match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
-        script,
-        &state.runtime_tools,
-    ) {
-        Ok(blueprint) => json!({
-            "schema": "workflow-studio-compile-result/v1",
-            "blueprint": blueprint
-        }),
+    match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(script, &tools)
+    {
+        Ok(blueprint) => match state.workflows.validate_workflow_references(&blueprint) {
+            Ok(()) => {
+                json!({"schema": "workflow-studio-compile-result/v1", "blueprint": blueprint})
+            }
+            Err(error) => json!({"error":error.to_string()}),
+        },
         Err(e) => json!({
             "error": "script compile failed",
             "line": e.line,
@@ -1123,7 +1158,7 @@ fn studio_decompile_response(_state: &WorkflowStudioState, body: &[u8]) -> Studi
     )
 }
 
-fn studio_instantiate_node_json(body: &[u8]) -> Value {
+fn studio_instantiate_node_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
     use corework::workflow::blueprint_json::{BlueprintNodeJson, NodePin, NodePosition, NodeSize};
     use corework::workflow::registry::PinKind;
 
@@ -1143,6 +1178,20 @@ fn studio_instantiate_node_json(body: &[u8]) -> Value {
         .trim();
     if node_type.is_empty() || temporary_id.is_empty() {
         return json!({"error": "node_type and temporary_id are required"});
+    }
+    if let Some(id) = node_type.strip_prefix(corework::workflow::workflows::reference::PREFIX) {
+        return match state
+            .workflows
+            .workflow_reference_definition(id, temporary_id)
+        {
+            Ok(mut definition) => {
+                if let Some(position) = input.get("position") {
+                    definition["node"]["position"] = position.clone();
+                }
+                definition
+            }
+            Err(error) => json!({"error":error.to_string()}),
+        };
     }
     let Some(meta) = NodeRegistry::get(node_type) else {
         return json!({"error": format!("node type is not registered: {node_type}")});
@@ -1195,6 +1244,10 @@ fn studio_instantiate_node_json(body: &[u8]) -> Value {
 }
 
 fn studio_normalize_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
+    let tools = match studio_compiler_tools(state) {
+        Ok(tools) => tools,
+        Err(error) => return json!({"error":error.to_string()}),
+    };
     use corework::workflow::blueprint_json::BlueprintJson;
 
     let input: Value = match serde_json::from_slice(body) {
@@ -1230,8 +1283,7 @@ fn studio_normalize_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
     };
     let mut normalized =
         match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
-            &script,
-            &state.runtime_tools,
+            &script, &tools,
         ) {
             Ok(value) => value,
             Err(e) => {

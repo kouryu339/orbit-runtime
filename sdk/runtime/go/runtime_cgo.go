@@ -776,6 +776,10 @@ func (r *Runtime) WorkflowNodeDefinitions(ctx context.Context) (json.RawMessage,
 	return r.invoke(ctx, "runtime.get_workflow_node_definitions", map[string]any{})
 }
 
+func (r *Runtime) WorkflowReferenceNode(ctx context.Context, workflowID, nodeID string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.get_reference_node", map[string]any{"workflow_id": workflowID, "node_id": nodeID})
+}
+
 func (r *Runtime) AgentClusterDefinitions(ctx context.Context) (json.RawMessage, error) {
 	return r.invoke(ctx, "runtime.get_agent_cluster_definitions", map[string]any{})
 }

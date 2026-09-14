@@ -4,6 +4,7 @@ pub mod draft;
 pub mod draft_ops;
 pub mod executor;
 pub mod flowchart;
+pub mod reference;
 pub mod snapshot;
 
 pub use catalog::{

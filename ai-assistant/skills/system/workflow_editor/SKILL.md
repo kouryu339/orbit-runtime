@@ -33,6 +33,7 @@ Your `thinking` state uses the configured advanced system skill for general tool
 
 - Use stable `workflow_id` values from `listWorkflows`; names are display values, not selectors.
 - Use `readWorkflow --workflow_id <id>` to select and inspect an existing resource.
+- Registered resources include a compiler-checked `reference_script`. Reuse its `WorkflowRef_<workflow_id>` node inside other scripts, preserving direct parameter and output names. Reference nodes are classified as `workflow/reference` and displayed as `执行，<name>`. They are compiler nodes, not separate FC calls. Draft references and direct/indirect cycles are forbidden; do not embed the generic execution tools inside a workflow.
 - Use `createWorkflowDraft` with a complete script to create and select a Draft in one operation.
 - Use `updateWorkflow` with the complete replacement script and current `expected_revision`.
 - On revision conflict, reread the resource and reconcile explicitly. Never overwrite another editor's update.

@@ -136,6 +136,8 @@ pub struct WorkflowResourceSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowResourceView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_script: Option<String>,
     #[serde(flatten)]
     pub summary: WorkflowResourceSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,6 +208,12 @@ impl WorkflowsModule {
         self.ensure_id_available(&id)?;
         self.ensure_name_available(&name, None)?;
 
+        let mut validation = validation;
+        if let Some(blueprint) = &blueprint {
+            if let Err(error) = self.validate_workflow_references(blueprint) {
+                validation = WorkflowValidation::invalid(error.to_string());
+            }
+        }
         let mut drafts = self.get_draft_registry()?;
         let entry = DraftWorkflowEntry {
             id,
@@ -245,6 +253,12 @@ impl WorkflowsModule {
         ensure_revision(&id, previous_revision, expected_revision)?;
         self.ensure_name_available(&name, Some(&id))?;
 
+        let mut validation = validation;
+        if let Some(blueprint) = &blueprint {
+            if let Err(error) = self.validate_workflow_references(blueprint) {
+                validation = WorkflowValidation::invalid(error.to_string());
+            }
+        }
         let entry = DraftWorkflowEntry {
             id,
             name,
@@ -595,6 +609,7 @@ impl WorkflowsModule {
 
     fn draft_view(entry: DraftWorkflowEntry) -> WorkflowResourceView {
         WorkflowResourceView {
+            reference_script: None,
             summary: Self::draft_summary(&entry),
             script: entry.script,
             blueprint: entry.blueprint,
@@ -606,6 +621,7 @@ impl WorkflowsModule {
             .map_err(FrameworkError::SystemError)?;
         let script = corework::workflow::chain_decompiler::decompile_chain(&blueprint).ok();
         Ok(WorkflowResourceView {
+            reference_script: Some(super::reference::reference_script(&blueprint)?),
             summary: WorkflowResourceSummary {
                 id: entry.metadata.id,
                 name: entry.metadata.name,

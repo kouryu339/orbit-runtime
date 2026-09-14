@@ -119,6 +119,20 @@ tool nodes, and Runtime RPC tool nodes. Every entry exposes `node_type`,
 `display_name` is an input template such as `{A}+{B}` or
 `{Value}是否包含{Pattern}` that a host may render with connected values.
 
+Registered workflows also appear in category `workflow/reference`, named
+`执行，<workflow name>`. Their stable node type is `WorkflowRef_<workflow_id>`.
+Invoke `workflow.get_reference_node` with `{"workflow_id":"child","node_id":"1"}`
+to obtain `{schema, category, node}`; insert `node` directly into Blueprint nodes.
+Input/output pins retain the Start/End interface names, types and descriptions.
+Drafts cannot be referenced. Registered workflow reads include `reference_script`,
+a complete compiler-checked invocation example with direct `--parameter` arguments.
+Compile this text through Runtime's workflow compiler (which includes the registered
+reference catalog). The `input.name` values in examples are ordinary script input
+expressions, not `--input.name` tool parameters.
+Registration, updates and execution reject missing references, interface changes,
+and direct/indirect cycles with their reference path. Referenced workflows cannot
+be deleted. Runs use a fixed definition snapshot; concurrent updates affect later runs.
+
 Hosts can also inspect effective Agent topology and sanitized RPC connectivity
 through `runtime.get_agent_cluster_definitions` and
 `runtime.get_rpc_endpoint_definitions` (with typed methods in every SDK). The

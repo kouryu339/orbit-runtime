@@ -907,6 +907,11 @@ public:
         return invoke("runtime.get_workflow_node_definitions");
     }
 
+    std::string workflow_reference_node(const std::string& workflow_id, const std::string& node_id)
+    {
+        return invoke("workflow.get_reference_node", std::string("{\"workflow_id\":") + detail::quote(workflow_id) + ",\"node_id\":" + detail::quote(node_id) + "}");
+    }
+
     std::string agent_cluster_definitions()
     {
         return invoke("runtime.get_agent_cluster_definitions");

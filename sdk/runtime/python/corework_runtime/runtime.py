@@ -860,6 +860,10 @@ class Runtime:
         """Return the unified Corework, local-tool, and RPC workflow node catalog."""
         return self.invoke("runtime.get_workflow_node_definitions")
 
+    def workflow_reference_node(self, workflow_id: str, node_id: str) -> Any:
+        """Return a compiler-ready reference node for a registered workflow."""
+        return self.invoke("workflow.get_reference_node", {"workflow_id": workflow_id, "node_id": node_id})
+
     def agent_cluster_definitions(self) -> Any:
         """Return effective registered and built-in Agent cluster definitions."""
         return self.invoke("runtime.get_agent_cluster_definitions")

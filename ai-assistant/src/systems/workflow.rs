@@ -118,10 +118,16 @@ async fn active_runtime_tools(ctx: &Context) -> Result<Vec<RuntimeToolMetadata>,
         })?
         .into_iter()
         .collect::<HashSet<_>>();
-    Ok(runtime_tools(ctx)
+    let mut tools: Vec<_> = runtime_tools(ctx)
         .into_iter()
         .filter(|tool| tool.workflow_enabled && active_tools.contains(&tool.name))
-        .collect())
+        .collect();
+    tools.extend(
+        workflows(ctx)
+            .and_then(|module| module.workflow_reference_tools())
+            .map_err(|error| AIOutput::error(500, error.to_string()))?,
+    );
+    Ok(tools)
 }
 
 fn sync_selection(ctx: &Context, workflow_id: &str, revision: u64) {
@@ -327,8 +333,9 @@ impl SystemOperation for ReadWorkflow {
                     .map_err(FrameworkError::SerializationError)?
             }),
             format!(
-                "Read Workflow '{}' at revision {}.",
-                resource.summary.name, resource.summary.revision
+                "Read Workflow '{}' at revision {}.{}",
+                resource.summary.name, resource.summary.revision,
+                resource.reference_script.as_ref().map(|script| format!("\nRegistered workflow reference script (direct parameter names):\n```workflow\n{script}\n```" )).unwrap_or_default()
             ),
         ))
     }
@@ -762,6 +769,7 @@ async fn execute_resource(
 
 #[define_operation(
     name = "testWorkflow",
+    workflow_enabled = false,
     display_name = "测试工作流{workflow_id}并用{inputs}返回输出{outputs}和追踪{trace}",
     category = "Workflow",
     description = "Test a Draft or Registered Workflow. Inputs use --input.<name> and trace is optional.",
@@ -807,6 +815,7 @@ impl SystemOperation for TestWorkflow {
 
 #[define_operation(
     name = "executeWorkflow",
+    workflow_enabled = false,
     display_name = "执行已注册工作流{workflow_id}并用{inputs}返回输出{outputs}和追踪{trace}",
     category = "Workflow",
     description = "Execute a trusted Registered Workflow by stable id. Inputs use --input.<name>.",
@@ -862,6 +871,7 @@ impl SystemOperation for ExecuteWorkflow {
 
 #[define_operation(
     name = "executeWorkflowScript",
+    workflow_enabled = false,
     display_name = "执行临时工作流脚本{script}并用{inputs}返回输出{outputs}和追踪{trace}",
     category = "Workflow",
     description = "Compile and execute temporary Workflow v2 script without creating a catalog resource.",

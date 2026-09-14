@@ -609,6 +609,13 @@ impl RuntimeApp {
         self.invoke("runtime.get_workflow_node_definitions", json!({}))
     }
 
+    pub fn get_workflow_reference_node(&self, workflow_id: &str, node_id: &str) -> Result<Value> {
+        self.invoke(
+            "workflow.get_reference_node",
+            json!({"workflow_id": workflow_id, "node_id": node_id}),
+        )
+    }
+
     pub fn get_agent_cluster_definitions(&self) -> Result<Value> {
         self.invoke("runtime.get_agent_cluster_definitions", json!({}))
     }

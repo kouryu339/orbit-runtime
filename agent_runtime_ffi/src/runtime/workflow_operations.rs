@@ -26,6 +26,15 @@ fn default_workflow_resource_schema() -> String {
 }
 
 impl RuntimeFacade {
+    fn workflow_compiler_tools(&self) -> Result<Vec<RuntimeToolMetadata>, RuntimeError> {
+        let mut tools = self.runtime_tools.clone();
+        tools.extend(
+            self.workflow_module()?
+                .workflow_reference_tools()
+                .map_err(workflow_input_error)?,
+        );
+        Ok(tools)
+    }
     pub fn describe_workflow_inputs(
         &self,
         workflow_id: Option<&str>,
@@ -50,7 +59,7 @@ impl RuntimeFacade {
         } else {
             corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
                 script.unwrap_or_default(),
-                &self.runtime_tools,
+                &self.workflow_compiler_tools()?,
             )
             .map_err(|error| {
                 RuntimeError::InvalidConfig(format!(
@@ -115,7 +124,7 @@ impl RuntimeFacade {
             ));
         }
         let module = self.workflow_module()?;
-        let runtime_tools = self.runtime_tools.clone();
+        let runtime_tools = self.workflow_compiler_tools()?;
         let source = if script.is_some() {
             "script"
         } else {
@@ -350,14 +359,25 @@ impl RuntimeFacade {
         }
         match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
             script,
-            &self.runtime_tools,
+            &self.workflow_compiler_tools()?,
         ) {
-            Ok(blueprint) => Ok(json!({
-                "schema": "agent-runtime-workflow-conversion/v1",
-                "script": script,
-                "blueprint": blueprint,
-                "validation": corework::workflow::workflows::WorkflowValidation::valid()
-            })),
+            Ok(blueprint) => {
+                let validation = match self
+                    .workflow_module()?
+                    .validate_workflow_references(&blueprint)
+                {
+                    Ok(()) => corework::workflow::workflows::WorkflowValidation::valid(),
+                    Err(error) => corework::workflow::workflows::WorkflowValidation::invalid(
+                        error.to_string(),
+                    ),
+                };
+                Ok(json!({
+                    "schema": "agent-runtime-workflow-conversion/v1",
+                    "script": script,
+                    "blueprint": blueprint,
+                    "validation": validation
+                }))
+            }
             Err(error) => Ok(json!({
                 "schema": "agent-runtime-workflow-conversion/v1",
                 "script": script,
@@ -390,7 +410,7 @@ impl RuntimeFacade {
     }
 
     pub fn create_workflow_draft(&mut self, input: &Value) -> Result<Value, RuntimeError> {
-        let prepared = prepare_draft_resource(input, &self.runtime_tools, None)?;
+        let prepared = prepare_draft_resource(input, &self.workflow_compiler_tools()?, None)?;
         let module = self.workflow_module()?;
         let workflow = self
             .rt
@@ -435,8 +455,11 @@ impl RuntimeFacade {
             .map_err(workflow_input_error)?;
         let workflow = match current.summary.kind {
             corework::workflow::workflows::WorkflowResourceKind::Draft => {
-                let prepared =
-                    prepare_draft_from_input(parsed, &self.runtime_tools, Some(&current))?;
+                let prepared = prepare_draft_from_input(
+                    parsed,
+                    &self.workflow_compiler_tools()?,
+                    Some(&current),
+                )?;
                 let module = self.workflow_module()?;
                 self.rt
                     .block_on(module.update_draft_resource(
@@ -451,7 +474,8 @@ impl RuntimeFacade {
                     .map_err(workflow_input_error)?
             }
             corework::workflow::workflows::WorkflowResourceKind::Registered => {
-                let blueprint = prepare_registered_update(parsed, &self.runtime_tools, &current)?;
+                let blueprint =
+                    prepare_registered_update(parsed, &self.workflow_compiler_tools()?, &current)?;
                 let module = self.workflow_module()?;
                 let workflow = self
                     .rt
@@ -518,7 +542,7 @@ impl RuntimeFacade {
     }
 
     pub fn compile_workflow_draft(&self, id: &str) -> Result<Value, RuntimeError> {
-        let workflow = self
+        let mut workflow = self
             .workflow_module()?
             .read_workflow_resource(id)
             .map_err(workflow_input_error)?;
@@ -527,6 +551,15 @@ impl RuntimeFacade {
                 "workflow '{}' is registered; compile is only available for drafts",
                 id
             )));
+        }
+        if let Some(blueprint) = &workflow.blueprint {
+            if let Err(error) = self
+                .workflow_module()?
+                .validate_workflow_references(blueprint)
+            {
+                workflow.summary.validation =
+                    corework::workflow::workflows::WorkflowValidation::invalid(error.to_string());
+            }
         }
         Ok(json!({
             "workflow_id": workflow.summary.id,
@@ -736,7 +769,7 @@ impl RuntimeFacade {
         let mut blueprint =
             match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
                 script,
-                &self.runtime_tools,
+                &self.workflow_compiler_tools()?,
             ) {
                 Ok(blueprint) => blueprint,
                 Err(error) => {

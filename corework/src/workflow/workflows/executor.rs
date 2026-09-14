@@ -151,10 +151,13 @@ impl WorkflowExecutionContext {
 ///
 /// - `unit`：通过 World 资源持有蓝图注册表与草稿数据的所有权
 /// - `workflows_dir`：本地工作流持久化目录（`app_local_data_dir/workflows/`）
+#[derive(Clone)]
 pub struct WorkflowsModule {
     pub(crate) unit: Module,
     pub(crate) workflows_dir: PathBuf,
     pub(crate) event_bus: Arc<dyn EventBus>,
+    pub(crate) reference_snapshot: Option<Arc<HashMap<String, BlueprintJson>>>,
+    pub(crate) reference_lock: Arc<parking_lot::Mutex<()>>,
 }
 
 impl WorkflowsModule {
@@ -222,6 +225,8 @@ impl WorkflowsModule {
             unit,
             workflows_dir,
             event_bus,
+            reference_snapshot: None,
+            reference_lock: Arc::new(parking_lot::Mutex::new(())),
         })
     }
 
@@ -250,6 +255,7 @@ impl WorkflowsModule {
     /// 扫描 `workflows_dir` 下工作流 JSON 文件，兼容旧的普通 `.json` 文件。
     /// 返回成功加载的数量。
     pub fn scan_local_dir(&self) -> Result<usize> {
+        let _reference_guard = self.reference_lock.lock();
         let entries = std::fs::read_dir(&self.workflows_dir).map_err(|e| {
             FrameworkError::SystemError(format!(
                 "扫描工作流目录失败 {:?}: {}",
@@ -259,6 +265,7 @@ impl WorkflowsModule {
 
         let mut count = 0;
         let mut registry = self.get_registry()?;
+        let previous_registry = registry.clone();
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -306,6 +313,10 @@ impl WorkflowsModule {
         }
 
         self.unit.set_resource(REGISTRY, &registry, None)?;
+        if let Err(error) = self.validate_reference_catalog_unlocked() {
+            self.unit.set_resource(REGISTRY, &previous_registry, None)?;
+            return Err(error);
+        }
         tracing::debug!(count, "local workflows scanned");
         Ok(count)
     }
@@ -317,11 +328,13 @@ impl WorkflowsModule {
     /// 返回注册 key。
     ///
     pub fn save_local(&self, blueprint: &BlueprintJson) -> Result<String> {
+        let _reference_guard = self.reference_lock.lock();
         let mut blueprint = blueprint.clone();
         if blueprint.metadata.id.is_empty() {
             blueprint.metadata.id = blueprint.metadata.name.clone();
         }
         blueprint.normalize_node_sizes();
+        self.validate_references_unlocked(&blueprint)?;
         let safe_name = blueprint
             .metadata
             .name
@@ -369,14 +382,16 @@ impl WorkflowsModule {
         let path = file_path.as_ref();
         let path_str = path.to_string_lossy().to_string();
 
-        // 验证可加载
-        let _ = BlueprintLoader::new().load_workflow_from_file(path).await?;
-
         let json_str = std::fs::read_to_string(path)
             .map_err(|e| FrameworkError::SystemError(format!("读取文件失败: {e}")))?;
         let blueprint = BlueprintJson::from_json_str(&json_str)
             .map_err(|e| FrameworkError::SystemError(format!("JSON解析失败: {e}")))?;
 
+        let frozen = self.freeze_references(&blueprint)?;
+        BlueprintLoader::with_workflows(Arc::new(frozen))
+            .load_from_blueprint_json(blueprint.clone(), &self.create_run_context())?;
+        let _reference_guard = self.reference_lock.lock();
+        self.validate_references_unlocked(&blueprint)?;
         let key = Self::make_key(&blueprint.metadata);
         let mut registry = self.get_registry()?;
         registry.retain(|e| e.key != key);
@@ -426,6 +441,8 @@ impl WorkflowsModule {
     }
 
     pub fn delete_resource(&self, id: &str) -> Result<RegisteredWorkflow> {
+        let _reference_guard = self.reference_lock.lock();
+        self.ensure_reference_unused_unlocked(id)?;
         let id = Self::validate_resource_id(id)?;
         let registry = self.get_registry()?;
         let entry = registry
@@ -672,7 +689,9 @@ impl WorkflowsModule {
         tracing::debug!(workflow_name = %workflow_name, "inline workflow execution started");
         let t = std::time::Instant::now();
         let ctx = self.create_run_context();
-        let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
+        let references = self.freeze_references(&blueprint)?;
+        let loaded = BlueprintLoader::with_workflows(Arc::new(references))
+            .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         let run_id = crate::workflow::execution::trace::new_workflow_run_id();
         exec_ctx.bind_workflow_identity(workflow_id, run_id, loaded.compiled.node_ids.clone())?;
@@ -708,7 +727,9 @@ impl WorkflowsModule {
         let workflow_name = blueprint.metadata.name.clone();
         tracing::debug!(workflow_name = %workflow_name, "inline workflow report started");
         let ctx = self.create_run_context();
-        let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
+        let references = self.freeze_references(&blueprint)?;
+        let loaded = BlueprintLoader::with_workflows(Arc::new(references))
+            .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         let run_id = if trace_enabled {
             exec_ctx.enable_trace_for_workflow(
@@ -774,7 +795,9 @@ impl WorkflowsModule {
         let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
         let ctx = execution_context.apply_to(self.create_run_context())?;
-        let loaded = BlueprintLoader::new().load_from_blueprint_json(blueprint, &ctx)?;
+        let references = self.freeze_references(&blueprint)?;
+        let loaded = BlueprintLoader::with_workflows(Arc::new(references))
+            .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         let (trace_event_tx, mut trace_event_rx) = tokio::sync::mpsc::channel(1024);
         let run_id = exec_ctx.enable_trace_with_events_for_run(
@@ -952,11 +975,9 @@ impl WorkflowsModule {
             .ok_or_else(|| FrameworkError::InvalidOperation("当前无草稿".into()))?;
 
         // 验证可执行性
-        let json = serde_json::to_string(&draft.blueprint)
-            .map_err(|e| FrameworkError::SystemError(format!("序列化失败: {e}")))?;
-        let _ = BlueprintLoader::new()
-            .load_workflow_from_json_str(&json)
-            .await?;
+        let frozen = self.freeze_references(&draft.blueprint)?;
+        BlueprintLoader::with_workflows(Arc::new(frozen))
+            .load_from_blueprint_json(draft.blueprint.clone(), &self.create_run_context())?;
 
         // 保存到本地目录并注册
         let key = self.save_local(&draft.blueprint)?;
@@ -978,6 +999,8 @@ impl WorkflowsModule {
         update: bool,
         revision: Option<u64>,
     ) -> Result<RegisteredWorkflow> {
+        let _reference_guard = self.reference_lock.lock();
+        self.validate_references_unlocked(blueprint)?;
         let mut blueprint = blueprint.clone();
         let id = Self::validate_resource_id(&blueprint.metadata.id)?;
         let name = blueprint.metadata.name.trim().to_string();

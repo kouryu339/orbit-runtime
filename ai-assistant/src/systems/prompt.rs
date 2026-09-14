@@ -876,6 +876,7 @@ pub fn format_workflows_section(registry: &[serde_json::Value]) -> String {
     output.push_str(
         "Available Registered workflows can be executed with `executeWorkflow --workflow_id <id> --input.<name> <value>`.\n\n",
     );
+    output.push_str("When composing a Workflow script, read the registered resource's `reference_script` with `readWorkflow`. Use its `WorkflowRef_<workflow_id>` node and direct `--parameter` names. These are compiler-only registered workflow references, not FC tools; never invent their interfaces or recursively invoke executeWorkflow/executeWorkflowScript inside a Workflow. Drafts and cyclic references are rejected.\n\n");
 
     for entry in registry {
         let meta = match entry.get("metadata") {

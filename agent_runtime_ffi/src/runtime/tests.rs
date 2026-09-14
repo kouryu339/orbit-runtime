@@ -1768,6 +1768,46 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert_eq!(registered["trusted"], true);
     assert!(workflows_dir.join("echo-workflow.workflow.json").exists());
 
+    let reference = invoke(
+        &mut facade,
+        "workflow.get_reference_node",
+        json!({"workflow_id":"echo-workflow", "node_id":"child-instance"}),
+    );
+    assert_eq!(reference["category"], "workflow/reference");
+    assert_eq!(reference["node"]["node_type"], "WorkflowRef_echo-workflow");
+    assert_eq!(reference["node"]["id"], "child-instance");
+    assert_eq!(
+        reference["reference_script"],
+        registered["reference_script"]
+    );
+    let catalog = invoke(
+        &mut facade,
+        "runtime.get_workflow_node_definitions",
+        json!({}),
+    );
+    assert!(catalog["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["node_type"] == "WorkflowRef_echo-workflow"));
+    let reference_script = registered["reference_script"].as_str().unwrap();
+    let compiled_reference = invoke(
+        &mut facade,
+        "workflow.convert.script_to_blueprint",
+        json!({"script":reference_script}),
+    );
+    assert_eq!(
+        compiled_reference["validation"]["valid"], true,
+        "{compiled_reference}"
+    );
+    let nested = invoke(
+        &mut facade,
+        "workflow.execute_script",
+        json!({"script":reference_script, "inputs":{"name":"Nested Ada"}}),
+    );
+    assert_eq!(nested["code"], 0, "{nested}");
+    assert_eq!(nested["result"]["outputs"]["result"], "Nested Ada");
+
     let first = invoke(
         &mut facade,
         "workflow.execute",

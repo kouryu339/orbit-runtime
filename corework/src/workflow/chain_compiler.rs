@@ -2689,6 +2689,11 @@ impl ChainCompiler {
         // 处理 RETURN 绑定：为 EndNode 动态添加 DataInput 引脚 + 数据连线
         let bindings = std::mem::take(&mut self.return_bindings);
         for (pin_name, src_node, src_pin) in bindings {
+            let literal = if src_node == "__literal__" {
+                serde_json::from_str(&src_pin).ok()
+            } else {
+                None
+            };
             // 向 EndNode 追加 DataInput 引脚
             if let Some(node) = self.nodes.iter_mut().find(|n| n.id == end_id) {
                 node.pins.push(NodePin {
@@ -2696,7 +2701,7 @@ impl ChainCompiler {
                     kind: "DataInput".to_string(),
                     data_type: "Any".to_string(),
                     description: String::new(),
-                    default_value: None,
+                    default_value: literal,
                     resolved_type: None,
                     split_config: None,
                 });
@@ -3277,7 +3282,10 @@ impl ChainCompiler {
         // RETURN 的值连到 EndNode 的 DataInput 引脚
         // 此时 EndNode 尚未创建——我们先记录，最后在 compile() 中处理
         for (pin_name, val) in assigns {
-            let (src_node, src_pin) = self.compile_value(val)?;
+            let (src_node, src_pin) = match val {
+                Value::Literal(value) => ("__literal__".to_string(), value.to_string()),
+                _ => self.compile_value(val)?,
+            };
             self.return_bindings
                 .push((pin_name.clone(), src_node, src_pin));
         }
