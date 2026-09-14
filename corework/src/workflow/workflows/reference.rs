@@ -90,6 +90,10 @@ impl WorkflowsModule {
             return Ok(self.clone());
         }
         let _guard = self.reference_lock.lock();
+        self.freeze_references_unlocked(root)
+    }
+
+    pub(crate) fn freeze_references_unlocked(&self, root: &BlueprintJson) -> Result<Self> {
         let mut catalog = self.reference_catalog_unlocked()?;
         let mut reachable = HashSet::new();
         validate(root, &catalog, &mut Vec::new(), &mut reachable)?;
@@ -131,6 +135,12 @@ impl WorkflowsModule {
 
     pub fn workflow_reference_tools(&self) -> Result<Vec<crate::rpc_tool::RuntimeToolMetadata>> {
         let _guard = self.reference_lock.lock();
+        self.workflow_reference_tools_unlocked()
+    }
+
+    pub(crate) fn workflow_reference_tools_unlocked(
+        &self,
+    ) -> Result<Vec<crate::rpc_tool::RuntimeToolMetadata>> {
         self.reference_catalog_unlocked()?
             .values()
             .map(reference_tool)
@@ -512,6 +522,9 @@ mod tests {
 
     #[tokio::test]
     async fn registered_reference_executes_and_preserves_output_types() {
+        let _test_guard = super::super::WORKFLOW_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let directory =
             std::env::temp_dir().join(format!("workflow-reference-{}", uuid::Uuid::new_v4()));
         let module = WorkflowsModule::new_with_event_bus(
@@ -565,6 +578,9 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_lifecycle_and_frozen_execution() {
+        let _test_guard = super::super::WORKFLOW_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let directory = std::env::temp_dir().join(format!(
             "workflow-reference-lifecycle-{}",
             uuid::Uuid::new_v4()

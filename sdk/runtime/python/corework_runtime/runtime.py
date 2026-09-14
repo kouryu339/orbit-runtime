@@ -673,12 +673,33 @@ class Runtime:
             },
         )
 
+    def revise_workflow(
+        self, workflow_id: str, expected_revision: int, change: Mapping[str, Any],
+        *, name: str | None = None, description: str | None = None,
+    ) -> Any:
+        """Validate and commit exactly one script or blueprint change."""
+        return self.invoke("workflow.revise", {
+            "id": workflow_id, "expected_revision": expected_revision,
+            "change": dict(change), "name": name, "description": description,
+        })
+
+    def validate_workflow_revision(
+        self, workflow_id: str, expected_revision: int, change: Mapping[str, Any],
+        *, name: str | None = None, description: str | None = None,
+    ) -> Any:
+        """Prepare the same complete resource without saving a new revision."""
+        return self.invoke("workflow.validate_revision", {
+            "id": workflow_id, "expected_revision": expected_revision,
+            "change": dict(change), "name": name, "description": description,
+        })
+
     def update_workflow(
         self,
         resource: Mapping[str, Any],
         *,
         expected_revision: int | None = None,
     ) -> Any:
+        """Deprecated: use revise_workflow."""
         return self.invoke(
             "workflow.update",
             {"resource": dict(resource), "expected_revision": expected_revision},

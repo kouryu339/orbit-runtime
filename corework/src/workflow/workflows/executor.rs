@@ -240,7 +240,7 @@ impl WorkflowsModule {
         self.unit.create_context()
     }
 
-    fn create_run_context(&self) -> corework::orchestration::Context {
+    pub(crate) fn create_run_context(&self) -> corework::orchestration::Context {
         let mut ctx = self.create_context();
         // Node pins and variables belong to one execution, not the module cache.
         ctx.cache = Arc::new(crate::cache::InMemoryCache::new());
@@ -297,7 +297,10 @@ impl WorkflowsModule {
                                 file_path: path_str,
                                 key,
                                 source: WorkflowSource::Local,
-                                revision: 1,
+                                revision: serde_json::from_str::<JsonValue>(&json_str)
+                                    .ok()
+                                    .and_then(|v| v["revision"].as_u64())
+                                    .unwrap_or(1),
                             });
                             count += 1;
                         }
@@ -1000,6 +1003,16 @@ impl WorkflowsModule {
         revision: Option<u64>,
     ) -> Result<RegisteredWorkflow> {
         let _reference_guard = self.reference_lock.lock();
+        self.persist_resource_unlocked(blueprint, update, revision, None)
+    }
+
+    pub(crate) fn persist_resource_unlocked(
+        &self,
+        blueprint: &BlueprintJson,
+        update: bool,
+        revision: Option<u64>,
+        prepared: Option<&super::revision::PreparedRevision>,
+    ) -> Result<RegisteredWorkflow> {
         self.validate_references_unlocked(blueprint)?;
         let mut blueprint = blueprint.clone();
         let id = Self::validate_resource_id(&blueprint.metadata.id)?;
@@ -1056,11 +1069,29 @@ impl WorkflowsModule {
             )));
         }
 
-        let json = serde_json::to_string_pretty(&blueprint).map_err(|error| {
+        let next_revision = match revision {
+            Some(revision) => revision,
+            None => match existing.as_ref() {
+                Some(entry) => entry
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| FrameworkError::InvalidOperation("Revision overflow".into()))?,
+                None => 1,
+            },
+        };
+
+        let mut document = serde_json::to_value(&blueprint)?;
+        if let Some(prepared) = prepared {
+            document["script"] = serde_json::json!(prepared.script);
+            document["source"] = serde_json::json!(prepared.source);
+            document["validator_version"] = serde_json::json!(prepared.validator_version);
+        }
+        document["revision"] = serde_json::json!(next_revision);
+        let json = serde_json::to_string_pretty(&document).map_err(|error| {
             FrameworkError::SystemError(format!("serialize workflow resource failed: {error}"))
         })?;
         let previous_file = std::fs::read(&path).ok();
-        std::fs::write(&path, json).map_err(|error| {
+        super::revision::atomic_write(&path, json.as_bytes()).map_err(|error| {
             FrameworkError::SystemError(format!(
                 "write workflow resource file '{}' failed: {}",
                 path.display(),
@@ -1073,12 +1104,7 @@ impl WorkflowsModule {
             file_path: path.to_string_lossy().to_string(),
             key: Self::make_key(&blueprint.metadata),
             source: WorkflowSource::Local,
-            revision: revision.unwrap_or_else(|| {
-                existing
-                    .as_ref()
-                    .map(|entry| entry.revision.saturating_add(1))
-                    .unwrap_or(1)
-            }),
+            revision: next_revision,
         };
         let mut next_registry = registry;
         next_registry
@@ -1087,10 +1113,18 @@ impl WorkflowsModule {
         if let Err(error) = self.unit.set_resource(REGISTRY, &next_registry, None) {
             match previous_file {
                 Some(content) => {
-                    let _ = std::fs::write(&path, content);
+                    super::revision::atomic_write(&path, &content).map_err(|rollback| {
+                        FrameworkError::SystemError(format!(
+                            "Registry update failed: {error}; rollback failed: {rollback}"
+                        ))
+                    })?;
                 }
                 None => {
-                    let _ = std::fs::remove_file(&path);
+                    std::fs::remove_file(&path).map_err(|rollback| {
+                        FrameworkError::SystemError(format!(
+                            "Registry update failed: {error}; rollback failed: {rollback}"
+                        ))
+                    })?;
                 }
             }
             return Err(error);

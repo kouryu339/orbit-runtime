@@ -218,6 +218,15 @@ func (r *Runtime) RegisterWorkflowDraft(ctx context.Context, id string, expected
 	return r.invoke(ctx, "workflow.register", payload)
 }
 
+func (r *Runtime) ReviseWorkflow(ctx context.Context, id string, expectedRevision uint64, change json.RawMessage, name *string, description *string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.revise", map[string]any{"id": id, "expected_revision": expectedRevision, "change": change, "name": name, "description": description})
+}
+
+func (r *Runtime) ValidateWorkflowRevision(ctx context.Context, id string, expectedRevision uint64, change json.RawMessage, name *string, description *string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.validate_revision", map[string]any{"id": id, "expected_revision": expectedRevision, "change": change, "name": name, "description": description})
+}
+
+// Deprecated: use ReviseWorkflow.
 func (r *Runtime) UpdateWorkflow(ctx context.Context, resource json.RawMessage, expectedRevision *uint64) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.update", map[string]any{"resource": resource, "expected_revision": expectedRevision})
 }

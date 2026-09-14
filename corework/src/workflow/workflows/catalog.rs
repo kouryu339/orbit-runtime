@@ -111,6 +111,10 @@ impl WorkflowValidation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DraftWorkflowEntry {
+    #[serde(default)]
+    pub(crate) source: Option<String>,
+    #[serde(default)]
+    pub(crate) validator_version: Option<String>,
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) description: String,
@@ -138,6 +142,10 @@ pub struct WorkflowResourceSummary {
 pub struct WorkflowResourceView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_script: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validator_version: Option<String>,
     #[serde(flatten)]
     pub summary: WorkflowResourceSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,33 +208,38 @@ impl WorkflowsModule {
         blueprint: Option<BlueprintJson>,
         validation: WorkflowValidation,
     ) -> Result<WorkflowResourceView> {
-        let id = match requested_id.map(str::trim).filter(|id| !id.is_empty()) {
-            Some(id) => Self::validate_resource_id(id)?,
-            None => format!("wf_{}", Uuid::new_v4().simple()),
-        };
-        let name = self.validate_resource_name(name)?;
-        self.ensure_id_available(&id)?;
-        self.ensure_name_available(&name, None)?;
+        let view = {
+            let _guard = self.reference_lock.lock();
+            let id = match requested_id.map(str::trim).filter(|id| !id.is_empty()) {
+                Some(id) => Self::validate_resource_id(id)?,
+                None => format!("wf_{}", Uuid::new_v4().simple()),
+            };
+            let name = self.validate_resource_name(name)?;
+            self.ensure_id_available(&id)?;
+            self.ensure_name_available(&name, None)?;
 
-        let mut validation = validation;
-        if let Some(blueprint) = &blueprint {
-            if let Err(error) = self.validate_workflow_references(blueprint) {
-                validation = WorkflowValidation::invalid(error.to_string());
+            let mut validation = validation;
+            if let Some(blueprint) = &blueprint {
+                if let Err(error) = self.validate_references_unlocked(blueprint) {
+                    validation = WorkflowValidation::invalid(error.to_string());
+                }
             }
-        }
-        let mut drafts = self.get_draft_registry()?;
-        let entry = DraftWorkflowEntry {
-            id,
-            name,
-            description: description.trim().to_string(),
-            revision: 1,
-            script,
-            blueprint,
-            validation,
+            let mut drafts = self.get_draft_registry()?;
+            let entry = DraftWorkflowEntry {
+                source: None,
+                validator_version: None,
+                id,
+                name,
+                description: description.trim().to_string(),
+                revision: 1,
+                script,
+                blueprint,
+                validation,
+            };
+            drafts.push(entry.clone());
+            self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
+            Self::draft_view(entry)
         };
-        drafts.push(entry.clone());
-        self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
-        let view = Self::draft_view(entry);
         self.publish_resource_change("created", None, &view.summary)
             .await;
         Ok(view)
@@ -242,40 +255,48 @@ impl WorkflowsModule {
         blueprint: Option<BlueprintJson>,
         validation: WorkflowValidation,
     ) -> Result<WorkflowResourceView> {
-        let id = Self::validate_resource_id(id)?;
-        let name = self.validate_resource_name(name)?;
-        let mut drafts = self.get_draft_registry()?;
-        let position = drafts
-            .iter()
-            .position(|entry| entry.id == id)
-            .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
-        let previous_revision = drafts[position].revision;
-        ensure_revision(&id, previous_revision, expected_revision)?;
-        self.ensure_name_available(&name, Some(&id))?;
+        let (view, previous_revision) = {
+            let _guard = self.reference_lock.lock();
+            let id = Self::validate_resource_id(id)?;
+            let name = self.validate_resource_name(name)?;
+            let mut drafts = self.get_draft_registry()?;
+            let position = drafts
+                .iter()
+                .position(|entry| entry.id == id)
+                .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
+            let previous_revision = drafts[position].revision;
+            ensure_revision(&id, previous_revision, expected_revision)?;
+            self.ensure_name_available(&name, Some(&id))?;
 
-        let mut validation = validation;
-        if let Some(blueprint) = &blueprint {
-            if let Err(error) = self.validate_workflow_references(blueprint) {
-                validation = WorkflowValidation::invalid(error.to_string());
+            let mut validation = validation;
+            if let Some(blueprint) = &blueprint {
+                if let Err(error) = self.validate_references_unlocked(blueprint) {
+                    validation = WorkflowValidation::invalid(error.to_string());
+                }
             }
-        }
-        let entry = DraftWorkflowEntry {
-            id,
-            name,
-            description: description.trim().to_string(),
-            revision: previous_revision.saturating_add(1),
-            script,
-            blueprint,
-            validation,
+            let entry = DraftWorkflowEntry {
+                source: None,
+                validator_version: None,
+                id,
+                name,
+                description: description.trim().to_string(),
+                revision: previous_revision.saturating_add(1),
+                script,
+                blueprint,
+                validation,
+            };
+            drafts[position] = entry.clone();
+            self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
+            (Self::draft_view(entry), previous_revision)
         };
-        drafts[position] = entry.clone();
-        self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
-        let view = Self::draft_view(entry);
         self.publish_resource_change("updated", Some(previous_revision), &view.summary)
             .await;
         Ok(view)
     }
 
+    /// Compatibility entry point. Hosts should use `revise_workflow` so script,
+    /// blueprint, validation and revision are committed as one resource.
+    #[deprecated(note = "use revise_workflow with an explicit expected_revision")]
     pub async fn update_registered_resource(
         &self,
         blueprint: &BlueprintJson,
@@ -302,66 +323,94 @@ impl WorkflowsModule {
         expected_revision: Option<u64>,
         registered_name: Option<&str>,
     ) -> Result<WorkflowResourceView> {
-        let id = Self::validate_resource_id(id)?;
-        let mut drafts = self.get_draft_registry()?;
-        let position = drafts
-            .iter()
-            .position(|entry| entry.id == id)
-            .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
-        let draft = drafts[position].clone();
-        ensure_revision(&id, draft.revision, expected_revision)?;
-        if !draft.validation.valid {
-            return Err(FrameworkError::InvalidOperation(format!(
-                "workflow draft '{}' is not valid and cannot be registered: {}",
-                id,
-                draft
-                    .validation
-                    .error
-                    .as_deref()
-                    .unwrap_or("compile failed")
-            )));
-        }
-        let mut blueprint = draft.blueprint.clone().ok_or_else(|| {
-            FrameworkError::InvalidOperation(format!(
-                "workflow draft '{}' has no compiled blueprint",
-                id
-            ))
-        })?;
-        let name = self.validate_resource_name(registered_name.unwrap_or(&draft.name))?;
-        self.ensure_name_available(&name, Some(&id))?;
-        blueprint.metadata.id = id.clone();
-        blueprint.metadata.name = name;
-        blueprint.metadata.description = draft.description.clone();
+        let (view, previous_revision) = {
+            let _guard = self.reference_lock.lock();
+            let id = Self::validate_resource_id(id)?;
+            let mut drafts = self.get_draft_registry()?;
+            let position = drafts
+                .iter()
+                .position(|entry| entry.id == id)
+                .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
+            let draft = drafts[position].clone();
+            ensure_revision(&id, draft.revision, expected_revision)?;
+            if !draft.validation.valid {
+                return Err(FrameworkError::InvalidOperation(format!(
+                    "workflow draft '{}' is not valid and cannot be registered: {}",
+                    id,
+                    draft
+                        .validation
+                        .error
+                        .as_deref()
+                        .unwrap_or("compile failed")
+                )));
+            }
+            let mut blueprint = draft.blueprint.clone().ok_or_else(|| {
+                FrameworkError::InvalidOperation(format!(
+                    "workflow draft '{}' has no compiled blueprint",
+                    id
+                ))
+            })?;
+            let name = self.validate_resource_name(registered_name.unwrap_or(&draft.name))?;
+            self.ensure_name_available(&name, Some(&id))?;
+            blueprint.metadata.id = id.clone();
+            blueprint.metadata.name = name;
+            blueprint.metadata.description = draft.description.clone();
+            self.validate_references_unlocked(&blueprint)?;
+            let frozen = self.freeze_references_unlocked(&blueprint)?;
+            crate::workflow::BlueprintLoader::with_workflows(std::sync::Arc::new(frozen))
+                .load_from_blueprint_json(blueprint.clone(), &self.create_run_context())?;
 
-        drafts.remove(position);
-        self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
-        match self.persist_resource(&blueprint, false, Some(draft.revision.saturating_add(1))) {
-            Ok(_) => {
-                let view = self.read_workflow_resource(&id)?;
-                self.publish_event(
-                    WORKFLOW_RESOURCE_CHANGED_EVENT,
-                    json!({
-                        "schema": "agent-runtime-workflow-change/v1",
-                        "workflow_id": view.summary.id,
-                        "operation": "registered",
-                        "previous_kind": "draft",
-                        "kind": "registered",
-                        "previous_revision": draft.revision,
-                        "revision": view.summary.revision,
-                        "trusted": true,
-                        "production_executable": true
-                    }),
-                )
-                .await;
-                Ok(view)
+            let script = match draft.script.clone() {
+                Some(script) => script,
+                None => corework::workflow::chain_decompiler::decompile_chain(&blueprint)
+                    .map_err(|error| FrameworkError::InvalidOperation(error.to_string()))?,
+            };
+            let prepared = super::revision::PreparedRevision {
+                blueprint: blueprint.clone(),
+                script,
+                source: draft.source.clone().unwrap_or_else(|| "legacy".into()),
+                validator_version: draft
+                    .validator_version
+                    .clone()
+                    .unwrap_or_else(|| "legacy".into()),
+            };
+            let revision = draft
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| FrameworkError::InvalidOperation("Revision overflow".into()))?;
+
+            drafts.remove(position);
+            self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
+            match self.persist_resource_unlocked(&blueprint, false, Some(revision), Some(&prepared))
+            {
+                Ok(_) => {
+                    let view = self.read_workflow_resource(&id)?;
+                    (view, draft.revision)
+                }
+                Err(error) => {
+                    let mut rollback = self.get_draft_registry()?;
+                    rollback.push(draft);
+                    self.unit.set_resource(DRAFT_REGISTRY, &rollback, None)?;
+                    return Err(error);
+                }
             }
-            Err(error) => {
-                let mut rollback = self.get_draft_registry()?;
-                rollback.push(draft);
-                let _ = self.unit.set_resource(DRAFT_REGISTRY, &rollback, None);
-                Err(error)
-            }
-        }
+        };
+        self.publish_event(
+            WORKFLOW_RESOURCE_CHANGED_EVENT,
+            json!({
+                "schema": "agent-runtime-workflow-change/v1",
+                "workflow_id": view.summary.id,
+                "operation": "registered",
+                "previous_kind": "draft",
+                "kind": "registered",
+                "previous_revision": previous_revision,
+                "revision": view.summary.revision,
+                "trusted": true,
+                "production_executable": true
+            }),
+        )
+        .await;
+        Ok(view)
     }
 
     pub async fn delete_catalog_resource(
@@ -610,6 +659,8 @@ impl WorkflowsModule {
     fn draft_view(entry: DraftWorkflowEntry) -> WorkflowResourceView {
         WorkflowResourceView {
             reference_script: None,
+            source: entry.source.clone(),
+            validator_version: entry.validator_version.clone(),
             summary: Self::draft_summary(&entry),
             script: entry.script,
             blueprint: entry.blueprint,
@@ -617,17 +668,38 @@ impl WorkflowsModule {
     }
 
     fn registered_view(entry: BlueprintEntry) -> Result<WorkflowResourceView> {
-        let blueprint = BlueprintJson::from_workflow_file(&entry.file_path)
-            .map_err(FrameworkError::SystemError)?;
-        let script = corework::workflow::chain_decompiler::decompile_chain(&blueprint).ok();
+        let document: Value = serde_json::from_slice(
+            &std::fs::read(&entry.file_path)
+                .map_err(|e| FrameworkError::SystemError(e.to_string()))?,
+        )?;
+        let mut blueprint: BlueprintJson = serde_json::from_value(document.clone())?;
+        blueprint.normalize_node_sizes();
+        let script = match document.get("script").and_then(Value::as_str) {
+            Some(script) => Some(script.to_string()),
+            None => Some(
+                corework::workflow::chain_decompiler::decompile_chain(&blueprint)
+                    .map_err(|e| FrameworkError::InvalidOperation(e.to_string()))?,
+            ),
+        };
         Ok(WorkflowResourceView {
             reference_script: Some(super::reference::reference_script(&blueprint)?),
+            source: document
+                .get("source")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            validator_version: document
+                .get("validator_version")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             summary: WorkflowResourceSummary {
                 id: entry.metadata.id,
                 name: entry.metadata.name,
                 description: entry.metadata.description,
                 kind: WorkflowResourceKind::Registered,
-                revision: entry.revision,
+                revision: document
+                    .get("revision")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(entry.revision),
                 trusted: true,
                 production_executable: true,
                 validation: WorkflowValidation::valid(),

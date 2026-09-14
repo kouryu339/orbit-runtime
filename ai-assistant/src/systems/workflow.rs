@@ -11,8 +11,7 @@ use corework::system::SystemOperation;
 use corework::workflow::execution::WorkflowToAiMode;
 use corework::workflow::workflows::executor::{WorkflowExecutionContext, WorkflowExecutionOutcome};
 use corework::workflow::workflows::{
-    preserve_workflow_blueprint_layout, WorkflowEditorSession, WorkflowResourceKind,
-    WorkflowValidation, WorkflowsModule,
+    WorkflowEditorSession, WorkflowResourceKind, WorkflowValidation, WorkflowsModule,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -468,49 +467,31 @@ impl SystemOperation for UpdateWorkflow {
             Err(error) => return Ok(error),
         };
         let module = workflows(ctx)?;
-        let current = match module.read_workflow_resource(&id) {
-            Ok(resource) => resource,
+        match module.read_workflow_resource(&id) {
+            Ok(_) => {}
             Err(error) => return Ok(AIOutput::error(404, error.to_string())),
-        };
-        let mut blueprint = match compile_script(&script, ctx).await {
-            Ok(blueprint) => blueprint,
+        }
+        let tools = match active_runtime_tools(ctx).await {
+            Ok(tools) => tools,
             Err(error) => return Ok(error),
         };
-        blueprint.metadata.id = current.summary.id.clone();
-        blueprint.metadata.name = args
-            .get("name")
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or(&current.summary.name)
-            .to_string();
-        blueprint.metadata.description = args
-            .get("description")
-            .unwrap_or(&current.summary.description)
-            .to_string();
-        if let Some(previous) = current.blueprint.as_ref() {
-            preserve_workflow_blueprint_layout(previous, &mut blueprint);
-        }
-        let next_name = blueprint.metadata.name.clone();
-        let next_description = blueprint.metadata.description.clone();
-        let updated = match current.summary.kind {
-            WorkflowResourceKind::Draft => {
-                module
-                    .update_draft_resource(
-                        &id,
-                        Some(expected_revision),
-                        &next_name,
-                        &next_description,
-                        Some(script),
-                        Some(blueprint),
-                        WorkflowValidation::valid(),
-                    )
-                    .await
-            }
-            WorkflowResourceKind::Registered => {
-                module
-                    .update_registered_resource(&blueprint, Some(expected_revision))
-                    .await
-            }
+        let request = corework::workflow::workflows::revision::RevisionRequest {
+            id: id.clone(),
+            expected_revision,
+            change: corework::workflow::workflows::revision::WorkflowChange::Script(script),
+            name: args
+                .get("name")
+                .filter(|name| !name.trim().is_empty())
+                .map(str::to_string),
+            description: args.get("description").map(str::to_string),
         };
+        let updated = module
+            .revise_workflow(request, &tools, true)
+            .await
+            .and_then(|value| {
+                serde_json::from_value::<corework::workflow::workflows::WorkflowResourceView>(value)
+                    .map_err(FrameworkError::SerializationError)
+            });
         let updated = match updated {
             Ok(resource) => resource,
             Err(error) => return Ok(AIOutput::error(409, error.to_string())),

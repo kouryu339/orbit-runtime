@@ -5,6 +5,7 @@ pub mod draft_ops;
 pub mod executor;
 pub mod flowchart;
 pub mod reference;
+pub mod revision;
 pub mod snapshot;
 
 pub use catalog::{
@@ -17,6 +18,9 @@ pub use catalog::{
 pub use executor::{WorkflowExecutionContext, WorkflowsModule};
 
 use std::sync::OnceLock;
+
+#[cfg(test)]
+pub(crate) static WORKFLOW_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 type DraftExistsFn = dyn Fn(bool) + Send + Sync;
 

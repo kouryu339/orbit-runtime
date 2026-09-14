@@ -62,6 +62,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflows_module_all() {
+        let _test_guard = super::WORKFLOW_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let m = WorkflowsModule::new().expect("WorkflowsModule::new() 应该成功");
 
         // ── 1. 初始状态 ──────────────────────────────────────────────────────

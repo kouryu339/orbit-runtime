@@ -1931,13 +1931,10 @@ fn studio_save_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
             Ok(value) => value,
             Err(e) => return json!({"error": format!("invalid BlueprintJson: {e}")}),
         };
-    let script = match corework::workflow::chain_decompiler::decompile_chain(&blueprint) {
-        Ok(script) => script,
-        Err(error) => return json!({"error": error.to_string()}),
-    };
     let workflows = Arc::clone(&state.workflows);
     let session = Arc::clone(&state.editor_session);
     let selection = session.selection();
+    let runtime_tools = session.runtime_tools().to_vec();
     let result = run_short_tokio(async move {
         match selection {
             Some(selection) => {
@@ -1951,34 +1948,26 @@ fn studio_save_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
                         requested_workflow_id.as_deref().unwrap_or_default()
                     )));
                 }
-                let current = workflows.read_workflow_resource(&selection.workflow_id)?;
-                let expected_revision = expected_revision.or(Some(selection.revision));
-                let mut blueprint = blueprint;
-                blueprint.metadata.id = current.summary.id.clone();
-                blueprint.metadata.name = current.summary.name.clone();
-                blueprint.metadata.description = current.summary.description.clone();
-                match current.summary.kind {
-                    corework::workflow::workflows::WorkflowResourceKind::Draft => {
-                        workflows
-                            .update_draft_resource(
-                                &current.summary.id,
-                                expected_revision,
-                                &current.summary.name,
-                                &current.summary.description,
-                                Some(script),
-                                Some(blueprint),
-                                corework::workflow::workflows::WorkflowValidation::valid(),
-                            )
-                            .await
-                    }
-                    corework::workflow::workflows::WorkflowResourceKind::Registered => {
-                        workflows
-                            .update_registered_resource(&blueprint, expected_revision)
-                            .await
-                    }
-                }
+                let request = corework::workflow::workflows::revision::RevisionRequest {
+                    id: selection.workflow_id,
+                    expected_revision: expected_revision.unwrap_or(selection.revision),
+                    change: corework::workflow::workflows::revision::WorkflowChange::Blueprint(
+                        blueprint,
+                    ),
+                    name: None,
+                    description: None,
+                };
+                let value = workflows
+                    .revise_workflow(request, &runtime_tools, true)
+                    .await?;
+                serde_json::from_value(value)
+                    .map_err(corework::error::FrameworkError::SerializationError)
             }
             None => {
+                let script = corework::workflow::chain_decompiler::decompile_chain(&blueprint)
+                    .map_err(|error| {
+                        corework::error::FrameworkError::InvalidOperation(error.to_string())
+                    })?;
                 let requested_id = (!blueprint.metadata.id.trim().is_empty())
                     .then(|| blueprint.metadata.id.clone());
                 let name = blueprint.metadata.name.clone();

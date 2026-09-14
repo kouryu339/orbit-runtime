@@ -133,6 +133,26 @@ Registration, updates and execution reject missing references, interface changes
 and direct/indirect cycles with their reference path. Referenced workflows cannot
 be deleted. Runs use a fixed definition snapshot; concurrent updates affect later runs.
 
+Workflow source and graph updates use one revision protocol. Call `workflow.revise`
+with an existing resource `id`, mandatory `expected_revision`, and exactly one change:
+
+```json
+{"id":"workflow-123","expected_revision":12,"change":{"type":"script","value":"input value:String\nreturn result=input.value"}}
+```
+
+Use `type: "blueprint"` with a complete BlueprintJson when the graph is authoritative.
+`workflow.validate_revision` runs the identical preparation and reference validation
+pipeline but does not save or increment the revision. Success returns the complete
+resource (`script`, `blueprint`, `revision`, source and validation metadata). Script
+edits preserve their original text; layout-only graph changes preserve that authored
+text. A revision conflict, invalid reference, unsupported graph-to-script conversion,
+or semantic round-trip mismatch leaves both the file and revision unchanged.
+
+The typed SDK methods are `revise_workflow` / `validate_workflow_revision` (Rust,
+Python and C++ naming) and `ReviseWorkflow` / `ValidateWorkflowRevision` (Go).
+`workflow.update` remains a compatibility command and forwards to the same committed
+pipeline; new hosts should use the explicit revision methods.
+
 Hosts can also inspect effective Agent topology and sanitized RPC connectivity
 through `runtime.get_agent_cluster_definitions` and
 `runtime.get_rpc_endpoint_definitions` (with typed methods in every SDK). The

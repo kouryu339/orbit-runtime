@@ -68,16 +68,30 @@ impl ChainDecompiler {
         // 构建连接查找表
         for conn in &bp.connections {
             if conn.connection_type == "Exec" {
-                exec_out.insert(
-                    (conn.source_node.clone(), conn.source_pin.clone()),
-                    (conn.target_node.clone(), conn.target_pin.clone()),
-                );
+                if exec_out
+                    .insert(
+                        (conn.source_node.clone(), conn.source_pin.clone()),
+                        (conn.target_node.clone(), conn.target_pin.clone()),
+                    )
+                    .is_some()
+                {
+                    return Err(DecompileError::new(
+                        "Multiple execution edges on one output cannot be represented in script",
+                    ));
+                }
             } else {
                 // Data 连接：反向查找（目标引脚 → 源引脚）
-                data_in.insert(
-                    (conn.target_node.clone(), conn.target_pin.clone()),
-                    (conn.source_node.clone(), conn.source_pin.clone()),
-                );
+                if data_in
+                    .insert(
+                        (conn.target_node.clone(), conn.target_pin.clone()),
+                        (conn.source_node.clone(), conn.source_pin.clone()),
+                    )
+                    .is_some()
+                {
+                    return Err(DecompileError::new(
+                        "Multiple data sources on one input cannot be represented in script",
+                    ));
+                }
             }
         }
 

@@ -260,6 +260,37 @@ impl RuntimeApp {
         )
     }
 
+    /// Atomically validate and commit one script or blueprint change.
+    pub fn revise_workflow(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        change: Value,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.revise",
+            json!({"id": id, "expected_revision": expected_revision, "change": change, "name": name, "description": description}),
+        )
+    }
+
+    /// Use the same preparation pipeline without saving or incrementing the revision.
+    pub fn validate_workflow_revision(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        change: Value,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<Value> {
+        self.invoke(
+            "workflow.validate_revision",
+            json!({"id": id, "expected_revision": expected_revision, "change": change, "name": name, "description": description}),
+        )
+    }
+
+    #[deprecated(note = "use revise_workflow with an explicit expected revision")]
     pub fn update_workflow(
         &self,
         resource: Value,

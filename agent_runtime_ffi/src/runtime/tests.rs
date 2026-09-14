@@ -1822,10 +1822,53 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert!(trace.contains("result="), "{trace}");
     assert!(first["result"]["node_trace"].is_object());
 
+    let revision_script = "# retained source\ninput name\nreturn result=$name";
+    let preview = invoke(
+        &mut facade,
+        "workflow.validate_revision",
+        json!({"id":"echo-workflow","expected_revision":2,
+            "change":{"type":"script","value":revision_script}}),
+    );
+    assert_eq!(preview["committed"], false);
+    assert_eq!(preview["revision"], 2);
+    assert_eq!(
+        invoke(&mut facade, "workflow.read", json!({"id":"echo-workflow"}))["revision"],
+        2
+    );
+    assert!(crate::invoke_command(
+        &mut facade,
+        "workflow.revise",
+        json!({"id":"echo-workflow","expected_revision":2,
+            "change":{"type":"script","value":"not a workflow"}})
+        .as_object()
+        .unwrap(),
+        "workflow-sdk-test",
+    )
+    .is_err());
+    assert_eq!(
+        invoke(&mut facade, "workflow.read", json!({"id":"echo-workflow"}))["revision"],
+        2
+    );
+    let revised = invoke(
+        &mut facade,
+        "workflow.revise",
+        json!({"id":"echo-workflow","expected_revision":2,
+            "change":{"type":"script","value":revision_script}}),
+    );
+    assert_eq!(revised["revision"], 3);
+    assert_eq!(revised["script"], revision_script);
+    let stored_after_revision: Value = serde_json::from_slice(
+        &fs::read(workflows_dir.join("echo-workflow.workflow.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored_after_revision["revision"], 3);
+    assert_eq!(stored_after_revision["script"], revision_script);
+    assert_eq!(stored_after_revision["source"], "script");
+
     let updated = invoke(
         &mut facade,
         "workflow.update",
-        json!({"expected_revision": 2, "resource": {
+        json!({"expected_revision": 3, "resource": {
             "schema": "agent-runtime-workflow-resource/v1",
             "id": "echo-workflow",
             "name": "Updated Workflow",
@@ -1834,7 +1877,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         }}),
     );
     assert_eq!(updated["name"], "Updated Workflow");
-    assert_eq!(updated["revision"], 3);
+    assert_eq!(updated["revision"], 4);
     let listed = invoke(&mut facade, "workflow.list", json!({}));
     assert_eq!(listed["workflows"].as_array().unwrap().len(), 1);
     assert_eq!(listed["workflows"][0]["id"], "echo-workflow");
@@ -2388,10 +2431,10 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     let deleted = invoke(
         &mut facade,
         "workflow.delete",
-        json!({"id": "echo-workflow", "expected_revision": 3}),
+        json!({"id": "echo-workflow", "expected_revision": 4}),
     );
     assert_eq!(deleted["deleted"]["id"], "echo-workflow");
-    assert_eq!(deleted["revision"], 4);
+    assert_eq!(deleted["revision"], 5);
     assert!(!workflows_dir.join("echo-workflow.workflow.json").exists());
     assert!(invoke(&mut facade, "workflow.list", json!({}))["workflows"]
         .as_array()

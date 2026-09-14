@@ -169,6 +169,14 @@ func (*Runtime) UpdateWorkflow(context.Context, json.RawMessage, *uint64) (json.
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+func (*Runtime) ReviseWorkflow(context.Context, string, uint64, json.RawMessage, *string, *string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) ValidateWorkflowRevision(context.Context, string, uint64, json.RawMessage, *string, *string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
 func (*Runtime) CompileWorkflowDraft(context.Context, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }

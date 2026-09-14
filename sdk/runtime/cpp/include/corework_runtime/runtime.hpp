@@ -670,7 +670,25 @@ public:
         return invoke("workflow.register", payload + "}");
     }
 
-    std::string update_workflow(
+    std::string revise_workflow(const std::string& id, uint64_t expected_revision, const std::string& change_json,
+        const std::optional<std::string>& name = std::nullopt, const std::optional<std::string>& description = std::nullopt)
+    {
+        auto payload = std::string("{\"id\":") + detail::quote(id) + ",\"expected_revision\":" + std::to_string(expected_revision) + ",\"change\":" + object_or_empty(change_json);
+        if (name) payload += ",\"name\":" + detail::quote(*name);
+        if (description) payload += ",\"description\":" + detail::quote(*description);
+        return invoke("workflow.revise", payload + "}");
+    }
+
+    std::string validate_workflow_revision(const std::string& id, uint64_t expected_revision, const std::string& change_json,
+        const std::optional<std::string>& name = std::nullopt, const std::optional<std::string>& description = std::nullopt)
+    {
+        auto payload = std::string("{\"id\":") + detail::quote(id) + ",\"expected_revision\":" + std::to_string(expected_revision) + ",\"change\":" + object_or_empty(change_json);
+        if (name) payload += ",\"name\":" + detail::quote(*name);
+        if (description) payload += ",\"description\":" + detail::quote(*description);
+        return invoke("workflow.validate_revision", payload + "}");
+    }
+
+    [[deprecated("use revise_workflow")]] std::string update_workflow(
         const std::string& resource_json,
         std::optional<uint64_t> expected_revision = std::nullopt)
     {

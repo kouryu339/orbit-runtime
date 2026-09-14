@@ -26,6 +26,25 @@ fn default_workflow_resource_schema() -> String {
 }
 
 impl RuntimeFacade {
+    pub fn revise_workflow(
+        &mut self,
+        payload: &serde_json::Map<String, Value>,
+        commit: bool,
+    ) -> Result<Value, RuntimeError> {
+        let request = serde_json::from_value::<
+            corework::workflow::workflows::revision::RevisionRequest,
+        >(Value::Object(payload.clone()))
+        .map_err(|e| RuntimeError::InvalidConfig(e.to_string()))?;
+        let module = self.workflow_module()?;
+        let result = self
+            .rt
+            .block_on(module.revise_workflow(request, &self.runtime_tools, commit))
+            .map_err(workflow_input_error)?;
+        if commit && result["kind"] == "registered" {
+            self.sync_parent_workflow_registry()?;
+        }
+        Ok(result)
+    }
     fn workflow_compiler_tools(&self) -> Result<Vec<RuntimeToolMetadata>, RuntimeError> {
         let mut tools = self.runtime_tools.clone();
         tools.extend(
@@ -453,39 +472,32 @@ impl RuntimeFacade {
             .workflow_module()?
             .read_workflow_resource(&id)
             .map_err(workflow_input_error)?;
-        let workflow = match current.summary.kind {
-            corework::workflow::workflows::WorkflowResourceKind::Draft => {
-                let prepared = prepare_draft_from_input(
-                    parsed,
-                    &self.workflow_compiler_tools()?,
-                    Some(&current),
-                )?;
-                let module = self.workflow_module()?;
-                self.rt
-                    .block_on(module.update_draft_resource(
-                        &id,
-                        expected_revision,
-                        &prepared.name,
-                        &prepared.description,
-                        prepared.script,
-                        prepared.blueprint,
-                        prepared.validation,
-                    ))
-                    .map_err(workflow_input_error)?
-            }
-            corework::workflow::workflows::WorkflowResourceKind::Registered => {
-                let blueprint =
-                    prepare_registered_update(parsed, &self.workflow_compiler_tools()?, &current)?;
-                let module = self.workflow_module()?;
-                let workflow = self
-                    .rt
-                    .block_on(module.update_registered_resource(&blueprint, expected_revision))
-                    .map_err(workflow_input_error)?;
-                self.sync_parent_workflow_registry()?;
-                workflow
+        use corework::workflow::workflows::revision::{RevisionRequest, WorkflowChange};
+        let change = match (parsed.script, parsed.blueprint) {
+            (Some(script), None) => WorkflowChange::Script(script),
+            (None, Some(blueprint)) => WorkflowChange::Blueprint(blueprint),
+            _ => {
+                return Err(RuntimeError::InvalidConfig(
+                    "workflow resource must provide exactly one of script or blueprint".into(),
+                ))
             }
         };
-        serde_json::to_value(workflow).map_err(|error| RuntimeError::Internal(error.to_string()))
+        let module = self.workflow_module()?;
+        let request = RevisionRequest {
+            id,
+            expected_revision: expected_revision.unwrap_or(current.summary.revision),
+            change,
+            name: parsed.name,
+            description: parsed.description,
+        };
+        let result = self
+            .rt
+            .block_on(module.revise_workflow(request, &self.runtime_tools, true))
+            .map_err(workflow_input_error)?;
+        if result["kind"] == "registered" {
+            self.sync_parent_workflow_registry()?;
+        }
+        Ok(result)
     }
 
     pub fn register_workflow_draft(
@@ -1055,12 +1067,20 @@ fn prepare_draft_from_input(
             }
         }
         (None, Some(blueprint)) => {
-            let validation = match blueprint.validate() {
+            let mut validation = match blueprint.validate() {
                 Ok(()) => corework::workflow::workflows::WorkflowValidation::valid(),
                 Err(error) => corework::workflow::workflows::WorkflowValidation::invalid(error),
             };
             let script = if validation.valid {
-                corework::workflow::chain_decompiler::decompile_chain(&blueprint).ok()
+                match corework::workflow::chain_decompiler::decompile_chain(&blueprint) {
+                    Ok(script) => Some(script),
+                    Err(error) => {
+                        validation = corework::workflow::workflows::WorkflowValidation::invalid(
+                            error.to_string(),
+                        );
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -1087,50 +1107,6 @@ fn prepare_draft_from_input(
         blueprint,
         validation,
     })
-}
-
-fn prepare_registered_update(
-    input: WorkflowResourceInput,
-    runtime_tools: &[RuntimeToolMetadata],
-    current: &corework::workflow::workflows::WorkflowResourceView,
-) -> Result<BlueprintJson, RuntimeError> {
-    let id = input.id.clone().ok_or_else(|| {
-        RuntimeError::InvalidConfig("workflow resource id is required".to_string())
-    })?;
-    let mut blueprint = match (input.script, input.blueprint) {
-        (Some(script), None) => {
-            let mut blueprint =
-                corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
-                    &script,
-                    runtime_tools,
-                )
-                .map_err(|error| {
-                    RuntimeError::InvalidConfig(format!(
-                        "workflow resource script compile failed at line {}: {}",
-                        error.line, error.message
-                    ))
-                })?;
-            if let Some(previous) = current.blueprint.as_ref() {
-                corework::workflow::workflows::preserve_workflow_blueprint_layout(
-                    previous,
-                    &mut blueprint,
-                );
-            }
-            blueprint
-        }
-        (None, Some(blueprint)) => blueprint,
-        _ => {
-            return Err(RuntimeError::InvalidConfig(
-                "workflow resource must provide exactly one of script or blueprint".to_string(),
-            ))
-        }
-    };
-    blueprint.metadata.id = id;
-    blueprint.metadata.name = input.name.unwrap_or_else(|| current.summary.name.clone());
-    blueprint.metadata.description = input
-        .description
-        .unwrap_or_else(|| current.summary.description.clone());
-    Ok(blueprint)
 }
 
 fn workflow_execution_response(
