@@ -51,12 +51,15 @@ create options 是传给 FFI create 调用的直接参数，不是配置文件�
     "id": "word-tools",
     "protocol": "grpc",
     "endpoint": "127.0.0.1:50103",
-    "timeout_ms": 60000
+    "timeout_ms": 60000,
+    "to_ai_max_chars": 600
   }]
 }
 ```
 
 resources 只声明可用资源。它不会启动会话，也不会让所有工具对所有 Agent 可见。
+`to_ai_max_chars` 控制该 RPC 端点普通 `to_ai` 文本及 `result` 字符串字段的摘要上限；
+默认 `600`，设为 `0` 可关闭字符截断。
 工具可见性仍由当前 active role/feature Skill 的 `tools` 白名单决定。
 `systemSkills.thinking` 可选；省略时使用默认轻量 `thinking`。配置
 `thinking-pro` 会完整替换思考状态，并增加标准多行脚本知识与

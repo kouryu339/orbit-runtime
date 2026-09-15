@@ -1006,6 +1006,7 @@ fn resource_definition_catalogs_are_effective_and_sanitized() {
                     "protocol": "grpc",
                     "endpoint": "http://secret-user:secret-pass@127.0.0.1:50051",
                     "timeout_ms": 4321,
+                    "to_ai_max_chars": 4096,
                     "launch": {
                         "kind": "process",
                         "program": "private-sidecar.exe",
@@ -1059,6 +1060,7 @@ fn resource_definition_catalogs_are_effective_and_sanitized() {
     assert_eq!(endpoint["connection_state"], "registered");
     assert_eq!(endpoint["verification_scope"], "startup_list_tools");
     assert_eq!(endpoint["address_configured"], true);
+    assert_eq!(endpoint["to_ai_max_chars"], 4096);
     let serialized = registered.to_string();
     for secret in [
         "secret-user",
@@ -4857,6 +4859,27 @@ fn rpc_tool_endpoint_rejects_removed_snapshot_boundary_field() {
     .unwrap_err();
 
     assert!(error.to_string().contains("allowed_snapshot_prefixes"));
+}
+
+#[test]
+fn rpc_endpoint_to_ai_limit_defaults_and_accepts_unlimited() {
+    let default_endpoint = serde_json::from_value::<ResourceRpcEndpointConfig>(json!({
+        "id": "default-tool",
+        "endpoint": "127.0.0.1:50051"
+    }))
+    .unwrap();
+    assert_eq!(
+        default_endpoint.to_ai_max_chars,
+        corework::rpc_tool::DEFAULT_RPC_TO_AI_MAX_CHARS
+    );
+
+    let unlimited_endpoint = serde_json::from_value::<ResourceRpcEndpointConfig>(json!({
+        "id": "full-result-tool",
+        "endpoint": "127.0.0.1:50052",
+        "to_ai_max_chars": 0
+    }))
+    .unwrap();
+    assert_eq!(unlimited_endpoint.to_ai_max_chars, 0);
 }
 
 #[test]

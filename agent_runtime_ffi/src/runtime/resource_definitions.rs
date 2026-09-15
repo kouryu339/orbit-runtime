@@ -82,6 +82,7 @@ impl RuntimeFacade {
                     "lifecycle": lifecycle,
                     "managed": lifecycle == "process",
                     "timeout_ms": endpoint.timeout_ms,
+                    "to_ai_max_chars": endpoint.to_ai_max_chars,
                     "address_configured": !endpoint.address.trim().is_empty(),
                     "connection_state": if !self.started {
                         "registered"

@@ -149,7 +149,7 @@ for the full configuration and recovery rules.
 
 ## 0.4.8 Beta Focus
 
-The refreshed `0.4.8-beta.1` release candidate makes native function calling
+The refreshed `0.4.8-beta.2` release candidate makes native function calling
 the default Agent tool transport, adds focused streaming projection, and keeps
 bounded diagnostics off the Runtime event payload path:
 

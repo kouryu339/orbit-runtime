@@ -110,7 +110,8 @@ async fn openai_chat_streams_tool_identity_and_completes_call() {
         "choices": [{
             "delta": {"tool_calls": [{
                 "index": 0,
-                "function": {"arguments": "\"scene.json\"}"}
+                "id": "",
+                "function": {"name": "", "arguments": "\"scene.json\"}"}
             }]},
             "finish_reason": "tool_calls"
         }]
@@ -157,6 +158,57 @@ async fn openai_chat_streams_tool_identity_and_completes_call() {
         event,
         LlmStreamEvent::ToolCallCompleted { call_id: Some(id), .. } if id == "call-chat"
     )));
+}
+
+#[tokio::test]
+async fn openai_chat_rejects_conflicting_non_empty_tool_call_ids() {
+    let first = serde_json::json!({
+        "choices": [{
+            "delta": {"tool_calls": [{
+                "index": 0,
+                "id": "call-first",
+                "function": {"name": "ReadScene", "arguments": "{"}
+            }]},
+            "finish_reason": null
+        }]
+    });
+    let second = serde_json::json!({
+        "choices": [{
+            "delta": {"tool_calls": [{
+                "index": 0,
+                "id": "call-second",
+                "function": {"arguments": "}"}
+            }]},
+            "finish_reason": "tool_calls"
+        }]
+    });
+    let body = format!("data: {first}\n\ndata: {second}\n\ndata: [DONE]\n\n");
+    let (base_url, _request, server) = serve_once(body);
+
+    let error = llm_gateway::openai_compat::call_inner_streaming(
+        &[ChatMessage::user("read scene")],
+        &[test_tool()],
+        "mock-chat",
+        &base_url,
+        "test-key",
+        None,
+        None,
+        None,
+        None,
+        llm_gateway::providers::ToolChoiceStyle::ForceName,
+        true,
+        false,
+        false,
+        |_| {},
+    )
+    .await
+    .expect_err("conflicting tool call ids must fail");
+    server.join().expect("mock provider thread");
+
+    let message = error.to_string();
+    assert!(message.contains("changed tool call id at index 0"));
+    assert!(message.contains("call-first"));
+    assert!(message.contains("call-second"));
 }
 
 #[tokio::test]

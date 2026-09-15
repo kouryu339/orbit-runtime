@@ -5,8 +5,8 @@ import (
 	"runtime"
 )
 
-const DefaultRuntimeVersion = "0.4.8-beta.1"
-const DefaultReleaseTag = "v0.4.8-beta.1"
+const DefaultRuntimeVersion = "0.4.8-beta.2"
+const DefaultReleaseTag = "v0.4.8-beta.2"
 const DefaultRepository = "kouryu339/orbit-runtime"
 const RuntimeABIVersion = 1
 
@@ -20,14 +20,14 @@ type RuntimeArtifact struct {
 var runtimeArtifacts = map[string]RuntimeArtifact{
 	"windows-x86_64": {
 		PlatformID: "windows-x86_64",
-		Archive:    "orbit-runtime-runtime-v0.4.8-beta.1-windows-x86_64.zip",
-		SHA256:     "a52459f6ca36142df9b9dba79775afa0b13fe5b2998b3d5fd2983c6720aea3b2",
+		Archive:    "orbit-runtime-runtime-v0.4.8-beta.2-windows-x86_64.zip",
+		SHA256:     "7dcef1d8d0d6dfdba7ff4a318f3b7d5e648c573fc248121d5032345d5d0ec9f4",
 		Library:    "bin/agent_runtime.dll",
 	},
 	"linux-x86_64": {
 		PlatformID: "linux-x86_64",
-		Archive:    "orbit-runtime-runtime-v0.4.8-beta.1-linux-x86_64.zip",
-		SHA256:     "0610f81adeb15d87c84ce11417e42699cbddab43a73530b6a83ff3ae38807c8e",
+		Archive:    "orbit-runtime-runtime-v0.4.8-beta.2-linux-x86_64.zip",
+		SHA256:     "52dde96d502032b0a94adc13a0b2d0a859f7fd080f4bd2bea8d7873fa5c1f67c",
 		Library:    "lib/libagent_runtime.so",
 	},
 }

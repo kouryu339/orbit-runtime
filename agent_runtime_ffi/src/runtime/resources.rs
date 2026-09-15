@@ -163,6 +163,12 @@ pub struct ResourceRpcEndpointConfig {
     pub endpoint: String,
     pub launch: Option<RpcToolLaunchConfig>,
     pub timeout_ms: u64,
+    #[serde(alias = "toAiMaxChars", default = "default_rpc_to_ai_max_chars")]
+    pub to_ai_max_chars: usize,
+}
+
+fn default_rpc_to_ai_max_chars() -> usize {
+    corework::rpc_tool::DEFAULT_RPC_TO_AI_MAX_CHARS
 }
 
 impl Default for ResourceRpcEndpointConfig {
@@ -173,6 +179,7 @@ impl Default for ResourceRpcEndpointConfig {
             endpoint: String::new(),
             launch: None,
             timeout_ms: 30_000,
+            to_ai_max_chars: default_rpc_to_ai_max_chars(),
         }
     }
 }
@@ -432,6 +439,7 @@ fn resource_rpc_endpoint_to_runtime(
         protocol,
         launch: normalize_resource_launch_config(base_dir, endpoint.launch),
         timeout_ms: endpoint.timeout_ms,
+        to_ai_max_chars: endpoint.to_ai_max_chars,
         tools: Vec::new(),
     })
 }

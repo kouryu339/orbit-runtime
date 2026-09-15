@@ -34,6 +34,7 @@ pub const CAPABILITY_WORKSPACE_CREATE_WORKING_PATH: &str = "workspace.create_wor
 pub const CAPABILITY_WORKSPACE_SAVE_AS_EDITED: &str = "workspace.save_as_edited";
 pub const RPC_TOOL_SERVICE_V1: &str = "corework.agent_tool.v1.AgentToolService";
 pub const RPC_TOOL_EXECUTE_METHOD: &str = "Execute";
+pub const DEFAULT_RPC_TO_AI_MAX_CHARS: usize = 600;
 const TOOL_HOST_CONTEXT_KEY: &str = "tool_host_context";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +115,7 @@ pub struct RpcEndpointInfo {
     pub endpoint_id: String,
     pub address: String,
     pub timeout_ms: u64,
+    pub to_ai_max_chars: usize,
 }
 
 #[derive(Default)]
@@ -233,6 +235,7 @@ fn append_rpc_diagnostic(
         "workflow_run_id": request.workflow_run_id,
         "node_id": request.node_id,
         "timeout_ms": endpoint.timeout_ms,
+        "to_ai_max_chars": endpoint.to_ai_max_chars,
         "elapsed_ms": started.elapsed().as_millis() as u64,
     });
     if let (Some(entry), Some(details)) = (entry.as_object_mut(), details.as_object()) {
@@ -255,7 +258,15 @@ pub struct RemoteAIOutput {
 
 impl RemoteAIOutput {
     pub fn into_checked_ai_output(self, tool_name: &str) -> Result<AIOutput> {
-        let output = normalize_remote_ai_output(tool_name, self);
+        self.into_checked_ai_output_with_limit(tool_name, DEFAULT_RPC_TO_AI_MAX_CHARS)
+    }
+
+    pub fn into_checked_ai_output_with_limit(
+        self,
+        tool_name: &str,
+        to_ai_max_chars: usize,
+    ) -> Result<AIOutput> {
+        let output = normalize_remote_ai_output(tool_name, self, to_ai_max_chars);
         validate_remote_ai_output(tool_name, &output)?;
         let code = ToolErrorCode::try_from(output.error_code).map_err(|_| {
             FrameworkError::InvalidData(format!(
@@ -283,10 +294,19 @@ impl RemoteAIOutput {
     }
 }
 
-fn normalize_remote_ai_output(tool_name: &str, mut output: RemoteAIOutput) -> RemoteAIOutput {
+fn normalize_remote_ai_output(
+    tool_name: &str,
+    mut output: RemoteAIOutput,
+    to_ai_max_chars: usize,
+) -> RemoteAIOutput {
     let remote_to_ai_is_empty = output.to_ai.trim().is_empty();
-    output.to_ai =
-        synthesize_rpc_to_ai(tool_name, output.error_code, &output.to_ai, &output.result);
+    output.to_ai = synthesize_rpc_to_ai(
+        tool_name,
+        output.error_code,
+        &output.to_ai,
+        &output.result,
+        to_ai_max_chars,
+    );
     if remote_to_ai_is_empty
         && (output.error_code == ToolErrorCode::Ok as i32
             || output.error_code == ToolErrorCode::Unspecified as i32)
@@ -301,9 +321,10 @@ fn synthesize_rpc_to_ai(
     error_code: i32,
     remote_to_ai: &str,
     result: &Value,
+    to_ai_max_chars: usize,
 ) -> String {
-    let detail = rpc_to_ai_detail(remote_to_ai);
-    let result_summary = rpc_result_summary(result);
+    let detail = rpc_to_ai_detail(remote_to_ai, to_ai_max_chars);
+    let result_summary = rpc_result_summary(result, to_ai_max_chars);
     let context = join_rpc_context(detail.as_deref(), result_summary.as_deref());
 
     if error_code == ToolErrorCode::Ok as i32 {
@@ -366,34 +387,43 @@ fn format_rpc_failure(
     }
 }
 
-fn rpc_to_ai_detail(text: &str) -> Option<String> {
+fn rpc_to_ai_detail(text: &str, to_ai_max_chars: usize) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
     }
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        return Some(format!("Remote summary: {}", summarize_rpc_value(&value)));
+        return Some(format!(
+            "Remote summary: {}",
+            summarize_rpc_value(&value, to_ai_max_chars)
+        ));
     }
     if let Some((prefix, value)) = extract_embedded_json_value(trimmed) {
         let prefix = strip_json_intro_line(prefix);
-        let summary = summarize_rpc_value(&value);
+        let summary = summarize_rpc_value(&value, to_ai_max_chars);
         if prefix.is_empty() {
             return Some(format!("Remote summary: {}", summary));
         }
         return Some(format!(
             "Remote message: {}; structured summary: {}",
-            truncate_chars(&prefix, 600),
+            truncate_chars(&prefix, to_ai_max_chars),
             summary
         ));
     }
-    Some(format!("Remote message: {}", truncate_chars(trimmed, 600)))
+    Some(format!(
+        "Remote message: {}",
+        truncate_chars(trimmed, to_ai_max_chars)
+    ))
 }
 
-fn rpc_result_summary(result: &Value) -> Option<String> {
+fn rpc_result_summary(result: &Value, to_ai_max_chars: usize) -> Option<String> {
     if result.is_null() {
         None
     } else {
-        Some(format!("Result summary: {}", summarize_rpc_value(result)))
+        Some(format!(
+            "Result summary: {}",
+            summarize_rpc_value(result, to_ai_max_chars)
+        ))
     }
 }
 
@@ -430,15 +460,14 @@ fn strip_json_intro_line(text: &str) -> String {
     lines.join("\n").trim().to_string()
 }
 
-fn summarize_rpc_value(value: &Value) -> String {
+fn summarize_rpc_value(value: &Value, to_ai_max_chars: usize) -> String {
     const MAX_ITEMS: usize = 12;
-    const MAX_TEXT_CHARS: usize = 600;
 
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(v) => v.to_string(),
         Value::Number(v) => v.to_string(),
-        Value::String(v) => truncate_chars(v.trim(), MAX_TEXT_CHARS),
+        Value::String(v) => truncate_chars(v.trim(), to_ai_max_chars),
         Value::Array(values) => {
             if values.is_empty() {
                 return "empty list".to_string();
@@ -447,7 +476,13 @@ fn summarize_rpc_value(value: &Value) -> String {
                 .iter()
                 .take(MAX_ITEMS)
                 .enumerate()
-                .map(|(idx, value)| format!("{}: {}", idx + 1, summarize_rpc_value(value)))
+                .map(|(idx, value)| {
+                    format!(
+                        "{}: {}",
+                        idx + 1,
+                        summarize_rpc_value(value, to_ai_max_chars)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("; ");
             if values.len() > MAX_ITEMS {
@@ -461,12 +496,14 @@ fn summarize_rpc_value(value: &Value) -> String {
                 return "empty object".to_string();
             }
             if let Some(entries) = map.get("entries").and_then(Value::as_array) {
-                return summarize_rpc_entries_object(map, entries);
+                return summarize_rpc_entries_object(map, entries, to_ai_max_chars);
             }
             let shown = map
                 .iter()
                 .take(MAX_ITEMS)
-                .map(|(key, value)| format!("{}: {}", key, summarize_rpc_value(value)))
+                .map(|(key, value)| {
+                    format!("{}: {}", key, summarize_rpc_value(value, to_ai_max_chars))
+                })
                 .collect::<Vec<_>>()
                 .join("; ");
             if map.len() > MAX_ITEMS {
@@ -478,13 +515,21 @@ fn summarize_rpc_value(value: &Value) -> String {
     }
 }
 
-fn summarize_rpc_entries_object(map: &serde_json::Map<String, Value>, entries: &[Value]) -> String {
+fn summarize_rpc_entries_object(
+    map: &serde_json::Map<String, Value>,
+    entries: &[Value],
+    to_ai_max_chars: usize,
+) -> String {
     const MAX_ENTRIES: usize = 12;
 
     let mut parts = Vec::new();
     for key in ["path", "directory", "base", "root", "total", "count"] {
         if let Some(value) = map.get(key) {
-            parts.push(format!("{}: {}", key, summarize_rpc_value(value)));
+            parts.push(format!(
+                "{}: {}",
+                key,
+                summarize_rpc_value(value, to_ai_max_chars)
+            ));
         }
     }
     parts.push(format!("entries: {} item(s)", entries.len()));
@@ -493,7 +538,13 @@ fn summarize_rpc_entries_object(map: &serde_json::Map<String, Value>, entries: &
             .iter()
             .take(MAX_ENTRIES)
             .enumerate()
-            .map(|(idx, value)| format!("{}: {}", idx + 1, summarize_rpc_value(value)))
+            .map(|(idx, value)| {
+                format!(
+                    "{}: {}",
+                    idx + 1,
+                    summarize_rpc_value(value, to_ai_max_chars)
+                )
+            })
             .collect::<Vec<_>>()
             .join("; ");
         if entries.len() > MAX_ENTRIES {
@@ -510,6 +561,9 @@ fn summarize_rpc_entries_object(map: &serde_json::Map<String, Value>, entries: &
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return text.to_string();
+    }
     let mut chars = text.chars();
     let truncated = chars.by_ref().take(max_chars).collect::<String>();
     if chars.next().is_some() {
@@ -1405,7 +1459,10 @@ impl RpcToolClient for JsonLineRpcToolClient {
                         write_wire(&mut writer, &WireMessage::HostResult { id, ok, value }).await?;
                     }
                     WireMessage::AiOutput { output } => {
-                        return output.into_checked_ai_output(&metadata.name);
+                        return output.into_checked_ai_output_with_limit(
+                            &metadata.name,
+                            endpoint.to_ai_max_chars,
+                        );
                     }
                     WireMessage::Error { message } => {
                         return Ok(rpc_protocol_ai_output(&metadata.name, message));
@@ -1630,7 +1687,11 @@ impl RpcToolClient for GrpcRpcToolClient {
                         })?;
                     }
                     Some(tool_stream_message::Message::AiOutput(output)) => {
-                        return proto_ai_output_into_ai_output(&metadata.name, output);
+                        return proto_ai_output_into_ai_output(
+                            &metadata.name,
+                            output,
+                            endpoint.to_ai_max_chars,
+                        );
                     }
                     Some(tool_stream_message::Message::Error(error)) => {
                         return Err(FrameworkError::SystemError(format!(
@@ -1713,7 +1774,11 @@ impl RpcToolClient for GrpcRpcToolClient {
     }
 }
 
-fn proto_ai_output_into_ai_output(tool_name: &str, output: ProtoAIOutput) -> Result<AIOutput> {
+fn proto_ai_output_into_ai_output(
+    tool_name: &str,
+    output: ProtoAIOutput,
+    to_ai_max_chars: usize,
+) -> Result<AIOutput> {
     let result = serde_json::from_str(&output.result_json).map_err(|e| {
         FrameworkError::InvalidData(format!(
             "Remote tool '{}' returned invalid result_json: {}",
@@ -1727,6 +1792,7 @@ fn proto_ai_output_into_ai_output(tool_name: &str, output: ProtoAIOutput) -> Res
             to_ai: output.to_ai,
             error_code: output.error_code,
         },
+        to_ai_max_chars,
     );
     let code = ToolErrorCode::try_from(normalized.error_code).map_err(|_| {
         FrameworkError::InvalidData(format!(
@@ -1852,6 +1918,7 @@ mod tests {
             endpoint_id: "test".to_string(),
             address: "127.0.0.1:58081".to_string(),
             timeout_ms: 1000,
+            to_ai_max_chars: DEFAULT_RPC_TO_AI_MAX_CHARS,
         }
     }
 
@@ -2001,6 +2068,7 @@ mod tests {
                 endpoint_id: "test".to_string(),
                 address: address.to_string(),
                 timeout_ms: 1_000,
+                to_ai_max_chars: DEFAULT_RPC_TO_AI_MAX_CHARS,
             })
             .unwrap();
         let tools = Arc::new(RuntimeToolRegistry::new());
@@ -2048,6 +2116,7 @@ mod tests {
                 endpoint_id: "test".to_string(),
                 address: "127.0.0.1:1".to_string(),
                 timeout_ms: 100,
+                to_ai_max_chars: DEFAULT_RPC_TO_AI_MAX_CHARS,
             })
             .unwrap();
         let tools = Arc::new(RuntimeToolRegistry::new());
@@ -2106,6 +2175,7 @@ mod tests {
             endpoint_id: "frontend-tools".to_string(),
             address: address.to_string(),
             timeout_ms: 1000,
+            to_ai_max_chars: DEFAULT_RPC_TO_AI_MAX_CHARS,
         };
         let tools = JsonLineRpcToolDiscoveryClient
             .list_tools(endpoint)
@@ -2501,6 +2571,41 @@ mod tests {
         assert!(output.to_ai.contains("Remote message: done"));
         assert!(output.to_ai.contains("Result summary: ok: true"));
         assert_ne!(output.to_ai, "done");
+    }
+
+    #[test]
+    fn remote_ai_output_honors_configured_character_limit() {
+        let output = RemoteAIOutput {
+            result: serde_json::json!({ "body": "ijklmnop" }),
+            to_ai: "abcdefgh".to_string(),
+            error_code: ToolErrorCode::Ok as i32,
+        };
+
+        let output = output
+            .into_checked_ai_output_with_limit("ReadableTool", 4)
+            .unwrap();
+
+        assert!(output.to_ai.contains("Remote message: abcd..."));
+        assert!(output.to_ai.contains("Result summary: body: ijkl..."));
+        assert!(!output.to_ai.contains("abcdefgh"));
+        assert!(!output.to_ai.contains("ijklmnop"));
+    }
+
+    #[test]
+    fn zero_character_limit_preserves_complete_strings() {
+        let long_text = "x".repeat(DEFAULT_RPC_TO_AI_MAX_CHARS + 100);
+        let output = RemoteAIOutput {
+            result: serde_json::json!({ "body": long_text }),
+            to_ai: long_text.clone(),
+            error_code: ToolErrorCode::Ok as i32,
+        };
+
+        let output = output
+            .into_checked_ai_output_with_limit("ReadableTool", 0)
+            .unwrap();
+
+        assert_eq!(output.to_ai.matches(&long_text).count(), 2);
+        assert!(!output.to_ai.contains("..."));
     }
 
     #[test]

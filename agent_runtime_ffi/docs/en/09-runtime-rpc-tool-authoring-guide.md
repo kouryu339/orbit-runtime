@@ -208,6 +208,7 @@ call `runtime.register_resources` before start. Current endpoint fields are:
 | `endpoint` | Sidecar listen address, for example `127.0.0.1:50104`. |
 | `protocol` | Production tool ecosystems should use `grpc`. |
 | `timeout_ms` | Per-call timeout, including HostCall round trips. |
+| `to_ai_max_chars` | Per-string character limit for plain RPC `to_ai` text and string fields summarized from `result`. Defaults to `600`; set it to `0` for no character limit. Arrays and objects are still summarized to at most 12 items. |
 | `launch` | Optional. Fill this when runtime should start the sidecar process. `kind` supports `external` / `process`. |
 
 Business RPC tools should not inline tool declarations in runtime config. The production pattern is: resources only register a gRPC endpoint; the sidecar returns the tool list from `ListTools`; role/feature skills then select visible capabilities by tool name. This business-tool declaration rule does not apply to `RagRetrieve` retrieval config.
@@ -223,6 +224,7 @@ Business RPC tools should not inline tool declarations in runtime config. The pr
       "endpoint": "127.0.0.1:50104",
       "protocol": "grpc",
       "timeout_ms": 60000,
+      "to_ai_max_chars": 0,
       "launch": {
         "kind": "process",
         "program": "cargo",

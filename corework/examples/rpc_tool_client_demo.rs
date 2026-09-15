@@ -21,6 +21,7 @@ async fn main() -> corework::error::Result<()> {
         endpoint_id: "python-demo".to_string(),
         address,
         timeout_ms: 10_000,
+        to_ai_max_chars: corework::rpc_tool::DEFAULT_RPC_TO_AI_MAX_CHARS,
     })?;
 
     let tools = Arc::new(RuntimeToolRegistry::new());

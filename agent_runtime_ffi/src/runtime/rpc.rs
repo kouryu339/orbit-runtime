@@ -22,7 +22,13 @@ pub struct RpcToolEndpointConfig {
     pub protocol: String,
     pub launch: Option<RpcToolLaunchConfig>,
     pub timeout_ms: u64,
+    #[serde(alias = "toAiMaxChars", default = "default_rpc_to_ai_max_chars")]
+    pub to_ai_max_chars: usize,
     pub tools: Vec<RuntimeToolMetadata>,
+}
+
+fn default_rpc_to_ai_max_chars() -> usize {
+    corework::rpc_tool::DEFAULT_RPC_TO_AI_MAX_CHARS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +65,7 @@ impl Default for RpcToolEndpointConfig {
             protocol: "grpc".to_string(),
             launch: None,
             timeout_ms: 30_000,
+            to_ai_max_chars: default_rpc_to_ai_max_chars(),
             tools: Vec::new(),
         }
     }
@@ -119,6 +126,7 @@ pub(super) async fn install_rpc_tools_from_config(
             endpoint_id: endpoint_config.endpoint_id.clone(),
             address: endpoint_config.address.clone(),
             timeout_ms: endpoint_config.timeout_ms,
+            to_ai_max_chars: endpoint_config.to_ai_max_chars,
         };
         let launch = endpoint_config
             .launch

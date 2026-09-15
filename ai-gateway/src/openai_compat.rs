@@ -949,10 +949,19 @@ where
                     let idx = tc["index"].as_u64().unwrap_or(0) as usize;
                     let entry = tc_map.entry(idx).or_default();
                     let mut argument_bytes = 0usize;
-                    if let Some(id) = tc["id"].as_str() {
+                    if let Some(id) = tc["id"].as_str().filter(|id| !id.trim().is_empty()) {
+                        if !entry.0.is_empty() && entry.0 != id {
+                            return Err(ApiError::LlmFailed(format!(
+                                "OpenAI-compatible stream changed tool call id at index {idx} from '{}' to '{id}'",
+                                entry.0
+                            )));
+                        }
                         entry.0 = id.to_string();
                     }
-                    if let Some(n) = tc["function"]["name"].as_str() {
+                    if let Some(n) = tc["function"]["name"]
+                        .as_str()
+                        .filter(|name| !name.trim().is_empty())
+                    {
                         entry.1 = n.to_string();
                     }
                     if let Some(a) = tc["function"]["arguments"].as_str() {

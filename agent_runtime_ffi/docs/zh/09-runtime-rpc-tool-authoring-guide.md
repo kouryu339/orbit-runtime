@@ -208,6 +208,7 @@ Runtime 调用 RPC 工具时，会在 `ExecuteRequest` 中带上当前调用上�
 | `endpoint` | sidecar 监听地址，例如 `127.0.0.1:50104`。 |
 | `protocol` | 当前正式工具生态建议使用 `grpc`。 |
 | `timeout_ms` | 单次工具调用超时，包含 HostCall 往返。 |
+| `to_ai_max_chars` | RPC 返回中普通 `to_ai` 文本及 `result` 字符串字段的单项摘要字符上限。默认 `600`；设为 `0` 表示不限制字符数。数组/对象仍最多摘要 12 项。 |
 | `launch` | 可选。由 runtime 启动 sidecar 进程时填写。`kind` 支持 `external` / `process`。 |
 
 业务 RPC 工具不要把工具声明内联在 runtime config 里。正式写法是：resources 只注册 gRPC endpoint，工具列表由 sidecar 的 `ListTools` 返回；role/feature skill 再按工具名选择可见能力。`RagRetrieve` 的检索配置不适用这条业务工具声明规则。
@@ -223,6 +224,7 @@ Runtime 调用 RPC 工具时，会在 `ExecuteRequest` 中带上当前调用上�
       "endpoint": "127.0.0.1:50104",
       "protocol": "grpc",
       "timeout_ms": 60000,
+      "to_ai_max_chars": 0,
       "launch": {
         "kind": "process",
         "program": "cargo",

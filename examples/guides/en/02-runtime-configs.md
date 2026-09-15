@@ -53,7 +53,8 @@ Example:
     "id": "word-tools",
     "protocol": "grpc",
     "endpoint": "127.0.0.1:50103",
-    "timeout_ms": 60000
+    "timeout_ms": 60000,
+    "to_ai_max_chars": 600
   }]
 }
 ```
@@ -61,6 +62,9 @@ Example:
 Resources register availability. They do not start a conversation and do not
 make every tool visible to every Agent. Tool visibility still comes from active
 role/feature Skill `tools` allowlists.
+`to_ai_max_chars` controls the per-string summary limit for plain RPC `to_ai`
+text and string fields in `result`. It defaults to `600`; set it to `0` to
+disable character truncation.
 `systemSkills.thinking` is optional. Omitting it keeps lightweight `thinking`;
 selecting `thinking-pro` replaces that state and adds standard multiline script
 guidance plus temporary `executeWorkflowScript` execution. Persistent Workflow
