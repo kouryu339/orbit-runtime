@@ -1233,6 +1233,27 @@ fn build_rpc_args_json(
 
 fn coerce_rpc_arg_value(parameter: &RuntimeAIParameter, raw: &str) -> Result<Value> {
     let ty = parameter.param_type.trim().to_ascii_lowercase();
+    if is_rpc_array_type(&ty) {
+        if ty == "stringarray" || ty == "string[]" || ty == "array<string>" {
+            if raw.trim().is_empty() {
+                return Ok(Value::Array(Vec::new()));
+            }
+            if let Ok(Value::Array(values)) = serde_json::from_str::<Value>(raw) {
+                return Ok(Value::Array(values));
+            }
+            return Ok(Value::Array(
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| Value::String(value.to_string()))
+                    .collect(),
+            ));
+        }
+        return match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Array(values)) => Ok(Value::Array(values)),
+            _ => Err(invalid_rpc_arg(parameter, raw)),
+        };
+    }
     match ty.as_str() {
         "number" | "integer" | "int" | "int64" | "long" => {
             if let Ok(value) = raw.parse::<i64>() {
@@ -1252,23 +1273,23 @@ fn coerce_rpc_arg_value(parameter: &RuntimeAIParameter, raw: &str) -> Result<Val
                 _ => Err(invalid_rpc_arg(parameter, raw)),
             }
         }),
-        "stringarray" | "string[]" | "array<string>" => {
-            if raw.trim().is_empty() {
-                return Ok(Value::Array(Vec::new()));
-            }
-            if let Ok(Value::Array(values)) = serde_json::from_str::<Value>(raw) {
-                return Ok(Value::Array(values));
-            }
-            Ok(Value::Array(
-                raw.split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| Value::String(value.to_string()))
-                    .collect(),
-            ))
-        }
         _ => Ok(Value::String(raw.to_string())),
     }
+}
+
+fn is_rpc_array_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "array"
+            | "stringarray"
+            | "numberarray"
+            | "booleanarray"
+            | "boolarray"
+            | "anyarray"
+            | "objectarray"
+    ) || ty.ends_with("[]")
+        || (ty.starts_with("array<") && ty.ends_with('>'))
+        || (ty.starts_with("vec<") && ty.ends_with('>'))
 }
 
 fn invalid_rpc_arg(parameter: &RuntimeAIParameter, raw: &str) -> FrameworkError {
@@ -2540,6 +2561,77 @@ mod tests {
         let args = build_rpc_args_json(&tool, input, "").unwrap();
 
         assert_eq!(args, serde_json::json!({ "user_id": 1005 }));
+    }
+
+    #[test]
+    fn rpc_args_json_restores_direct_fc_number_and_any_arrays() {
+        let mut tool = test_tool();
+        tool.parameters = vec![
+            RuntimeAIParameter {
+                name: "row_numbers".to_string(),
+                param_type: "Array<Number>".to_string(),
+                required: true,
+                default_value: None,
+                description: String::new(),
+            },
+            RuntimeAIParameter {
+                name: "parameters".to_string(),
+                param_type: "Array<Any>".to_string(),
+                required: true,
+                default_value: None,
+                description: String::new(),
+            },
+        ];
+        let input = HashMap::from([
+            (
+                "row_numbers".to_string(),
+                Value::String("[2,3,4,5]".to_string()),
+            ),
+            (
+                "parameters".to_string(),
+                Value::String("[2,\"ready\",null,{\"enabled\":true}]".to_string()),
+            ),
+        ]);
+
+        let args = build_rpc_args_json(&tool, input, "").unwrap();
+
+        assert_eq!(
+            args,
+            serde_json::json!({
+                "row_numbers": [2, 3, 4, 5],
+                "parameters": [2, "ready", null, {"enabled": true}]
+            })
+        );
+    }
+
+    #[test]
+    fn rpc_args_json_restores_empty_arrays_and_rejects_non_array_json() {
+        let mut tool = test_tool();
+        tool.parameters = vec![RuntimeAIParameter {
+            name: "parameters".to_string(),
+            param_type: "Array<Any>".to_string(),
+            required: true,
+            default_value: None,
+            description: String::new(),
+        }];
+
+        let args = build_rpc_args_json(
+            &tool,
+            HashMap::from([("parameters".to_string(), Value::String("[]".to_string()))]),
+            "",
+        )
+        .unwrap();
+        assert_eq!(args, serde_json::json!({"parameters": []}));
+
+        for raw in ["2", "{}", "[2", ""] {
+            let error = build_rpc_args_json(
+                &tool,
+                HashMap::from([("parameters".to_string(), Value::String(raw.to_string()))]),
+                "",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("parameters"), "{error}");
+        }
     }
 
     #[tokio::test]

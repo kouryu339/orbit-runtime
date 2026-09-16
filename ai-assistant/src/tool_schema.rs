@@ -512,6 +512,34 @@ mod tests {
     }
 
     #[test]
+    fn direct_fc_array_arguments_keep_json_for_rpc_type_restoration() {
+        let definition = definition(
+            "ExcelQuerySessionColumn",
+            "query",
+            vec![ParameterSpec {
+                name: "parameters".into(),
+                param_type: "Array<Any>".into(),
+                required: true,
+                default_value: None,
+                description: String::new(),
+            }],
+            false,
+        );
+        let call = llm_gateway::ToolCall::function(
+            "call-1",
+            "ExcelQuerySessionColumn",
+            r#"{"parameters":[2,"ready",null]}"#,
+        );
+
+        let parsed = validate_and_project_call(&call, &[definition]).unwrap();
+
+        assert_eq!(
+            parsed.params,
+            vec![("parameters".into(), "[2,\"ready\",null]".into())]
+        );
+    }
+
+    #[test]
     fn strict_schema_closes_objects_and_makes_optional_fields_nullable() {
         let parameters = vec![
             ParameterSpec {
