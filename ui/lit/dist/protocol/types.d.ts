@@ -156,6 +156,9 @@ export type ConversationAction = {
     id: string;
     error: string;
 } | {
+    type: 'tool-permission-resolved';
+    toolCallId: string;
+} | {
     type: 'conversation-model-selected';
     model: string;
     modelUid: number;

@@ -172,6 +172,7 @@ export type ConversationAction =
   | { type: 'local-message-added'; message: PendingUserMessage }
   | { type: 'local-message-accepted'; id: string }
   | { type: 'local-message-failed'; id: string; error: string }
+  | { type: 'tool-permission-resolved'; toolCallId: string }
   | { type: 'conversation-model-selected'; model: string; modelUid: number }
   | { type: 'clear-error' }
   | { type: 'reset'; conversationId?: string | null };

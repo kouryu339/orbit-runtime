@@ -680,4 +680,16 @@ describe('conversationReducer', () => {
     });
     expect(state.pendingPermissions).toEqual([]);
   });
+
+  it('removes a permission on a terminal resolution event', () => {
+    const permission = {
+      conversation_id: 'c1', tool_call_id: 'expired-call', agent_id: 'boss',
+      tool_name: 'WriteFile', display_name: 'Write file', effect: 'controlled_change' as const,
+      arguments: {}, turn_id: 2, created_at: '2026-06-22T00:00:00Z',
+    };
+    const state = conversationReducer(conversationReducer(createConversationState('c1'), {
+      type: 'snapshot', payload: { revision: 1, pending_permissions: [permission] },
+    }), { type: 'tool-permission-resolved', toolCallId: 'expired-call' });
+    expect(state.pendingPermissions).toEqual([]);
+  });
 });

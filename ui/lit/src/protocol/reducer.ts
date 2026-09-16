@@ -110,6 +110,16 @@ export function conversationReducer(
             : message,
         ),
       };
+    case 'tool-permission-resolved':
+      if (!state.pendingPermissions.some(
+        (permission) => permission.tool_call_id === action.toolCallId,
+      )) return state;
+      return {
+        ...state,
+        pendingPermissions: state.pendingPermissions.filter(
+          (permission) => permission.tool_call_id !== action.toolCallId,
+        ),
+      };
     case 'conversation-model-selected':
       return {
         ...state,

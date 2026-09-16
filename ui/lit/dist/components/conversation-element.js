@@ -1143,10 +1143,13 @@ export class AgentRuntimeConversationElement extends LitElement {
             if (result.accepted) {
                 // Runtime snapshots remain authoritative; this only closes the visual
                 // gap while the resolved snapshot travels over SSE.
-                this.state = {
-                    ...this.state,
-                    pendingPermissions: this.state.pendingPermissions.filter((permission) => permission.tool_call_id !== toolCallId),
-                };
+                this.dispatch({ type: 'tool-permission-resolved', toolCallId });
+            }
+            else if (this.permissionIsNoLongerPending(result)) {
+                // Timeout/cancellation is terminal. A delayed or missed snapshot must
+                // not leave a dead approval card that the user can never dismiss.
+                this.dispatch({ type: 'tool-permission-resolved', toolCallId });
+                await this.transport.requestSnapshot?.({ conversationId });
             }
             else {
                 this.permissionError = {
@@ -2012,6 +2015,10 @@ export class AgentRuntimeConversationElement extends LitElement {
             definitions?.currentModelUid ??
             null;
     }
+    permissionIsNoLongerPending(result) {
+        return result.metadata?.resolved === false ||
+            result.rejectReason === 'Permission request is no longer pending.';
+    }
     currentConversationModelUid() {
         if (this.state.modelUid !== undefined)
             return this.state.modelUid;
@@ -2391,6 +2398,18 @@ export class AgentRuntimeConversationElement extends LitElement {
             return;
         }
         if (event.type === 'transport-extension') {
+            if (event.extension.kind === 'tool:permission-resolved') {
+                const payload = event.extension.payload;
+                if (payload && typeof payload === 'object') {
+                    const toolCallId = payload.tool_call_id;
+                    if (typeof toolCallId === 'string' && toolCallId) {
+                        if (this.permissionError?.toolCallId === toolCallId) {
+                            this.permissionError = null;
+                        }
+                        this.dispatch({ type: 'tool-permission-resolved', toolCallId });
+                    }
+                }
+            }
             this.emit('agent-conversation-extension-action', {
                 extension: event.extension,
                 action: 'transport-event',

@@ -226,4 +226,23 @@ mod tests {
             assert!(skill.instructions.contains("当前高优先级任务"));
         }
     }
+
+    #[test]
+    fn thinking_pro_requires_recursive_numbering_and_value_preflight() {
+        let entries = embedded_system_entries();
+        let thinking_pro = entries
+            .iter()
+            .find(|(name, _)| name == "thinking-pro")
+            .and_then(|(_, entry)| entry.skill.as_ref())
+            .expect("thinking-pro should be embedded");
+
+        assert!(thinking_pro.instructions.contains("1.1.1.1.1.1: EXEC"));
+        assert!(thinking_pro
+            .instructions
+            .contains("--value_column \"batch_id\""));
+        assert!(thinking_pro
+            .instructions
+            .contains("从语法树根开始重新计算全部编号"));
+        assert!(thinking_pro.instructions.contains("无法归类的裸 token"));
+    }
 }

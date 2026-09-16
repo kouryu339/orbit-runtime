@@ -7,6 +7,7 @@ import {
   PRESENTATION_CONTRACT,
   TRANSPORT_CONTRACT,
   conversationReducer,
+  type CommandResult,
   type ConversationConnection,
   type ConversationPersistenceController,
   type ConversationProviderController,
@@ -19,10 +20,7 @@ class TestTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id = 'test';
   disconnect = vi.fn();
-  resolveToolPermission = vi.fn(async (): Promise<{
-    accepted: boolean;
-    rejectReason?: string;
-  }> => ({ accepted: true }));
+  resolveToolPermission = vi.fn(async (): Promise<CommandResult> => ({ accepted: true }));
 
   async connect(
     _context: unknown,
@@ -90,6 +88,19 @@ class ControlledTransport implements ConversationTransport {
       payload: {
         revision,
         conversation_state: conversationState,
+      },
+    });
+  }
+
+  permissionResolved(toolCallId: string): void {
+    this.handlers?.event({
+      type: 'transport-extension',
+      extension: {
+        contract: 'agent-conversation-extension/v1',
+        namespace: 'org.agent-runtime.event',
+        kind: 'tool:permission-resolved',
+        version: 1,
+        payload: { tool_call_id: toolCallId },
       },
     });
   }
@@ -200,12 +211,13 @@ describe('AgentRuntimeConversationElement', () => {
     });
   });
 
-  it('keeps a rejected permission visible and shows the transport reason', async () => {
+  it('removes an approval that the Runtime reports is no longer pending', async () => {
     const element = new AgentRuntimeConversationElement();
     const transport = new TestTransport();
     transport.resolveToolPermission.mockResolvedValueOnce({
       accepted: false,
-      rejectReason: 'Runtime could not find the target approval.',
+      rejectReason: 'Permission request is no longer pending.',
+      metadata: { resolved: false },
     });
     element.transport = transport;
     document.body.append(element);
@@ -233,12 +245,78 @@ describe('AgentRuntimeConversationElement', () => {
     element.shadowRoot
       ?.querySelector<HTMLButtonElement>('.permission-actions button:not(.deny)')
       ?.click();
-    await vi.waitFor(() => {
-      expect(element.shadowRoot?.querySelector('[role="alert"]')?.textContent)
-        .toContain('Runtime could not find the target approval.');
+    await vi.waitFor(() => expect(element.state.pendingPermissions).toHaveLength(0));
+    expect(element.shadowRoot?.querySelector('[part="permission-shelf"]')).toBeNull();
+  });
+
+  it('keeps a rejected approval visible when the response is not terminal', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new TestTransport();
+    transport.resolveToolPermission.mockResolvedValueOnce({
+      accepted: false,
+      rejectReason: 'Policy denied this response.',
     });
-    expect(element.state.pendingPermissions).toHaveLength(1);
-    expect(element.shadowRoot?.querySelector('[part="permission-shelf"]')).not.toBeNull();
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+
+    element.state = conversationReducer(element.state, {
+      type: 'snapshot',
+      payload: {
+        revision: 2,
+        pending_permissions: [{
+          conversation_id: 'conversation-1',
+          tool_call_id: 'call-policy-denied',
+          agent_id: 'boss',
+          tool_name: 'WriteFile',
+          display_name: 'Write file',
+          effect: 'controlled_change',
+          arguments: { path: 'report.md' },
+          turn_id: 2,
+          created_at: '2026-06-22T00:00:00Z',
+        }],
+      },
+    });
+    await element.updateComplete;
+
+    element.shadowRoot
+      ?.querySelector<HTMLButtonElement>('.permission-actions button:not(.deny)')
+      ?.click();
+    await vi.waitFor(() => {
+      expect(element.state.pendingPermissions).toHaveLength(1);
+      expect(element.shadowRoot?.textContent).toContain('Policy denied this response.');
+    });
+  });
+
+  it('removes a stale approval when the Runtime publishes its terminal event', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new ControlledTransport();
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+
+    element.state = conversationReducer(element.state, {
+      type: 'snapshot',
+      payload: {
+        revision: 2,
+        pending_permissions: [{
+          conversation_id: 'conversation-1',
+          tool_call_id: 'call-timed-out',
+          agent_id: 'boss',
+          tool_name: 'BrowserClosePage',
+          display_name: 'Close page',
+          effect: 'controlled_change',
+          arguments: { page_id: 'page-1' },
+          turn_id: 2,
+          created_at: '2026-06-22T00:00:00Z',
+        }],
+      },
+    });
+    await element.updateComplete;
+
+    transport.permissionResolved('call-timed-out');
+    await vi.waitFor(() => expect(element.state.pendingPermissions).toHaveLength(0));
+    expect(element.shadowRoot?.querySelector('[part="permission-shelf"]')).toBeNull();
   });
 
   it('keeps approval actions in the shelf when the tool call is rendered', async () => {
