@@ -32,6 +32,7 @@ contracts.
 | Diagnostics contract | [en](en/08-runtime-diagnostics-contract.md) | [zh](zh/08-runtime-diagnostics-contract.md) |
 | RPC tool authoring guide | [en](en/09-runtime-rpc-tool-authoring-guide.md) | [zh](zh/09-runtime-rpc-tool-authoring-guide.md) |
 | Skill authoring guide | [en](en/10-runtime-skill-authoring-guide.md) | [zh](zh/10-runtime-skill-authoring-guide.md) |
+| Authorized local Grep (AI only) | [en](en/15-authorized-local-grep.md) | [zh](zh/15-authorized-local-grep.md) |
 | Workflow catalog and execution contract | [en](en/11-runtime-workflow-execution-contract.md) | [zh](zh/11-runtime-workflow-execution-contract.md) |
 
 The ABI source of truth is `sdk/runtime/c/include/agent_runtime.h` and

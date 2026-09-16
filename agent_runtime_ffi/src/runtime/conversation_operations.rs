@@ -274,6 +274,11 @@ impl RuntimeFacade {
             ),
         );
         let state_store = Arc::clone(&self.state_store);
+        let grep = self
+            .registries
+            .resources
+            .as_ref()
+            .map(|resources| Arc::clone(&resources.grep));
         let coordination_backend = Arc::clone(&self.coordination_backend);
         let cluster_id = init
             .lifecycle_cluster_id
@@ -319,6 +324,13 @@ impl RuntimeFacade {
                     .await
                     .map_err(|e| RuntimeError::Internal(e.to_string()))?;
 
+                // Search authority is installed before tools can be activated.
+                if let Some(grep) = grep {
+                    manager
+                        .attach_shared_component(&conversation_id, grep)
+                        .await
+                        .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                }
                 if !skills.is_empty() {
                     let refs: Vec<&str> = skills.iter().map(String::as_str).collect();
                     manager

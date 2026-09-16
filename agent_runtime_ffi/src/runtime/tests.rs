@@ -789,6 +789,39 @@ fn resource_registration_rejects_external_prompts_field() {
 }
 
 #[test]
+fn grep_resource_config_is_host_owned_and_validated() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("grep-registration");
+    let skills = root.join("skills");
+    write_role_skill(&skills, "searcher", "role", "Search authorized text.");
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+    let mut registration = json!({
+        "id":"grep-resources", "skills":{"root_dir":skills},
+        "grep":{"roots":[{"id":"project","path":root}],"max_results":7}
+    });
+    facade
+        .register_resources_json(&registration.to_string())
+        .unwrap();
+    assert!(facade.registries.resources.as_ref().is_some());
+    registration["grep"]["roots"][0]["path"] = json!(root.join("missing"));
+    assert!(facade
+        .register_resources_json(&registration.to_string())
+        .is_err());
+    registration["grep"]["roots"][0]["path"] = json!(root);
+    registration["grep"]["max_output_bytes"] = json!(0);
+    assert!(facade
+        .register_resources_json(&registration.to_string())
+        .is_err());
+    registration["grep"]["max_output_bytes"] = json!(1024);
+    registration["grep"]["unknown"] = json!(true);
+    assert!(facade
+        .register_resources_json(&registration.to_string())
+        .is_err());
+    drop(facade);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn resource_registration_initializes_skill_manager_and_rpc_pool() {
     let _guard = runtime_start_test_guard();
     let root = unique_test_dir("resource-registration");

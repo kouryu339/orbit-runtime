@@ -6,6 +6,7 @@
 
 pub mod agent_route;
 pub mod agent_wake;
+pub mod grep;
 pub mod history;
 pub mod ledger;
 pub mod plan_file;

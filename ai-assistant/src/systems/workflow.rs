@@ -1154,4 +1154,19 @@ mod tests {
             assert_eq!(metadata.effect, crate::ToolEffect::Destructive, "{tool}");
         }
     }
+
+    #[tokio::test]
+    async fn grep_is_rejected_by_workflow_scripts_even_when_ai_active() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let (ctx, _unit, _workflows, _) = test_context();
+        crate::AssistantContext::set_active_tools(&ctx.cache, vec!["Grep".into()])
+            .await
+            .unwrap();
+        let output = ExecuteWorkflowScript.execute(input(&[("script",
+            "input value:String\n1: EXEC Grep --root_id project --pattern needle\nreturn result=input.value")]), &ctx).await.unwrap();
+        assert_ne!(
+            output.error_code, 0,
+            "AI-only tool must never execute from a script"
+        );
+    }
 }

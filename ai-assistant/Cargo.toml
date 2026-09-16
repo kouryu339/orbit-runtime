@@ -47,6 +47,10 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # 并发锁（全局 session_id）
 parking_lot = "0.12"
+cap-std = "3"
+regex = "1"
+globset = "0.4"
+ignore = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

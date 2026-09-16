@@ -47,6 +47,7 @@ pub struct ResourceRegistration {
     pub data: ResourceDataConfig,
     pub agents: ResourceAgentsConfig,
     pub rpc_endpoints: Vec<ResourceRpcEndpointConfig>,
+    pub grep: ai_assistant::systems::grep::GrepConfig,
 }
 
 impl Default for ResourceRegistration {
@@ -59,6 +60,7 @@ impl Default for ResourceRegistration {
             data: ResourceDataConfig::default(),
             agents: ResourceAgentsConfig::default(),
             rpc_endpoints: Vec::new(),
+            grep: Default::default(),
         }
     }
 }
@@ -198,6 +200,7 @@ pub struct RuntimeResourceRegistry {
     pub conversation_log_policy: ConversationLogPolicy,
     pub agent_profiles: BTreeMap<String, ResourceAgentProfileConfig>,
     pub rpc_pool: RuntimeRpcEndpointPool,
+    pub grep: Arc<ai_assistant::systems::grep::GrepService>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -251,6 +254,10 @@ pub(super) async fn build_resource_registry(
         )));
     }
     validate_resource_id("resource registration id", &registration.id)?;
+    let grep = Arc::new(
+        ai_assistant::systems::grep::GrepService::new(registration.grep, base_dir)
+            .map_err(RuntimeError::InvalidConfig)?,
+    );
 
     let skills_root_dir = normalize_resource_path(base_dir, registration.skills.root_dir);
     let skill_manager = SkillManager::from_directory(&skills_root_dir)
@@ -329,6 +336,7 @@ pub(super) async fn build_resource_registry(
         conversation_log_policy,
         agent_profiles,
         rpc_pool,
+        grep,
     })
 }
 
