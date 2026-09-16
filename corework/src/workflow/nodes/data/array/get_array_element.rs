@@ -45,6 +45,21 @@ impl GetArrayElementNode {
         (resolved >= 0 && resolved < len).then_some(resolved as usize)
     }
 
+    fn parse_index(value: &DataValue) -> Option<i64> {
+        if let Some(index) = value.as_i64() {
+            return Some(index);
+        }
+
+        let index = value.as_f64()?;
+        const I64_MIN_INCLUSIVE: f64 = -9_223_372_036_854_775_808.0;
+        const I64_MAX_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+        (index.is_finite()
+            && index.fract() == 0.0
+            && index >= I64_MIN_INCLUSIVE
+            && index < I64_MAX_EXCLUSIVE)
+            .then_some(index as i64)
+    }
+
     pub fn evaluate(
         &self,
         inputs: HashMap<String, DataValue>,
@@ -55,14 +70,17 @@ impl GetArrayElementNode {
             )
         })?;
 
-        let index = inputs
-            .get("Index")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| {
-                crate::error::FrameworkError::SystemError(
-                    "GetArrayElement: Invalid 'Index' input".to_string(),
-                )
-            })?;
+        let index_value = inputs.get("Index").ok_or_else(|| {
+            crate::error::FrameworkError::SystemError(
+                "GetArrayElement: Missing 'Index' input".to_string(),
+            )
+        })?;
+        let index = Self::parse_index(index_value).ok_or_else(|| {
+            crate::error::FrameworkError::SystemError(format!(
+                "GetArrayElement: Invalid 'Index' input {}; expected an integer value",
+                index_value.json_value()
+            ))
+        })?;
 
         let len = array_value.array_len().unwrap_or(0);
         let resolved_index = Self::resolve_index(index, len).ok_or_else(|| {
@@ -189,5 +207,42 @@ mod tests {
         inputs.insert("Index".to_string(), DataValue::from_i64(-2));
         let outputs = node.evaluate(inputs).unwrap();
         assert_eq!(outputs["Element"].as_i64(), Some(20));
+    }
+
+    #[test]
+    fn test_get_array_element_accepts_integral_float_index() {
+        let node = GetArrayElementNode::new();
+        let array =
+            DataValue::from_array(vec![serde_json::json!(10), serde_json::json!(20)], "i64");
+
+        let mut inputs = HashMap::new();
+        inputs.insert("Array".to_string(), array.clone());
+        inputs.insert("Index".to_string(), DataValue::from_f64(0.0));
+        let outputs = node.evaluate(inputs).unwrap();
+        assert_eq!(outputs["Element"].as_i64(), Some(10));
+
+        let mut inputs = HashMap::new();
+        inputs.insert("Array".to_string(), array.clone());
+        inputs.insert("Index".to_string(), DataValue::from_f64(1.0));
+        let outputs = node.evaluate(inputs).unwrap();
+        assert_eq!(outputs["Element"].as_i64(), Some(20));
+
+        let mut inputs = HashMap::new();
+        inputs.insert("Array".to_string(), array);
+        inputs.insert("Index".to_string(), DataValue::from_f64(-1.0));
+        let outputs = node.evaluate(inputs).unwrap();
+        assert_eq!(outputs["Element"].as_i64(), Some(20));
+    }
+
+    #[test]
+    fn test_get_array_element_rejects_fractional_float_index() {
+        let node = GetArrayElementNode::new();
+        let array = DataValue::from_array(vec![serde_json::json!(10)], "i64");
+        let mut inputs = HashMap::new();
+        inputs.insert("Array".to_string(), array);
+        inputs.insert("Index".to_string(), DataValue::from_f64(0.5));
+
+        let error = node.evaluate(inputs).unwrap_err();
+        assert!(error.to_string().contains("Invalid 'Index' input"));
     }
 }

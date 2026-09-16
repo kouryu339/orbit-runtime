@@ -148,6 +148,12 @@ mod tests {
         assert!(thinking_pro.instructions.contains("最内层循环"));
         assert!(thinking_pro
             .instructions
+            .contains("必须直接使用内置整数索引 `$index`"));
+        assert!(thinking_pro
+            .instructions
+            .contains("不得用 `add()` 和自定义变量手工累加索引"));
+        assert!(thinking_pro
+            .instructions
             .contains("脚本内调用外部工具固定使用 `N: EXEC Tool ...`"));
         assert!(thinking_pro
             .instructions
@@ -237,6 +243,13 @@ mod tests {
             .expect("thinking-pro should be embedded");
 
         assert!(thinking_pro.instructions.contains("1.1.1.1.1.1: EXEC"));
+        assert!(thinking_pro
+            .instructions
+            .contains("IF 后、ELIF/ELSE/END 前的缩进语句都属于 true 分支"));
+        assert!(thinking_pro
+            .instructions
+            .contains("必须连续追加 `.1.k` 两层"));
+        assert!(thinking_pro.instructions.contains("不能省略成 `1.1.1`"));
         assert!(thinking_pro
             .instructions
             .contains("--value_column \"batch_id\""));
