@@ -356,7 +356,7 @@ SDKs should use `release_manifest.json` as the compatibility source of truth:
 
 ```text
 repository: kouryu339/orbit-runtime
-release:    v0.4.8-beta.4
+release:    v0.4.8-beta.5
 ABI:        1.3 (major compatibility value: 1)
 ```
 
@@ -364,8 +364,8 @@ Current native packages:
 
 | Platform | Asset | Library path inside package |
 |---|---|---|
-| Windows x86_64 | `orbit-runtime-runtime-v0.4.8-beta.4-windows-x86_64.zip` | `bin/agent_runtime.dll` |
-| Linux x86_64 | `orbit-runtime-runtime-v0.4.8-beta.4-linux-x86_64.zip` | `lib/libagent_runtime.so` |
+| Windows x86_64 | `orbit-runtime-runtime-v0.4.8-beta.5-windows-x86_64.zip` | `bin/agent_runtime.dll` |
+| Linux x86_64 | `orbit-runtime-runtime-v0.4.8-beta.5-linux-x86_64.zip` | `lib/libagent_runtime.so` |
 
 macOS is intentionally not published in this release because the release build
 machine does not provide an Apple environment.

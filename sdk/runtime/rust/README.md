@@ -176,7 +176,7 @@ Rust RPC tool sidecars.
 
 ## Native Release Artifact
 
-The SDK is wired to Orbit Runtime native release `v0.4.8-beta.4` / ABI 1.3. Use
+The SDK is wired to Orbit Runtime native release `v0.4.8-beta.5` / ABI 1.3. Use
 `corework_runtime::release` to discover the correct asset for the current
 platform:
 

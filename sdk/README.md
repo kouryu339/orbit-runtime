@@ -79,7 +79,7 @@ RPC Tool SDK:
 corework/proto/corework_agent_tool_v1.proto
 ```
 
-The RPC Tool SDK source set in `v0.4.8-beta.4` is revision `0.1.2` for
+The RPC Tool SDK source set in `v0.4.8-beta.5` is revision `0.1.2` for
 versioned packages (Rust, Python, Node.js, C#, and Java). All supported
 language SDKs expose `workflow_id`, `workflow_run_id`, and `node_id` alongside
 the existing optional Agent-origin fields. Upgrade the SDK and protocol file
@@ -108,7 +108,7 @@ It must not infer compatibility from the product version.
 Runtime Host SDKs are aligned with the native packages from:
 
 ```text
-https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.8-beta.4
+https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.8-beta.5
 ```
 
 Use `runtime/release_manifest.json` to resolve the platform archive, checksum,
