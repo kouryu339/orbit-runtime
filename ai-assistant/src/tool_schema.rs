@@ -78,9 +78,27 @@ fn input_pairs_schema() -> Value {
     })
 }
 
-fn parameter_schema(parameter: &ParameterSpec, strict: bool) -> Value {
+fn is_plan_steps(tool_name: &str, parameter: &ParameterSpec) -> bool {
+    matches!(tool_name, "PlanWrite" | "PlanUpdate") && parameter.name == "steps"
+}
+
+fn parameter_schema(tool_name: &str, parameter: &ParameterSpec, strict: bool) -> Value {
     let mut schema = if parameter.name == "inputs" {
         input_pairs_schema()
+    } else if is_plan_steps(tool_name, parameter) {
+        json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked", "canceled"]}
+                },
+                "required": ["id", "text", "status"],
+                "additionalProperties": false
+            }
+        })
     } else {
         base_schema(&parameter.param_type)
     };
@@ -111,7 +129,10 @@ fn definition(
     let mut properties = Map::new();
     let mut required = Vec::new();
     for parameter in &parameters {
-        properties.insert(parameter.name.clone(), parameter_schema(parameter, strict));
+        properties.insert(
+            parameter.name.clone(),
+            parameter_schema(name, parameter, strict),
+        );
         if parameter.required || strict {
             required.push(Value::String(parameter.name.clone()));
         }
@@ -276,7 +297,7 @@ fn validate_strict_parameter_compatibility(
     parameters: &[ParameterSpec],
 ) -> Result<(), String> {
     for parameter in parameters {
-        if parameter.name == "inputs" {
+        if parameter.name == "inputs" || is_plan_steps(tool_name, parameter) {
             continue;
         }
         let normalized = parameter.param_type.trim().to_ascii_lowercase();
@@ -541,5 +562,38 @@ mod tests {
 
         let error = validate_strict_parameter_compatibility("Unsafe", &parameters).unwrap_err();
         assert!(error.contains("without a closed schema"));
+    }
+
+    #[test]
+    fn plan_steps_have_closed_schema_and_preserve_structured_arguments() {
+        let tools =
+            definitions_for_active_tools(&["PlanWrite".into(), "PlanUpdate".into()], true, false)
+                .unwrap();
+        for tool in &tools {
+            let items = &tool.function.parameters["properties"]["steps"]["items"];
+            assert_eq!(items["additionalProperties"], false);
+            assert_eq!(items["required"], json!(["id", "text", "status"]));
+        }
+        let steps = json!([{"id":"one", "text":"Inspect", "status":"in_progress"}]);
+        let call = llm_gateway::ToolCall::function(
+            "plan-call",
+            "PlanWrite",
+            json!({
+                "title":"Plan", "summary":null, "content":null, "steps":steps
+            })
+            .to_string(),
+        );
+        let parsed = validate_and_project_call(&call, &tools).unwrap();
+        let value = &parsed
+            .params
+            .iter()
+            .find(|(key, _)| key == "steps")
+            .unwrap()
+            .1;
+        assert_eq!(serde_json::from_str::<Value>(value).unwrap(), steps);
+        assert_eq!(
+            tools[1].function.parameters["properties"]["revision"]["type"],
+            json!(["integer", "null"])
+        );
     }
 }

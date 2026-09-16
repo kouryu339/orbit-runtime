@@ -281,11 +281,14 @@ function stateSnapshotPayloadFromStateDelta(
   if (state) payload.conversation_state = state as FrontendSnapshotPayload['conversation_state'];
   if (Array.isArray(delta.agents)) payload.agents = delta.agents as Array<Record<string, unknown>>;
   if (delta.plan !== undefined) payload.plan = delta.plan;
+  if (delta.op === 'agent_plan.set') payload.plan_agent_id = stringValue(delta.agent_id);
+  if (delta.op === 'focus.set') payload.active_agent_id = stringValue(delta.focus_agent_id) ?? stringValue(delta.active_agent_id);
   const pendingPermissions = delta.pending_permissions ?? delta.pendingPermissions;
   if (Array.isArray(pendingPermissions)) {
     payload.pending_permissions = pendingPermissions as FrontendSnapshotPayload['pending_permissions'];
   }
   return payload.conversation_state ||
+    payload.active_agent_id ||
     payload.agents ||
     payload.plan !== undefined ||
     payload.pending_permissions

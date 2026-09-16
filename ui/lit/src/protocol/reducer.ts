@@ -14,6 +14,7 @@ import type {
   LedgerRecord,
   PendingUserMessage,
   ToolCallView,
+  ExecutionPlan,
 } from './types.js';
 
 export function createConversationState(
@@ -34,6 +35,7 @@ export function createConversationState(
     pendingUserMessages: [],
     toolCalls: [],
     agents: [],
+    plansByAgent: {},
     pendingPermissions: [],
   };
 }
@@ -178,6 +180,21 @@ function applySnapshot(
     (state.awaitingAssistantResponse && !turnSettled) ||
     runtimeState !== 'waiting';
 
+  const activeAgentId = payload.active_agent_id ?? state.activeAgentId;
+  const owner = payload.plan_agent_id ?? activeAgentId;
+  const plansByAgent = { ...state.plansByAgent };
+  let plan = activeAgentId !== state.activeAgentId ? plansByAgent[activeAgentId ?? ''] : state.plan;
+  if (payload.plan !== undefined) {
+    const incomingPlan = normalizePlan(payload.plan);
+    const previous = owner ? plansByAgent[owner] : plan;
+    const stale = incomingPlan && previous && incomingPlan.plan_id === previous.plan_id
+      && (incomingPlan.revision ?? 0) < (previous.revision ?? 0);
+    if (!stale) {
+      if (owner) plansByAgent[owner] = incomingPlan;
+      if (!payload.plan_agent_id || owner === activeAgentId) plan = incomingPlan;
+    }
+  }
+
   return {
     ...state,
     initialized: state.initialized || Boolean(state.conversationId),
@@ -194,10 +211,24 @@ function applySnapshot(
     agents: payload.agents ?? state.agents,
     model: payload.model === undefined ? state.model : payload.model ?? undefined,
     modelUid: payload.model_uid === undefined ? state.modelUid : payload.model_uid ?? undefined,
-    plan: payload.plan ?? state.plan,
+    plan,
+    activeAgentId,
+    plansByAgent,
     pendingPermissions: payload.pending_permissions ?? payload.pendingPermissions ?? state.pendingPermissions,
     assistantStream,
     lastError: payload.error ?? state.lastError,
+  };
+}
+
+export function normalizePlan(value: unknown): ExecutionPlan | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const plan = value as ExecutionPlan;
+  if (typeof plan.title !== 'string' || !['active', 'finished', 'canceled'].includes(plan.status)) return undefined;
+  return {
+    ...plan,
+    steps: Array.isArray(plan.steps) ? plan.steps.filter(step =>
+      step && typeof step.id === 'string' && typeof step.text === 'string'
+      && ['pending', 'in_progress', 'completed', 'blocked', 'canceled'].includes(step.status)) : [],
   };
 }
 

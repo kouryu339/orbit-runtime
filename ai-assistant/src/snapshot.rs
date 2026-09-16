@@ -31,7 +31,7 @@ pub struct FrontendStateSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub conversation_state: ConversationState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub plan: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_permissions: Vec<crate::permission::PendingToolPermission>,

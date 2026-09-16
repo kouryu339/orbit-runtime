@@ -2,6 +2,7 @@ import { LitElement } from 'lit';
 import type { AgentRuntimeConversationPublicApi, CommandResult, ConversationDensity, ConversationExtension, ConversationHostCapabilities, PresetMarkdown, ConversationProviderControlsPolicy, ConversationPersistencePolicy, ConversationPresentationItem, ConversationThemeName, ConversationTransport, PersistedConversation, PresentationItemPatch, SendOptions, SendResult } from '../host/types.js';
 import { type ConversationState } from '../protocol/index.js';
 import './rich-content.js';
+import './plan-card.js';
 export declare class AgentRuntimeConversationElement extends LitElement implements AgentRuntimeConversationPublicApi {
     static properties: {
         transport: {

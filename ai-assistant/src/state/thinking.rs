@@ -1233,7 +1233,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 },
                 &plan.status,
                 &plan.updated_at,
-                &plan.content,
+                &plan.prompt_content(),
             ));
         }
     }

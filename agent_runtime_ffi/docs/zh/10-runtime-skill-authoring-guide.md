@@ -197,9 +197,9 @@ tool_filter: "all"
 
 | 系统名 | 参数 | 说明 |
 |---|---|---|
-| `PlanWrite` | `title`, `content`, `summary?` | 创建一个新的当前计划。`title` 和 `content` 必填。 |
-| `PlanUpdate` | `content`, `title?`, `summary?` | 更新当前计划。`content` 必填。 |
-| `PlanFinish` | `note?` | 标记当前计划完成。 |
+| `PlanWrite` | `title`, `steps`, `summary?`, `content?` | 创建 Agent 独立计划；steps 每项为 id/text/status。兼容旧 content。已有 active 计划时拒绝覆盖。 |
+| `PlanUpdate` | `plan_id`, `revision`, `step_id?`, `step_status?`, `steps?`, `content?`, `title?`, `summary?` | 按版本更新步骤或替换计划；旧版本返回冲突。 |
+| `PlanFinish` | `plan_id`, `revision`, `status?`, `note?` | 所有步骤完成后结束；status=canceled 明确取消。保留状态用于恢复和展示。 |
 
 计划工具适合系统级 thinking skill 使用。业务 role skill 如果不负责通用任务推进，通常不需要直接引用这些工具。
 

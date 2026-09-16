@@ -197,9 +197,9 @@ These runtime built-in AI systems are currently recommended for skill use.
 
 | System | Params | Description |
 |---|---|---|
-| `PlanWrite` | `title`, `content`, `summary?` | Creates a new current plan. `title` and `content` are required. |
-| `PlanUpdate` | `content`, `title?`, `summary?` | Updates the current plan. `content` is required. |
-| `PlanFinish` | `note?` | Marks the current plan finished. |
+| `PlanWrite` | `title`, `steps`, `summary?`, `content?` | Creates an Agent-owned plan with id/text/status steps. Legacy content accepted. Rejects overwriting an active plan. |
+| `PlanUpdate` | `plan_id`, `revision`, `step_id?`, `step_status?`, `steps?`, `content?`, `title?`, `summary?` | Updates steps with optimistic revision checks. |
+| `PlanFinish` | `plan_id`, `revision`, `status?`, `note?` | Finishes only when all steps are completed; status=canceled explicitly abandons the plan. State remains available. |
 
 Planning tools are mainly for the system thinking skill. Business role skills usually do not need to reference them directly.
 

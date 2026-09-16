@@ -15,6 +15,12 @@ pub struct PureFunctionSpec {
 
 const SPECS: &[PureFunctionSpec] = &[
     PureFunctionSpec {
+        name: "split",
+        node_type: "SplitNode",
+        input_pins: &["Value", "Separators"],
+        default_output_pin: "Parts",
+    },
+    PureFunctionSpec {
         name: "getvar",
         node_type: "GetVarNode",
         input_pins: &["Name"],

@@ -733,7 +733,7 @@ pub(super) async fn apply_conversation_state_delta(
             let Some(plan_value) = delta.get("plan").cloned() else {
                 return Ok(());
             };
-            let plan =
+            let mut plan =
                 match serde_json::from_value::<ai_assistant::context::CurrentPlan>(plan_value) {
                     Ok(plan) => plan,
                     Err(error) => {
@@ -752,6 +752,19 @@ pub(super) async fn apply_conversation_state_delta(
                     return Ok(());
                 }
             };
+            // Old emitted plan events omitted created_at. Retain their latest
+            // timestamp while accepting complete CurrentPlan events from new runtimes.
+            if plan.created_at.is_empty() {
+                plan.created_at = plan.updated_at.clone();
+            }
+            if let Some(current) = AssistantContext::get_current_plan(&cache)
+                .await
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?
+            {
+                if current.plan_id == plan.plan_id && current.revision > plan.revision {
+                    return Ok(());
+                }
+            }
             AssistantContext::set_current_plan(&cache, &plan)
                 .await
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?;

@@ -553,17 +553,9 @@ pub struct PlanChangedPayload {
     pub agent_id: String,
     #[serde(default)]
     pub agent_name: String,
-    /// 计划标题
-    pub title: String,
-    /// 计划摘要
-    #[serde(default)]
-    pub summary: String,
-    /// 计划正文（Markdown）
-    pub content: String,
-    /// 状态：`"active"` / `"finished"`
-    pub status: String,
-    /// 最近一次更新时间（RFC3339）
-    pub updated_at: String,
+    /// The same complete state is used by tools, snapshots and recovery.
+    #[serde(flatten)]
+    pub plan: crate::context::CurrentPlan,
 }
 
 // ============================================================================

@@ -26,6 +26,8 @@ export type LedgerRecord = {
     };
 };
 export type FrontendSnapshotPayload = {
+    active_agent_id?: string;
+    plan_agent_id?: string;
     revision?: number;
     conversation_event_seq?: number;
     conversation_state?: ConversationRuntimeState;
@@ -52,6 +54,21 @@ export type AssistantStreamView = {
     sequence: number;
     content: string;
     provisional_tool_calls?: ProvisionalToolCallView[];
+};
+export type ExecutionPlan = {
+    plan_id?: string;
+    revision?: number;
+    title: string;
+    summary?: string;
+    content?: string;
+    status: 'active' | 'finished' | 'canceled';
+    steps?: Array<{
+        id: string;
+        text: string;
+        status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'canceled';
+    }>;
+    created_at?: string;
+    updated_at?: string;
 };
 export type ProvisionalToolCallView = {
     key: string;
@@ -91,6 +108,8 @@ export type PendingUserMessage = {
 };
 export type ConversationConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 export type ConversationState = {
+    activeAgentId?: string;
+    plansByAgent: Record<string, ExecutionPlan | undefined>;
     conversationId: string | null;
     connection: ConversationConnectionState;
     initialized: boolean;
@@ -107,7 +126,7 @@ export type ConversationState = {
     agents: Array<Record<string, unknown>>;
     model?: string;
     modelUid?: number;
-    plan?: unknown;
+    plan?: ExecutionPlan;
     pendingPermissions: PendingToolPermission[];
     assistantStream?: AssistantStreamView;
     lastError?: string;

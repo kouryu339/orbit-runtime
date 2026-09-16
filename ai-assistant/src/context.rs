@@ -537,11 +537,18 @@ impl AssistantContext {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CurrentPlan {
+    #[serde(default)]
+    pub plan_id: String,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub steps: Vec<PlanStep>,
     pub title: String,
     #[serde(default)]
     pub summary: String,
     pub content: String,
     pub status: String,
+    #[serde(default)]
     pub created_at: String,
     pub updated_at: String,
 }
@@ -549,10 +556,30 @@ pub struct CurrentPlan {
 impl CurrentPlan {
     pub const STATUS_ACTIVE: &'static str = "active";
     pub const STATUS_FINISHED: &'static str = "finished";
+    pub const STATUS_CANCELED: &'static str = "canceled";
+
+    pub fn prompt_content(&self) -> String {
+        let mut text = format!("plan_id: {}\nrevision: {}\n", self.plan_id, self.revision);
+        if self.steps.is_empty() {
+            text.push_str(&self.content);
+            return text;
+        }
+        for step in &self.steps {
+            text.push_str(&format!("- [{}] {}: {}\n", step.status, step.id, step.text));
+        }
+        text
+    }
 
     pub fn is_active(&self) -> bool {
         self.status == Self::STATUS_ACTIVE
     }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PlanStep {
+    pub id: String,
+    pub text: String,
+    pub status: String,
 }
 
 // ============================================================================

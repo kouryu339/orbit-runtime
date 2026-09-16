@@ -3,6 +3,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { visiblePresentationItems } from '../content/presentation.js';
 import { conversationReducer, createConversationState, createPendingUserMessage, displayText, displayTextWithToolAnchors, recordKey, summarizePermissionTargets, snapshotRecords, } from '../protocol/index.js';
 import './rich-content.js';
+import './plan-card.js';
 function isVisibleGatewayRecord(record) {
     if (record.role !== 'gateway_message')
         return false;
@@ -1297,6 +1298,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         ${displayItems.length === 0
             ? html `<div class="empty"><slot name="empty-state">Start a conversation</slot></div>`
             : repeat(displayItems, (item) => item.key, (item, index) => this.renderDisplayItem(item, index, displayItems, scheme))}
+        ${this.state.plan ? html `<agent-runtime-plan-card .plan=${this.state.plan} .locale=${this.locale}></agent-runtime-plan-card>` : nothing}
         ${activityLabel
             ? html `<div class="message assistant waiting">
               <span class="pulse"></span><span>${activityLabel}</span>

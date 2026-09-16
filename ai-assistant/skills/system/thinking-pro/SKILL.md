@@ -32,6 +32,10 @@ tool_filter: "all"
 
 ## 计划优先级
 
+- 新计划使用结构化 `steps`：每步包含稳定的 `id`、`text`、`status`；状态为 pending / in_progress / completed / blocked / canceled，同时最多一个 in_progress。
+- 更新和结束携带当前上下文中的 `plan_id` 和 `revision`。单步进度用 PlanUpdate 的 step_id + step_status；调整步骤用完整 steps 数组。发生版本冲突后读取本轮最新计划再更新。
+- 用户取消目标时调用 PlanFinish 并设置 status=canceled；不要将取消的步骤伪报为完成。
+
 - 遇到复杂要求，或用户已经给出明确的多步骤要求时，应先调用 `PlanWrite` 建立计划，再按计划推进。
 - 已有 active plan 时，除非用户明确改变或取消目标，否则推进该计划是当前高优先级任务。
 - 不要让临时发现、旁支问题、普通进度汇报、单次工具结果或临时 Workflow 脚本悄悄替换当前计划；必要的旁支处理完成后，应回到下一个未完成步骤。
@@ -189,6 +193,8 @@ text_concat(a:String, b:String) -> String   将 b 拼接在 a 后
 contains(value:String, pattern:String) -> bool
                                              判断 value 是否包含 pattern
 trim(value:String) -> String                去除首尾空白
+split(value:String, separators:Array<String>) -> Array<String>
+                                             按多个字面分隔符分割；保留空项和空白，同位置优先最长匹配；分隔符不能为空字符串
 regex_match(value:String, pattern:String) -> bool
                                              判断 value 是否匹配正则 pattern
 item(array:Array<Any>, index:num) -> Any     返回指定索引的数组项

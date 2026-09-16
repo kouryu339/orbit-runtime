@@ -41,6 +41,7 @@ import {
   type PendingToolPermission,
 } from '../protocol/index.js';
 import './rich-content.js';
+import './plan-card.js';
 
 type DisplayItem =
   | { kind: 'record'; key: string; record: LedgerRecord }
@@ -1432,6 +1433,7 @@ export class AgentRuntimeConversationElement
           ? html`<div class="empty"><slot name="empty-state">Start a conversation</slot></div>`
           : repeat(displayItems, (item) => item.key, (item, index) =>
               this.renderDisplayItem(item, index, displayItems, scheme))}
+        ${this.state.plan ? html`<agent-runtime-plan-card .plan=${this.state.plan} .locale=${this.locale}></agent-runtime-plan-card>` : nothing}
         ${activityLabel
           ? html`<div class="message assistant waiting">
               <span class="pulse"></span><span>${activityLabel}</span>

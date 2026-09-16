@@ -47,3 +47,13 @@ npm run build
 
 The public Runtime event contract is documented in
 [`agent_runtime_ffi/docs/en/05-runtime-event-format.md`](../../agent_runtime_ffi/docs/en/05-runtime-event-format.md).
+
+## Execution plans
+
+The conversation renders a collapsible plan card with step states and completion
+progress. The focused Agent's snapshot supplies `active_agent_id` and `plan`;
+`plan: null` clears it. `conversation.state_delta` with `op: agent_plan.set`
+updates the plan for its `agent_id`, without replacing another Agent's card.
+The reducer ignores older revisions of the same plan. Snapshot hydration restores
+the card; the host remains responsible for storing Runtime state deltas.
+Legacy plans with Markdown `content` remain readable.

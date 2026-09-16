@@ -143,6 +143,17 @@ class PlaygroundTransport implements ConversationTransport {
         conversation_state: waiting ? 'waiting' : 'thinking',
         ledger_records: this.records as never,
         pending_permissions: this.pendingPermissions as never,
+        active_agent_id: 'demo-agent',
+        plan: new URLSearchParams(location.search).has('plans') ? {
+          plan_id: 'demo-plan', revision: this.revision, title: '完善 Runtime 执行计划',
+          summary: '修复状态与恢复，接入 Lit 展示，新增字符串预处理',
+          status: 'active',
+          steps: [
+            { id: 'runtime', text: '统一计划状态和恢复事件', status: 'completed' },
+            { id: 'lit', text: '验证 Lit 计划卡片和切换行为', status: 'in_progress' },
+            { id: 'split', text: '验证多个分隔符的 Pure 分割节点', status: 'pending' },
+          ],
+        } : null,
       },
     });
   }
