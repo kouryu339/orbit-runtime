@@ -402,10 +402,29 @@ impl BlueprintNode for ReferenceNode {
                 turn_id: ctx.inner().get::<String>("turn_id")?,
             };
             let values = inputs.into_iter().map(|(k, v)| (k, v.value)).collect();
-            let outcome = self
-                .module
-                .execute_from_blueprint_outcome_with_context(self.target.clone(), values, &origin)
-                .await?;
+            let parent_run_id = ctx.inner().get::<String>("workflow_run_id")?;
+            let identity = ctx.trace_run_identity().or_else(|| {
+                parent_run_id.map(|run_id| (run_id, Arc::new(std::sync::Mutex::new(0))))
+            });
+            let outcome = if let Some((run_id, sequence)) = identity {
+                self.module
+                    .execute_companion_from_blueprint(
+                        self.target.clone(),
+                        values,
+                        &origin,
+                        run_id,
+                        sequence,
+                    )
+                    .await?
+            } else {
+                self.module
+                    .execute_from_blueprint_outcome_with_context(
+                        self.target.clone(),
+                        values,
+                        &origin,
+                    )
+                    .await?
+            };
             if let Some(message) = outcome.error {
                 return Err(error(message));
             }
@@ -417,7 +436,22 @@ impl BlueprintNode for ReferenceNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::{BaseEvent, EventBus, EventHandler};
     use crate::workflow::chain_compiler_v2::compile_chain_v2;
+
+    #[derive(Default)]
+    struct CapturedEvents(std::sync::Mutex<Vec<Value>>);
+
+    #[async_trait::async_trait]
+    impl EventHandler for CapturedEvents {
+        async fn handle(&self, event: &BaseEvent) -> Result<()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event.payload.clone());
+            Ok(())
+        }
+    }
 
     fn echo(id: &str) -> BlueprintJson {
         let mut blueprint =
@@ -527,11 +561,19 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let directory =
             std::env::temp_dir().join(format!("workflow-reference-{}", uuid::Uuid::new_v4()));
-        let module = WorkflowsModule::new_with_event_bus(
-            directory,
-            Arc::new(crate::event::InMemoryEventBus::new()),
-        )
-        .unwrap();
+        let bus = Arc::new(crate::event::InMemoryEventBus::new());
+        let captured = Arc::new(CapturedEvents::default());
+        for event_type in [
+            super::super::WORKFLOW_EXECUTION_STARTED_EVENT,
+            super::super::WORKFLOW_NODE_STARTED_EVENT,
+            super::super::WORKFLOW_NODE_COMPLETED_EVENT,
+            super::super::WORKFLOW_TRACE_EVENT,
+        ] {
+            bus.subscribe(event_type.to_string(), captured.clone())
+                .await
+                .unwrap();
+        }
+        let module = WorkflowsModule::new_with_event_bus(directory, bus).unwrap();
         let child = echo("child");
         module.persist_resource(&child, false, None).unwrap();
         let definition = module
@@ -552,6 +594,28 @@ mod tests {
             .unwrap();
         assert!(outcome.error.is_none(), "{:?}", outcome.error);
         assert_eq!(outcome.report.outputs_json()["result"], "hello");
+        let trace = outcome.report.trace.as_ref().unwrap();
+        let events = captured.0.lock().unwrap_or_else(|e| e.into_inner());
+        let run_events = events
+            .iter()
+            .filter(|event| event["workflow_run_id"] == trace.run_id)
+            .collect::<Vec<_>>();
+        assert!(run_events
+            .iter()
+            .any(|event| event["workflow_id"] == "parent"));
+        assert!(run_events
+            .iter()
+            .any(|event| event["workflow_id"] == "child"));
+        let sequences = run_events
+            .iter()
+            .filter_map(|event| event["sequence"].as_u64())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sequences.len(),
+            sequences.iter().collect::<HashSet<_>>().len()
+        );
+        assert_eq!(trace.event_count, *sequences.iter().max().unwrap());
+        drop(events);
         let script = reference_script(&child).unwrap();
         let compiled = crate::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
             &script,

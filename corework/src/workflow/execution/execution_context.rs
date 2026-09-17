@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowTraceEntry {
@@ -432,18 +433,57 @@ impl ExecutionContext {
         node_ids: HashMap<String, String>,
         event_sender: tokio::sync::mpsc::Sender<crate::workflow::execution::WorkflowTraceEvent>,
     ) -> String {
-        self.workflow_trace.clear();
-        let recorder = WorkflowTraceRecorder::new_with_run_id(
+        self.enable_trace_with_events_for_run_and_sequence(
             workflow_id,
             workflow_name,
             run_id,
             source_map,
             node_ids,
-            Some(event_sender),
-        );
+            event_sender,
+            None,
+        )
+    }
+
+    pub(crate) fn enable_trace_with_events_for_run_and_sequence(
+        &mut self,
+        workflow_id: impl Into<String>,
+        workflow_name: impl Into<String>,
+        run_id: impl Into<String>,
+        source_map: HashMap<String, WorkflowSourceRef>,
+        node_ids: HashMap<String, String>,
+        event_sender: tokio::sync::mpsc::Sender<crate::workflow::execution::WorkflowTraceEvent>,
+        sequence: Option<Arc<Mutex<u64>>>,
+    ) -> String {
+        self.workflow_trace.clear();
+        let recorder = if let Some(sequence) = sequence {
+            WorkflowTraceRecorder::new_with_shared_sequence(
+                workflow_id,
+                workflow_name,
+                run_id,
+                source_map,
+                node_ids,
+                Some(event_sender),
+                sequence,
+            )
+        } else {
+            WorkflowTraceRecorder::new_with_run_id(
+                workflow_id,
+                workflow_name,
+                run_id,
+                source_map,
+                node_ids,
+                Some(event_sender),
+            )
+        };
         let run_id = recorder.run_id().to_string();
         self.trace_recorder = Some(recorder);
         run_id
+    }
+
+    pub(crate) fn trace_run_identity(&self) -> Option<(String, Arc<Mutex<u64>>)> {
+        self.trace_recorder
+            .as_ref()
+            .map(|recorder| (recorder.run_id().to_string(), recorder.shared_sequence()))
     }
 
     pub fn take_trace(&mut self) -> Option<WorkflowExecutionTrace> {

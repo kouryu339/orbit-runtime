@@ -3,6 +3,7 @@ use crate::workflow::core::DataValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc::Sender;
 
@@ -128,6 +129,7 @@ pub struct WorkflowTraceEvent {
 #[derive(Debug)]
 pub struct WorkflowTraceRecorder {
     trace: WorkflowExecutionTrace,
+    sequence: Arc<Mutex<u64>>,
     source_map: HashMap<String, WorkflowSourceRef>,
     node_ids: HashMap<String, String>,
     started_at: HashMap<String, Instant>,
@@ -176,7 +178,28 @@ impl WorkflowTraceRecorder {
         node_ids: HashMap<String, String>,
         event_sender: Option<Sender<WorkflowTraceEvent>>,
     ) -> Self {
-        let initial_event_count = u64::from(event_sender.is_some());
+        let sequence = Arc::new(Mutex::new(u64::from(event_sender.is_some())));
+        Self::new_with_shared_sequence(
+            workflow_id,
+            workflow_name,
+            run_id,
+            source_map,
+            node_ids,
+            event_sender,
+            sequence,
+        )
+    }
+
+    pub(crate) fn new_with_shared_sequence(
+        workflow_id: impl Into<String>,
+        workflow_name: impl Into<String>,
+        run_id: impl Into<String>,
+        source_map: HashMap<String, WorkflowSourceRef>,
+        node_ids: HashMap<String, String>,
+        event_sender: Option<Sender<WorkflowTraceEvent>>,
+        sequence: Arc<Mutex<u64>>,
+    ) -> Self {
+        let initial_event_count = *sequence.lock().unwrap_or_else(|e| e.into_inner());
         Self {
             trace: WorkflowExecutionTrace {
                 workflow_id: workflow_id.into(),
@@ -188,6 +211,7 @@ impl WorkflowTraceRecorder {
                 event_count: initial_event_count,
                 event_error: None,
             },
+            sequence,
             source_map,
             node_ids,
             started_at: HashMap::new(),
@@ -201,13 +225,18 @@ impl WorkflowTraceRecorder {
         &self.trace.run_id
     }
 
+    pub(crate) fn shared_sequence(&self) -> Arc<Mutex<u64>> {
+        Arc::clone(&self.sequence)
+    }
+
     fn emit_event(
         &mut self,
         event_type: impl Into<String>,
         node: Option<WorkflowNodeTrace>,
         detail: JsonValue,
     ) {
-        let sequence = self.trace.event_count.saturating_add(1);
+        let mut current = self.sequence.lock().unwrap_or_else(|e| e.into_inner());
+        let sequence = current.saturating_add(1);
         if let Some(sender) = self.event_sender.as_ref().cloned() {
             let event = WorkflowTraceEvent {
                 run_id: self.trace.run_id.clone(),
@@ -219,7 +248,10 @@ impl WorkflowTraceRecorder {
                 detail,
             };
             match sender.try_send(event) {
-                Ok(()) => self.trace.event_count = sequence,
+                Ok(()) => {
+                    *current = sequence;
+                    self.trace.event_count = sequence;
+                }
                 Err(error) => {
                     self.trace.event_error = Some(format!(
                         "workflow trace delivery failed after sequence {}: {}",
@@ -229,6 +261,7 @@ impl WorkflowTraceRecorder {
                 }
             }
         } else if self.trace.event_error.is_none() {
+            *current = sequence;
             self.trace.event_count = sequence;
         }
     }
@@ -373,6 +406,7 @@ impl WorkflowTraceRecorder {
                 node.finished_at = Some(now_timestamp());
             }
         }
+        self.trace.event_count = *self.sequence.lock().unwrap_or_else(|e| e.into_inner());
         self.trace
     }
 

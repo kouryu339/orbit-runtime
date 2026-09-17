@@ -20,6 +20,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::workflow::workflows::draft::keys;
 
@@ -790,6 +791,42 @@ impl WorkflowsModule {
         execution_context: &WorkflowExecutionContext,
         workflow_run_id: Option<String>,
     ) -> Result<WorkflowExecutionOutcome> {
+        self.execute_from_blueprint_outcome_with_identity(
+            blueprint,
+            inputs,
+            execution_context,
+            workflow_run_id,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn execute_companion_from_blueprint(
+        &self,
+        blueprint: BlueprintJson,
+        inputs: HashMap<String, JsonValue>,
+        execution_context: &WorkflowExecutionContext,
+        workflow_run_id: String,
+        sequence: Arc<Mutex<u64>>,
+    ) -> Result<WorkflowExecutionOutcome> {
+        self.execute_from_blueprint_outcome_with_identity(
+            blueprint,
+            inputs,
+            execution_context,
+            Some(workflow_run_id),
+            Some(sequence),
+        )
+        .await
+    }
+
+    async fn execute_from_blueprint_outcome_with_identity(
+        &self,
+        blueprint: BlueprintJson,
+        inputs: HashMap<String, JsonValue>,
+        execution_context: &WorkflowExecutionContext,
+        workflow_run_id: Option<String>,
+        sequence: Option<Arc<Mutex<u64>>>,
+    ) -> Result<WorkflowExecutionOutcome> {
         let inputs_summary = workflow_inputs_summary(&inputs, &blueprint.metadata.inputs);
         let workflow_inputs = inputs
             .into_iter()
@@ -803,19 +840,27 @@ impl WorkflowsModule {
             .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
         let (trace_event_tx, mut trace_event_rx) = tokio::sync::mpsc::channel(1024);
-        let run_id = exec_ctx.enable_trace_with_events_for_run(
+        let run_id = exec_ctx.enable_trace_with_events_for_run_and_sequence(
             workflow_id.clone(),
             workflow_name.clone(),
             workflow_run_id.unwrap_or_else(crate::workflow::execution::trace::new_workflow_run_id),
             loaded.compiled.source_map.clone(),
             loaded.compiled.node_ids.clone(),
             trace_event_tx,
+            sequence.clone(),
         );
         exec_ctx.bind_workflow_identity(
             workflow_id.clone(),
             run_id.clone(),
             loaded.compiled.node_ids.clone(),
         )?;
+        let started_sequence = if let Some(sequence) = sequence {
+            let mut current = sequence.lock().unwrap_or_else(|e| e.into_inner());
+            *current = current.saturating_add(1);
+            *current
+        } else {
+            1
+        };
         self.publish_event(
             crate::workflow::workflows::WORKFLOW_EXECUTION_STARTED_EVENT,
             serde_json::json!({
@@ -825,7 +870,7 @@ impl WorkflowsModule {
                 "workflow_name": workflow_name,
                 "workflow_run_id": run_id,
                 "run_id": run_id,
-                "sequence": 1,
+                "sequence": started_sequence,
                 "timestamp": chrono::Utc::now().to_rfc3339(),
                 "inputs_summary": inputs_summary
             }),
