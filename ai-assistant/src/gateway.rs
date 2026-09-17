@@ -115,6 +115,55 @@ enum CompactAgentOutcome {
     Failed { error: String },
 }
 
+// Catch while polling: a panic in an async summary otherwise bypasses the
+// failure event and the compact_in_progress cleanup in the caller.
+async fn catch_compaction_panic(
+    future: impl std::future::Future<Output = CompactAgentOutcome>,
+) -> CompactAgentOutcome {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|cx| {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| future.as_mut().poll(cx))) {
+            Ok(result) => result,
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown panic");
+                std::task::Poll::Ready(CompactAgentOutcome::Failed {
+                    error: format!("history_compaction_panicked: {message}"),
+                })
+            }
+        }
+    })
+    .await
+}
+
+#[cfg(test)]
+mod compaction_failure_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn panic_after_yield_returns_failure_and_allows_cleanup() {
+        let outcome = catch_compaction_panic(async {
+            tokio::task::yield_now().await;
+            panic!("summary failed");
+        })
+        .await;
+        assert!(matches!(outcome, CompactAgentOutcome::Failed { error }
+            if error == "history_compaction_panicked: summary failed"));
+        let outcome = catch_compaction_panic(async {
+            CompactAgentOutcome::Failed {
+                error: "provider failed".into(),
+            }
+        })
+        .await;
+        assert!(
+            matches!(outcome, CompactAgentOutcome::Failed { error } if error == "provider failed")
+        );
+    }
+}
+
 static NEXT_COMMAND_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn next_command_id() -> String {
@@ -690,7 +739,7 @@ impl AgentGateway {
 
         let mut report = CompactHistoryReport::default();
         for agent_id in targets {
-            match self.compact_single_agent(&agent_id).await {
+            match catch_compaction_panic(self.compact_single_agent(&agent_id)).await {
                 CompactAgentOutcome::Done { before, after } => {
                     report.done.push((agent_id.clone(), before, after));
                     self.publish_compact_event(

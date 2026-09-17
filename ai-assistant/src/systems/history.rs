@@ -46,7 +46,7 @@ pub async fn compress_for_llm_call(
         return Ok(history.to_vec());
     }
 
-    return compact_with_summary(history, model_uid, cache).await;
+    return compact_with_summary(history, model_uid, cache, true).await;
 }
 
 pub fn needs_compaction(history: &[Message], model_uid: u32) -> bool {
@@ -64,13 +64,14 @@ pub async fn compact_history_now(
     model_uid: u32,
     cache: &Arc<dyn Cache>,
 ) -> Result<Vec<Message>> {
-    compact_with_summary(history, model_uid, cache).await
+    compact_with_summary(history, model_uid, cache, false).await
 }
 
 async fn compact_with_summary(
     history: &[Message],
     model_uid: u32,
     cache: &Arc<dyn Cache>,
+    allow_local_fallback: bool,
 ) -> Result<Vec<Message>> {
     let context_window = get_context_window(model_uid);
     let current_tokens = estimate_tokens(history);
@@ -104,6 +105,16 @@ async fn compact_with_summary(
         Ok(text) if !text.trim().is_empty() => {
             tracing::info!("LLM summary succeeded for {} messages", middle.len());
             text
+        }
+        Ok(_) if !allow_local_fallback => {
+            return Err(corework::error::FrameworkError::SystemError(
+                "history compaction failed: summary model returned empty content".into(),
+            ));
+        }
+        Err(e) if !allow_local_fallback => {
+            return Err(corework::error::FrameworkError::SystemError(format!(
+                "history compaction failed: {e}"
+            )));
         }
         Ok(_) => {
             tracing::warn!("LLM returned an empty summary; using local fallback");
@@ -198,7 +209,7 @@ async fn summarize_with_llm(
                 }
             }
             "tool" => {
-                let preview = &m.content[..m.content.len().min(300)];
+                let preview = truncate(&m.content, 300);
                 if !preview.trim().is_empty() {
                     msgs.push(llm_gateway::ChatMessage {
                         role: "user".to_string(),
@@ -316,6 +327,10 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "hello");
+        let content = format!("{}文🙂末尾", "a".repeat(299));
+        assert_eq!(truncate(&content, 300), format!("{}文", "a".repeat(299)));
+        assert_eq!(truncate("中文🙂", 2), "中文");
+        assert_eq!(truncate("中文🙂", 0), "");
     }
 
     #[test]
