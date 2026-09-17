@@ -418,6 +418,20 @@ impl ChainCompiler {
         self.exec_prev = Some((node_id.to_string(), pin.to_string()));
     }
 
+    fn take_exec_tails(&mut self) -> Vec<(String, String)> {
+        let mut tails = Vec::new();
+        if let Some(tail) = self.exec_prev.take() {
+            tails.push(tail);
+        }
+        tails.append(&mut self.pending_merges);
+        tails
+    }
+
+    fn set_exec_tails(&mut self, mut tails: Vec<(String, String)>) {
+        self.exec_prev = tails.pop();
+        self.pending_merges = tails;
+    }
+
     // ── CSE canonical key ────────────────────────────────────────────────
 
     fn value_key(&self, val: &Value) -> String {
@@ -3109,31 +3123,23 @@ impl ChainCompiler {
         let (cond_node, cond_pin) = self.compile_value(condition)?;
         self.add_connection(&cond_node, &cond_pin, &branch_id, "Condition", "Data");
 
-        // True 分支
+        // Compile both branches in isolated control-flow scopes. A nested IF
+        // may produce several tails; none of them may be consumed by the
+        // sibling branch while it is being compiled.
         self.exec_prev = Some((branch_id.clone(), "True".to_string()));
+        self.pending_merges.clear();
         self.id_gen.push_scope(&format!("{}t", branch_id));
         self.compile_steps(true_block)?;
         self.id_gen.pop_scope();
-        let true_tail = self.exec_prev.take();
+        let mut tails = self.take_exec_tails();
 
-        // False 分支
         self.exec_prev = Some((branch_id.clone(), "False".to_string()));
+        self.pending_merges.clear();
         self.id_gen.push_scope(&format!("{}f", branch_id));
         self.compile_steps(false_block)?;
         self.id_gen.pop_scope();
-        let false_tail = self.exec_prev.take();
-
-        // 汇聚：两个分支的尾部都指向下一个节点（通过 exec_prev 记录两个点）
-        // 存为临时"多源"列表——但 exec_prev 只存一个，所以用简单策略：
-        // 创建一个隐式汇聚点（下一个节点自己处理）
-        // 这里先取 true_tail，false_tail 在下一个节点创建时再补连
-        self.exec_prev = true_tail;
-        // 保存 false_tail 用于 merge
-        if let Some(ft) = false_tail {
-            // 暂存到一个辅助字段——为了简单，直接在下一个节点创建前处理
-            // 我们用一个 Vec 来收集待 merge 的 exec 尾部
-            self.pending_merges.push(ft);
-        }
+        tails.extend(self.take_exec_tails());
+        self.set_exec_tails(tails);
 
         Ok(())
     }
@@ -3178,11 +3184,13 @@ impl ChainCompiler {
             .insert("index".to_string(), (node_id.clone(), "Index".to_string()));
 
         self.exec_prev = Some((node_id.clone(), "LoopBody".to_string()));
+        self.pending_merges.clear();
         self.id_gen.push_scope(&node_id);
         self.compile_steps(body)?;
         self.id_gen.pop_scope();
-        // 循环体尾部不需要连回（执行器自动迭代）
-        self.exec_prev.take();
+        // The executor owns iteration. Every body tail terminates the current
+        // iteration and must never escape to the first node after the loop.
+        self.take_exec_tails();
 
         // 恢复外层绑定
         match saved_item {
@@ -3252,10 +3260,11 @@ impl ChainCompiler {
             .insert("index".to_string(), (node_id.clone(), "Index".to_string()));
 
         self.exec_prev = Some((node_id.clone(), "LoopBody".to_string()));
+        self.pending_merges.clear();
         self.id_gen.push_scope(&node_id);
         self.compile_steps(body)?;
         self.id_gen.pop_scope();
-        self.exec_prev.take();
+        self.take_exec_tails();
 
         // 恢复外层 $index 绑定
         match saved_index {

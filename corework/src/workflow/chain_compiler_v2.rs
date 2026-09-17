@@ -2762,6 +2762,64 @@ return result=$total
         }
     }
 
+    #[tokio::test]
+    async fn foreach_nested_elif_tails_do_not_escape_to_following_step() {
+        let blueprint = compile_chain_v2(
+            r#"
+input
+$side_effects = 0
+1: FOR ["A","B","C","X"]
+    1.1: IF contains($item, "A")
+        1.1.1.1: EXEC DebugPrintNode --Value "A"
+    1.1.2: ELIF contains($item, "B")
+        1.1.2.1: EXEC DebugPrintNode --Value "B"
+    1.1.3: ELIF contains($item, "C")
+        1.1.3.1: EXEC DebugPrintNode --Value "C"
+    END
+END
+2: setvar side_effects = add($side_effects, 1)
+return side_effects=$side_effects
+"#,
+        )
+        .unwrap();
+
+        let incoming = blueprint
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.connection_type == "Exec"
+                    && connection.target_node == "2"
+                    && connection.target_pin == "In"
+            })
+            .map(|connection| {
+                (
+                    connection.source_node.as_str(),
+                    connection.source_pin.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(incoming, vec![("1", "Completed")]);
+
+        let framework = FrameworkState::initialize().unwrap();
+        let ctx = framework.create_context();
+        let loaded = BlueprintLoader::new()
+            .load_from_blueprint_json(blueprint, &ctx)
+            .unwrap();
+        let mut exec_ctx = ExecutionContext::from_context(ctx);
+        loaded
+            .compiled
+            .initialize_defaults(&mut exec_ctx)
+            .await
+            .unwrap();
+        let outputs = loaded
+            .compiled
+            .executor()
+            .execute_with_params(&mut exec_ctx, HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(outputs["side_effects"].as_f64(), Some(1.0));
+    }
+
     #[test]
     fn graph_validation_rejects_missing_nodes_without_requiring_layout() {
         let mut blueprint = compile_chain_v2("input\nreturn").unwrap();

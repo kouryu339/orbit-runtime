@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 use std::time::Instant;
 
 const WORKFLOW_RESOURCE_SCHEMA: &str = "agent-runtime-workflow-resource/v1";
@@ -144,6 +145,10 @@ impl RuntimeFacade {
         }
         let module = self.workflow_module()?;
         let runtime_tools = self.workflow_compiler_tools()?;
+        if let Some(workflow_id) = workflow_id.as_deref() {
+            validate_workflow_tree_coherence(&module, workflow_id, &runtime_tools)
+                .map_err(workflow_input_error)?;
+        }
         let source = if script.is_some() {
             "script"
         } else {
@@ -446,10 +451,20 @@ impl RuntimeFacade {
     }
 
     pub fn read_workflow_resource(&self, id: &str) -> Result<Value, RuntimeError> {
-        let workflow = self
-            .workflow_module()?
+        let module = self.workflow_module()?;
+        let mut workflow = module
             .read_workflow_resource(id)
             .map_err(workflow_input_error)?;
+        match validate_workflow_tree_coherence(&module, id, &self.workflow_compiler_tools()?) {
+            Ok(()) => {
+                workflow.validator_version =
+                    Some(corework::workflow::workflows::revision::VALIDATOR_VERSION.to_string());
+            }
+            Err(error) => {
+                workflow.summary.validation =
+                    corework::workflow::workflows::WorkflowValidation::invalid(error.to_string());
+            }
+        }
         serde_json::to_value(workflow).map_err(|error| RuntimeError::Internal(error.to_string()))
     }
 
@@ -608,6 +623,12 @@ impl RuntimeFacade {
                 return Ok(workflow_failure_response(404, message));
             }
         };
+        validate_workflow_tree_coherence(
+            self.workflow_module()?.as_ref(),
+            id,
+            &self.workflow_compiler_tools()?,
+        )
+        .map_err(workflow_input_error)?;
         match workflow.summary.kind {
             corework::workflow::workflows::WorkflowResourceKind::Registered => {
                 if mode.is_some_and(|mode| mode != "production") {
@@ -648,6 +669,8 @@ impl RuntimeFacade {
         execution_context: &corework::workflow::workflows::WorkflowExecutionContext,
     ) -> Result<Value, RuntimeError> {
         let module = self.workflow_module()?;
+        validate_workflow_tree_coherence(&module, selector, &self.workflow_compiler_tools()?)
+            .map_err(workflow_input_error)?;
         let started = Instant::now();
         let execution = self
             .rt
@@ -1166,6 +1189,47 @@ fn workflow_trace_meta(
         failed_node_id: failed_node.and_then(|node| node.node_id.clone()),
         failed_execution_id: failed_node.map(|node| node.execution_id.clone()),
     }
+}
+
+fn validate_workflow_tree_coherence(
+    module: &WorkflowsModule,
+    root_id: &str,
+    tools: &[RuntimeToolMetadata],
+) -> corework::error::Result<()> {
+    let mut pending = vec![root_id.to_string()];
+    let mut visited = HashSet::new();
+    while let Some(workflow_id) = pending.pop() {
+        if !visited.insert(workflow_id.clone()) {
+            continue;
+        }
+        let workflow = module.read_workflow_resource(&workflow_id)?;
+        let blueprint = workflow.blueprint.as_ref().ok_or_else(|| {
+            corework::error::FrameworkError::InvalidOperation(format!(
+                "workflow '{workflow_id}' has no compiled blueprint"
+            ))
+        })?;
+        if workflow.source.as_deref() == Some("script") {
+            let script = workflow.script.as_deref().ok_or_else(|| {
+                corework::error::FrameworkError::InvalidOperation(format!(
+                    "workflow '{workflow_id}' is script-owned but has no script"
+                ))
+            })?;
+            corework::workflow::workflows::revision::validate_script_blueprint_equivalence(
+                script, blueprint, tools,
+            )
+            .map_err(|error| {
+                corework::error::FrameworkError::InvalidOperation(format!(
+                    "workflow '{workflow_id}' failed script/blueprint validation: {error}"
+                ))
+            })?;
+        }
+        pending.extend(blueprint.nodes.iter().filter_map(|node| {
+            node.node_type
+                .strip_prefix(corework::workflow::workflows::reference::PREFIX)
+                .map(str::to_string)
+        }));
+    }
+    Ok(())
 }
 
 fn workflow_failure_response(code: i32, trace: String) -> Value {

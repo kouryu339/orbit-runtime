@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+pub const VALIDATOR_VERSION: &str = "2";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -69,7 +71,7 @@ impl super::WorkflowsModule {
                         blueprint,
                         script,
                         source: current.source.clone().unwrap_or_else(|| "script".into()),
-                        validator_version: "1".into(),
+                        validator_version: VALIDATOR_VERSION.into(),
                     });
             let mut prepared = prepare(request.change, previous.as_ref(), &effective)?;
             prepared.blueprint.metadata.id = current.summary.id.clone();
@@ -309,6 +311,21 @@ fn semantic_graph(bp: &BlueprintJson) -> Result<Value> {
     Ok(json!({"nodes":nodes,"edges":edges,"variables":variables}))
 }
 
+pub fn validate_script_blueprint_equivalence(
+    script: &str,
+    blueprint: &BlueprintJson,
+    tools: &[RuntimeToolMetadata],
+) -> Result<()> {
+    let compiled = compile_chain_v2_with_runtime_tools(script, tools)
+        .map_err(|e| invalid(format!("Script line {}: {}", e.line, e.message)))?;
+    if semantic_graph(&compiled)? != semantic_graph(blueprint)? {
+        return Err(invalid(
+            "Stored script and blueprint have different control-flow semantics",
+        ));
+    }
+    Ok(())
+}
+
 pub fn prepare(
     change: WorkflowChange,
     previous: Option<&PreparedRevision>,
@@ -345,6 +362,7 @@ pub fn prepare(
     blueprint.normalize_node_sizes();
     blueprint.validate().map_err(invalid)?;
     semantic_graph(&blueprint)?;
+    validate_script_blueprint_equivalence(&script, &blueprint, tools)?;
     if authored_change {
         if let Some(old) = previous {
             super::preserve_workflow_blueprint_layout(&old.blueprint, &mut blueprint);
@@ -354,7 +372,7 @@ pub fn prepare(
         script,
         blueprint,
         source,
-        validator_version: "1".into(),
+        validator_version: VALIDATOR_VERSION.into(),
     })
 }
 
@@ -413,7 +431,47 @@ END
 return result=$result
 "#;
         let compiled = prepare(WorkflowChange::Script(script.into()), None, &[]).unwrap();
+        assert_eq!(compiled.validator_version, VALIDATOR_VERSION);
         let converted = prepare(WorkflowChange::Blueprint(compiled.blueprint), None, &[]).unwrap();
         assert!(converted.script.contains("ELIF"));
+    }
+
+    #[test]
+    fn rejects_stored_loop_body_exit_that_bypasses_completed() {
+        let script = r#"input
+$count = 0
+1: FOR ["A"]
+    1.1: IF contains($item, "A")
+        1.1.1.1: setvar count = add($count, 1)
+    END
+END
+2: setvar count = add($count, 1)
+return count=$count
+"#;
+        let mut blueprint = compile_chain_v2_with_runtime_tools(script, &[]).unwrap();
+        let body_exit_pin = blueprint
+            .nodes
+            .iter()
+            .find(|node| node.id == "1.1.1.1")
+            .and_then(|node| node.pins.iter().find(|pin| pin.kind == "ExecOutput"))
+            .map(|pin| pin.name.clone())
+            .unwrap();
+        blueprint
+            .connections
+            .push(crate::workflow::blueprint_json::ConnectionJson {
+                id: "bad-loop-exit".into(),
+                source_node: "1.1.1.1".into(),
+                source_pin: body_exit_pin,
+                target_node: "2".into(),
+                target_pin: "In".into(),
+                connection_type: "Exec".into(),
+            });
+        let error = validate_script_blueprint_equivalence(script, &blueprint, &[]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("different control-flow semantics"),
+            "{error}"
+        );
     }
 }
