@@ -211,15 +211,21 @@ async fn compile_script(
         &script,
         &runtime_tools,
     )
-    .map_err(|error| {
-        AIOutput::error(
-            400,
-            format!(
-                "script compile failed at line {}: {}. Ensure every referenced tool appears in this agent's active tools and has explicit registered description, input pins, and output pins.",
-                error.line, error.message,
-            ),
-        )
-    })
+    .map_err(|error| compile_error_output(&error))
+}
+
+fn compile_error_output(error: &corework::workflow::chain_compiler::ChainError) -> AIOutput {
+    let mut validation = WorkflowValidation::from_compile_error(error);
+    for diagnostic in &mut validation.diagnostics {
+        if diagnostic.kind == "unknown_operation" && diagnostic.suggestion.is_none() {
+            diagnostic.suggestion = Some("Ensure the referenced tool appears in this agent's active tools and has explicit registered description, input pins, and output pins.".to_string());
+        }
+    }
+    let result = json!(validation);
+    // Include structured details in to_ai as well: text-only transports use this field.
+    let mut output = AIOutput::error(400, result.to_string());
+    output.result = result;
+    output
 }
 
 fn execution_output(
@@ -914,6 +920,21 @@ impl SystemOperation for ExecuteWorkflowScript {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compile_errors_reach_both_ai_transports_as_structured_diagnostics() {
+        let error = corework::workflow::chain_compiler_v2::parse_v2(
+            "input\n2: EXEC DebugPrintNode --Value \"a\"\n4: EXEC DebugPrintNode --Value \"b\"\nreturn"
+        ).unwrap_err();
+        let output = super::compile_error_output(&error);
+        assert_eq!(output.result["diagnostics"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            output.result["diagnostics"][0]["numbering"]["expected"],
+            "1"
+        );
+        let text: serde_json::Value = serde_json::from_str(&output.to_ai).unwrap();
+        assert_eq!(text, output.result);
+        assert!(!output.to_ai.contains("Ensure every referenced tool"));
+    }
     use super::*;
     use corework::event::InMemoryEventBus;
     use corework::execution_unit::{ExecutionUnit, UnitType};

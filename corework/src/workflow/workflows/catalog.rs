@@ -67,6 +67,8 @@ pub struct WorkflowValidation {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<WorkflowDiagnostic>,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,12 +80,37 @@ pub struct WorkflowDiagnostic {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<crate::workflow::chain_compiler::NumberingDiagnostic>,
 }
 
 impl WorkflowValidation {
+    pub fn from_compile_error(error: &crate::workflow::chain_compiler::ChainError) -> Self {
+        Self {
+            valid: false,
+            truncated: error.truncated,
+            error: Some(format!(
+                "script compile failed at line {}: {}",
+                error.line, error.message
+            )),
+            diagnostics: std::iter::once(error)
+                .chain(error.related.iter())
+                .map(|error| WorkflowDiagnostic {
+                    severity: "error".to_string(),
+                    kind: error.kind.as_str().to_string(),
+                    line: error.line,
+                    col: error.col,
+                    message: error.message.clone(),
+                    suggestion: error.suggestion.clone(),
+                    numbering: error.numbering.clone(),
+                })
+                .collect(),
+        }
+    }
     pub fn valid() -> Self {
         Self {
             valid: true,
+            truncated: false,
             error: None,
             diagnostics: Vec::new(),
         }
@@ -92,6 +119,7 @@ impl WorkflowValidation {
     pub fn invalid(error: impl Into<String>) -> Self {
         Self {
             valid: false,
+            truncated: false,
             error: Some(error.into()),
             diagnostics: Vec::new(),
         }
@@ -103,6 +131,7 @@ impl WorkflowValidation {
     ) -> Self {
         Self {
             valid: false,
+            truncated: false,
             error: Some(error.into()),
             diagnostics: vec![diagnostic],
         }

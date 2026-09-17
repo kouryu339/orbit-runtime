@@ -165,7 +165,7 @@ impl RuntimeFacade {
                 ) {
                     Ok(blueprint) => blueprint,
                     Err(error) => {
-                        let diagnostic = workflow_diagnostic(&error);
+                        let validation = workflow_compile_validation(&error);
                         publish_async_workflow_failure(
                             &module,
                             &task_run_id,
@@ -177,7 +177,7 @@ impl RuntimeFacade {
                                 "workflow script compile failed at line {}: {}",
                                 error.line, error.message
                             ),
-                            Some(json!([diagnostic])),
+                            Some(validation),
                         )
                         .await;
                         return;
@@ -789,7 +789,7 @@ impl RuntimeFacade {
                         "workflow script compile failed at line {}: {}",
                         error.line, error.message
                     );
-                    let diagnostic = workflow_diagnostic(&error);
+                    let validation = workflow_compile_validation(&error);
                     self.publish_workflow_event(
                         WORKFLOW_EXECUTION_COMPLETED_EVENT,
                         json!({
@@ -798,10 +798,10 @@ impl RuntimeFacade {
                             "code": 400,
                             "duration_ms": 0,
                             "error": trace,
-                            "diagnostics": [diagnostic.clone()]
+                            "diagnostics": validation.diagnostics, "truncated": validation.truncated
                         }),
                     );
-                    return Ok(workflow_compile_failure_response(400, trace, diagnostic));
+                    return Ok(workflow_compile_failure_response(400, trace, validation));
                 }
             };
         if blueprint.metadata.name.trim().is_empty() {
@@ -900,7 +900,7 @@ async fn publish_async_workflow_failure(
     sequence: u64,
     code: i32,
     message: String,
-    diagnostics: Option<Value>,
+    diagnostics: Option<corework::workflow::workflows::WorkflowValidation>,
 ) {
     publish_async_workflow_failure_kind(
         module,
@@ -925,7 +925,7 @@ async fn publish_async_workflow_failure_kind(
     code: i32,
     error_kind: &str,
     message: String,
-    diagnostics: Option<Value>,
+    diagnostics: Option<corework::workflow::workflows::WorkflowValidation>,
 ) {
     let mut payload = json!({
         "schema": "agent-runtime-workflow-trace/v1",
@@ -941,7 +941,8 @@ async fn publish_async_workflow_failure_kind(
         "error": {"code": error_kind, "message": message}
     });
     if let Some(diagnostics) = diagnostics {
-        payload["diagnostics"] = diagnostics;
+        payload["diagnostics"] = json!(diagnostics.diagnostics);
+        payload["truncated"] = json!(diagnostics.truncated);
     }
     module.publish_execution_event(payload).await;
 }
@@ -1177,40 +1178,40 @@ fn workflow_failure_response(code: i32, trace: String) -> Value {
 fn workflow_compile_failure_response(
     code: i32,
     trace: String,
-    diagnostic: corework::workflow::workflows::catalog::WorkflowDiagnostic,
+    validation: corework::workflow::workflows::WorkflowValidation,
 ) -> Value {
     json!({
         "code": code,
         "trace": trace,
-        "diagnostics": [diagnostic]
+        "diagnostics": validation.diagnostics,
+        "truncated": validation.truncated
     })
-}
-
-fn workflow_diagnostic(
-    error: &corework::workflow::chain_compiler::ChainError,
-) -> corework::workflow::workflows::catalog::WorkflowDiagnostic {
-    corework::workflow::workflows::catalog::WorkflowDiagnostic {
-        severity: "error".to_string(),
-        kind: error.kind.as_str().to_string(),
-        line: error.line,
-        col: error.col,
-        message: error.message.clone(),
-        suggestion: error.suggestion.clone(),
-    }
 }
 
 fn workflow_compile_validation(
     error: &corework::workflow::chain_compiler::ChainError,
 ) -> corework::workflow::workflows::WorkflowValidation {
-    corework::workflow::workflows::WorkflowValidation::invalid_with_diagnostic(
-        format!(
-            "script compile failed at line {}: {}",
-            error.line, error.message
-        ),
-        workflow_diagnostic(error),
-    )
+    corework::workflow::workflows::WorkflowValidation::from_compile_error(error)
 }
-
 fn workflow_input_error(error: corework::error::FrameworkError) -> RuntimeError {
     RuntimeError::InvalidConfig(error.to_string())
+}
+
+#[cfg(test)]
+mod compile_diagnostic_tests {
+    #[test]
+    fn workflow_compile_response_preserves_numbering_batch_and_ranges() {
+        let error = corework::workflow::chain_compiler_v2::parse_v2(
+            "input\n2: EXEC DebugPrintNode --Value \"a\"\n4: EXEC DebugPrintNode --Value \"b\"\nreturn",
+        ).unwrap_err();
+        let validation = super::workflow_compile_validation(&error);
+        let response = super::workflow_compile_failure_response(400, error.to_string(), validation);
+        assert_eq!(response["code"], 400);
+        assert_eq!(response["diagnostics"].as_array().unwrap().len(), 2);
+        assert_eq!(response["diagnostics"][1]["line"], 3);
+        assert_eq!(response["diagnostics"][1]["col"], 1);
+        assert_eq!(response["diagnostics"][1]["numbering"]["end_col"], 2);
+        assert_eq!(response["diagnostics"][1]["numbering"]["expected"], "2");
+        assert_eq!(response["truncated"], false);
+    }
 }

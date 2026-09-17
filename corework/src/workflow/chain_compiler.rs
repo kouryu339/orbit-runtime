@@ -69,6 +69,24 @@ pub struct ChainError {
     /// 修复建议（"did you mean X?" / 可用选项列表等）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<NumberingDiagnostic>,
+    /// Independent diagnostics from the same validation pass (excluding self).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<ChainError>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NumberingDiagnostic {
+    pub code: String,
+    pub actual: Option<String>,
+    pub expected: String,
+    pub context: String,
+    /// Exclusive, 1-based character column; absent when source is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_col: Option<usize>,
 }
 
 fn default_unclassified() -> ChainErrorKind {
@@ -115,6 +133,9 @@ impl ChainError {
             kind,
             message,
             suggestion: None,
+            numbering: None,
+            related: Vec::new(),
+            truncated: false,
         }
     }
 
@@ -126,6 +147,9 @@ impl ChainError {
             kind,
             message: msg.into(),
             suggestion: None,
+            numbering: None,
+            related: Vec::new(),
+            truncated: false,
         }
     }
 

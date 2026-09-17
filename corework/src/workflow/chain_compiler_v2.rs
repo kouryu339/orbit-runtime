@@ -60,8 +60,10 @@ pub fn parse_v2(text: &str) -> ChainResult<Chain> {
         pos: 0,
         loop_depth: 0,
     };
-    let chain = parser.parse_chain()?;
-    validate_step_numbering(&chain)?;
+    let chain = parser
+        .parse_chain()
+        .map_err(|error| locate_numbering_errors(error, text))?;
+    validate_step_numbering(&chain).map_err(|error| locate_numbering_errors(error, text))?;
     Ok(chain)
 }
 
@@ -529,17 +531,33 @@ fn validate_new_input_names(
     Ok(())
 }
 
+const MAX_NUMBERING_DIAGNOSTICS: usize = 64;
+
 fn validate_step_numbering(chain: &Chain) -> ChainResult<()> {
-    validate_numbered_sequence(&chain.steps, None, "顶层执行步骤")
+    let mut errors = Vec::new();
+    validate_numbered_sequence(&chain.steps, None, "顶层执行步骤", &mut errors);
+    if errors.is_empty() {
+        return Ok(());
+    }
+    let truncated = errors.len() > MAX_NUMBERING_DIAGNOSTICS;
+    errors.truncate(MAX_NUMBERING_DIAGNOSTICS);
+    let mut first = errors.remove(0);
+    first.related = errors;
+    first.truncated = truncated;
+    Err(first)
 }
 
 fn validate_numbered_sequence(
     steps: &[Step],
     prefix: Option<&str>,
     context: &str,
-) -> ChainResult<()> {
+    errors: &mut Vec<ChainError>,
+) {
     let mut ordinal = 1usize;
     for step in steps {
+        if errors.len() > MAX_NUMBERING_DIAGNOSTICS {
+            return;
+        }
         let Some((line, actual)) = numbered_step(step) else {
             continue;
         };
@@ -548,14 +566,12 @@ fn validate_numbered_sequence(
             None => ordinal.to_string(),
         };
         if actual != Some(expected.as_str()) {
-            return Err(numbering_error(line, actual, &expected, context));
+            errors.push(numbering_error(line, actual, &expected, context));
         }
-        validate_nested_numbering(step, &expected)?;
+        validate_nested_numbering(step, &expected, errors);
         ordinal += 1;
     }
-    Ok(())
 }
-
 fn numbered_step(step: &Step) -> Option<(usize, Option<&str>)> {
     match step {
         Step::Node { line, step_id, .. }
@@ -568,34 +584,49 @@ fn numbered_step(step: &Step) -> Option<(usize, Option<&str>)> {
     }
 }
 
-fn validate_nested_numbering(step: &Step, step_id: &str) -> ChainResult<()> {
+fn validate_nested_numbering(step: &Step, expected: &str, errors: &mut Vec<ChainError>) {
     match step {
         Step::If {
+            step_id,
             true_block,
             false_block,
             ..
         } => {
-            let true_prefix = format!("{step_id}.1");
-            validate_numbered_sequence(true_block, Some(&true_prefix), "IF 真分支")?;
-            validate_if_false_chain(false_block, step_id, 2)
+            validate_numbered_sequence(
+                true_block,
+                Some(&format!("{expected}.1")),
+                "IF 真分支",
+                errors,
+            );
+            // Parser has already checked ELIF markers against the original IF ID.
+            // Use original IDs for branch identity and canonical IDs for diagnostics.
+            validate_if_false_chain(
+                false_block,
+                step_id.as_deref().unwrap_or(expected),
+                expected,
+                2,
+                errors,
+            );
         }
         Step::ForEach { body, .. } | Step::ForLoop { body, .. } => {
-            validate_numbered_sequence(body, Some(step_id), "FOR 循环体")
+            validate_numbered_sequence(body, Some(expected), "FOR 循环体", errors);
         }
-        _ => Ok(()),
+        _ => {}
     }
 }
 
 fn validate_if_false_chain(
     false_block: &[Step],
-    root_id: &str,
+    original_root: &str,
+    expected_root: &str,
     branch_index: usize,
-) -> ChainResult<()> {
-    if false_block.is_empty() {
-        return Ok(());
+    errors: &mut Vec<ChainError>,
+) {
+    if false_block.is_empty() || errors.len() > MAX_NUMBERING_DIAGNOSTICS {
+        return;
     }
-
-    let expected_elif = format!("{root_id}.{branch_index}");
+    let original_elif = format!("{original_root}.{branch_index}");
+    let expected_elif = format!("{expected_root}.{branch_index}");
     if let [Step::If {
         line,
         step_id,
@@ -604,17 +635,32 @@ fn validate_if_false_chain(
         ..
     }] = false_block
     {
-        if step_id.as_deref() == Some(expected_elif.as_str()) {
-            validate_numbered_sequence(true_block, Some(&expected_elif), "ELIF 分支")?;
-            return validate_if_false_chain(false_block, root_id, branch_index + 1);
-        }
-        if step_id.is_none() {
-            return Err(numbering_error(*line, None, &expected_elif, "ELIF 分支"));
+        if step_id.as_deref() == Some(original_elif.as_str()) {
+            if original_elif != expected_elif {
+                errors.push(numbering_error(
+                    *line,
+                    step_id.as_deref(),
+                    &expected_elif,
+                    "ELIF 分支",
+                ));
+            }
+            validate_numbered_sequence(true_block, Some(&expected_elif), "ELIF 分支", errors);
+            validate_if_false_chain(
+                false_block,
+                original_root,
+                expected_root,
+                branch_index + 1,
+                errors,
+            );
+            return;
         }
     }
-
-    let false_prefix = format!("{root_id}.0");
-    validate_numbered_sequence(false_block, Some(&false_prefix), "IF ELSE 分支")
+    validate_numbered_sequence(
+        false_block,
+        Some(&format!("{expected_root}.0")),
+        "IF ELSE 分支",
+        errors,
+    );
 }
 
 fn numbering_error(
@@ -623,16 +669,45 @@ fn numbering_error(
     expected: &str,
     context: &str,
 ) -> ChainError {
-    let actual = actual.unwrap_or("<缺少编号>");
-    ChainError::of_kind(
+    let mut error = ChainError::of_kind(
         lineno,
         ChainErrorKind::Syntax,
         format!(
-            "{context}编号不连续：得到 `{actual}`，期望 `{expected}`。步骤编号不可重复、不可跳号，并且只能由数字和点组成"
+            "{context}编号不连续：得到 `{}`，期望 `{expected}`。步骤编号不可重复、不可跳号，并且只能由数字和点组成",
+            actual.unwrap_or("<缺少编号>")
         ),
-    )
+    ).with_suggestion("按 expected 修正编号；同步核对引用该步骤的 N.pin。引用与工具契约尚未校验，重复编号的引用归属不可自动推断。");
+    error.numbering = Some(crate::workflow::chain_compiler::NumberingDiagnostic {
+        code: "STEP_NUMBER_MISMATCH".to_string(),
+        actual: actual.map(str::to_string),
+        expected: expected.to_string(),
+        context: context.to_string(),
+        end_col: None,
+    });
+    error
 }
 
+fn locate_numbering_errors(mut error: ChainError, text: &str) -> ChainError {
+    let lines: Vec<_> = text.lines().collect();
+    fn locate(diagnostic: &mut ChainError, lines: &[&str]) {
+        if let Some(detail) = &mut diagnostic.numbering {
+            if let (Some(actual), Some(source)) =
+                (&detail.actual, lines.get(diagnostic.line.saturating_sub(1)))
+            {
+                let start = source.len() - source.trim_start().len();
+                if source[start..].starts_with(&format!("{actual}:")) {
+                    diagnostic.col = source[..start].chars().count() + 1;
+                    detail.end_col = Some(diagnostic.col + actual.chars().count());
+                }
+            }
+        }
+    }
+    locate(&mut error, &lines);
+    for related in &mut error.related {
+        locate(related, &lines);
+    }
+    error
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // 行级解析
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2319,6 +2394,50 @@ return
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn numbering_diagnostics_support_local_repairs() {
+        let script = "input enabled:bool\n1: IF input.enabled\n    1.1: EXEC DebugPrintNode --Value \"a\"\n    1.3: EXEC DebugPrintNode --Value \"b\"\nEND\n4: EXEC DebugPrintNode --Value \"c\"\nreturn\n";
+        let error = parse_v2(script).unwrap_err();
+        assert_eq!(error.related.len(), 2);
+        let mut lines: Vec<String> = script.lines().map(str::to_string).collect();
+        for diagnostic in std::iter::once(&error).chain(&error.related) {
+            let detail = diagnostic.numbering.as_ref().unwrap();
+            let line = &mut lines[diagnostic.line - 1];
+            let start = diagnostic.col - 1;
+            let end = detail.end_col.unwrap() - 1;
+            assert_eq!(&line[start..end], detail.actual.as_deref().unwrap());
+            line.replace_range(start..end, &detail.expected);
+        }
+        compile_chain_v2(&lines.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn numbering_batch_preserves_elif_identity_when_parent_changes() {
+        let error = parse_v2("input a:bool b:bool\n2: IF input.a\n2.2: ELIF input.b\n    2.2.1: EXEC DebugPrintNode --Value \"b\"\nEND\nreturn").unwrap_err();
+        let expected: Vec<_> = std::iter::once(&error)
+            .chain(&error.related)
+            .map(|e| e.numbering.as_ref().unwrap().expected.as_str())
+            .collect();
+        assert_eq!(expected, ["1", "1.2", "1.2.1"]);
+    }
+
+    #[test]
+    fn numbering_batch_is_bounded_and_syntax_errors_do_not_cascade() {
+        let mut script = String::from("input\n");
+        for _ in 0..100 {
+            script.push_str("9: EXEC DebugPrintNode --Value \"x\"\n");
+        }
+        script.push_str("return");
+        let error = parse_v2(&script).unwrap_err();
+        assert!(error.truncated);
+        assert_eq!(error.related.len() + 1, MAX_NUMBERING_DIAGNOSTICS);
+        let error =
+            parse_v2("input a:bool\n2: IF input.a\n3: EXEC DebugPrintNode --Value \"x\"\nreturn")
+                .unwrap_err();
+        assert!(error.related.is_empty());
+        assert!(error.numbering.is_none());
     }
 
     #[test]

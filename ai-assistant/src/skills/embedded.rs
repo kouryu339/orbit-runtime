@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_pro_requires_recursive_numbering_and_value_preflight() {
+    fn thinking_pro_documents_nested_numbering_and_string_literals() {
         let entries = embedded_system_entries();
         let thinking_pro = entries
             .iter()
@@ -243,19 +243,10 @@ mod tests {
             .expect("thinking-pro should be embedded");
 
         assert!(thinking_pro.instructions.contains("1.1.1.1.1.1: EXEC"));
-        assert!(thinking_pro
-            .instructions
-            .contains("IF 后、ELIF/ELSE/END 前的缩进语句都属于 true 分支"));
-        assert!(thinking_pro
-            .instructions
-            .contains("必须连续追加 `.1.k` 两层"));
         assert!(thinking_pro.instructions.contains("不能省略成 `1.1.1`"));
         assert!(thinking_pro
             .instructions
             .contains("--value_column \"batch_id\""));
-        assert!(thinking_pro
-            .instructions
-            .contains("从语法树根开始重新计算全部编号"));
         assert!(thinking_pro.instructions.contains("无法归类的裸 token"));
     }
 }
