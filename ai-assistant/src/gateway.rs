@@ -788,7 +788,7 @@ impl AgentGateway {
             };
         };
         let cache = agent.sm.unit().cache();
-        let records = QueryLedgerSystem
+        let records = match QueryLedgerSystem
             .execute(
                 QueryLedgerInput {
                     conversation_id: self.conversation_id.clone(),
@@ -796,34 +796,19 @@ impl AgentGateway {
                 &self.ledger.create_context(),
             )
             .await
-            .unwrap_or_default();
-        let agent_records = records
+        {
+            Ok(records) => records,
+            Err(error) => {
+                return CompactAgentOutcome::Failed {
+                    error: error.to_string(),
+                }
+            }
+        };
+        let agent_records = ledger::agent_context_records(&records, agent_id);
+        let history: Vec<_> = agent_records
             .iter()
-            .filter(|record| record.agent_id == agent_id)
-            .collect::<Vec<_>>();
-        let history = agent_records
-            .iter()
-            .filter_map(|record| record.to_context_message())
-            .collect::<Vec<_>>();
-        let has_recent_summary = agent_records
-            .iter()
-            .rev()
-            .take(20)
-            .any(|record| record.role == ledger::LedgerRole::Summary);
-        if has_recent_summary {
-            return CompactAgentOutcome::Skipped {
-                reason: "recent_summary",
-            };
-        }
-        let user_turns = history
-            .iter()
-            .filter(|m| m.role == crate::context::roles::USER)
-            .count();
-        if user_turns <= 20 {
-            return CompactAgentOutcome::Skipped {
-                reason: "history_too_short",
-            };
-        }
+            .filter_map(|r| r.to_context_message())
+            .collect();
         let is_conversation_default_agent = agent_id == self.cluster.default_agent_id();
         let conversation_model_cache = self
             .cluster
@@ -842,27 +827,42 @@ impl AgentGateway {
             };
         };
         let before = history.len();
-        match crate::systems::history::compact_history_now(&history, model_uid, &cache).await {
-            Ok(compact) => {
-                if let Some(summary) = compact
-                    .iter()
-                    .rev()
-                    .find(|m| {
-                        m.role == crate::context::roles::SUMMARY
-                            || m.role == crate::context::roles::COMPACT_SUMMARY
-                    })
-                    .cloned()
+        match crate::systems::history::prepare_compaction(
+            &agent_records,
+            model_uid,
+            &cache,
+            crate::systems::history::input_budget(model_uid),
+            usize::MAX,
+        )
+        .await
+        {
+            Ok(Some(prepared)) => {
+                match crate::systems::history::commit_compaction(
+                    prepared,
+                    self.conversation_id.clone(),
+                    agent_id.to_string(),
+                    agent.name.clone(),
+                    &self.ledger.create_context(),
+                )
+                .await
                 {
-                    self.record_message(agent_id.to_string(), agent.name.clone(), summary, None)
-                        .await;
-                }
-                CompactAgentOutcome::Done {
-                    before,
-                    after: compact.len(),
+                    Ok(_) => {
+                        let records = self.read_records().await;
+                        CompactAgentOutcome::Done {
+                            before,
+                            after: ledger::agent_context(&records, agent_id).len(),
+                        }
+                    }
+                    Err(error) => CompactAgentOutcome::Failed {
+                        error: error.to_string(),
+                    },
                 }
             }
-            Err(e) => CompactAgentOutcome::Failed {
-                error: e.to_string(),
+            Ok(None) => CompactAgentOutcome::Skipped {
+                reason: "no_safe_compaction_range",
+            },
+            Err(error) => CompactAgentOutcome::Failed {
+                error: error.to_string(),
             },
         }
     }

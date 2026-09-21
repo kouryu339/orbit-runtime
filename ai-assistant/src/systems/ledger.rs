@@ -174,7 +174,10 @@ impl SystemOperation for AppendLedgerMessageSystem {
                     created_at: chrono::Local::now().to_rfc3339(),
                 }
             };
-        let record = conversation_state(ctx)?.append(record).await?;
+        let (record, appended) = conversation_state(ctx)?.append_once(record).await?;
+        if !appended {
+            return Ok(record);
+        }
         ctx.world_event_bus
             .publish(BaseEvent::new(
                 crate::events::types::LEDGER_RECORD_APPENDED,
@@ -529,6 +532,64 @@ mod tests {
         )))
         .unwrap();
         unit
+    }
+
+    #[tokio::test]
+    async fn checkpoint_is_restored_through_execution_snapshot_query() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let unit = test_unit("checkpoint-query");
+        let ctx = unit.create_context();
+        let mut records = Vec::new();
+        for id in 1..=30 {
+            records.push(LedgerRecord::from_message(
+                id,
+                "checkpoint-query",
+                "agent",
+                "Agent",
+                Message::user(format!("request {id}")),
+                None,
+            ));
+        }
+        write_ledger(&ctx, &records).await.unwrap();
+        let mut metadata = LedgerMessageMeta::default();
+        metadata.extra.insert(
+            ledger::COMPACTION_CHECKPOINT_KEY.into(),
+            serde_json::json!(ledger::CompactionCheckpoint {
+                version: 1,
+                source_record_ids: (1..=30).collect(),
+                covered_record_ids: (5..=10).collect(),
+                model_uid: 1,
+            }),
+        );
+        crate::systems::history::commit_compaction(
+            crate::systems::history::PreparedCompaction {
+                content: "handoff".into(),
+                metadata,
+            },
+            "checkpoint-query".into(),
+            "agent".into(),
+            "Agent".into(),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let snapshot = QueryAgentLlmExecutionSnapshotSystem
+            .execute(
+                QueryAgentContextInput {
+                    conversation_id: "checkpoint-query".into(),
+                    agent_id: "agent".into(),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(snapshot.has_summary);
+        assert_eq!(snapshot.messages.len(), 25);
+        assert_eq!(snapshot.messages[0].content, "request 1");
+        assert!(snapshot.messages[4].content.contains("handoff"));
+        assert_eq!(snapshot.messages[5].content, "request 11");
+        assert_eq!(snapshot.messages.last().unwrap().content, "request 30");
+        assert_eq!(read_ledger(&ctx).await.unwrap().len(), 31);
     }
 
     #[tokio::test]

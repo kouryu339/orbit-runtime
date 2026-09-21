@@ -158,7 +158,7 @@ pub mod types {
     /// 前端可据此立即更新按钮状态、记录审计轨迹。
     pub const GATEWAY_COMMAND_ADMITTED: &str = "gateway:command-admitted";
 
-    /// `compact_history` 命令对某个 agent 因末尾 20 条已含 summary 而幂等跳过时发布。
+    /// `compact_history` 命令对某个 agent 因无可安全压缩区间而跳过时发布。
     pub const GATEWAY_COMPACT_SKIPPED: &str = "gateway:compact-skipped";
 
     pub const GATEWAY_COMPACT_DONE: &str = "gateway:compact-done";

@@ -11,7 +11,6 @@ use crate::skills::systems::mgr;
 use crate::systems::prompt::{
     build_env_context_section, build_system_prompt_text_for_protocol,
     format_immutable_cache_entries_section, format_tools_section, format_workflows_section,
-    select_history,
 };
 use corework::cache::{Cache, CacheExt};
 use corework::event::{BaseEvent, EventBus};
@@ -613,50 +612,6 @@ pub fn build() -> FnState {
         )
 }
 
-async fn publish_new_summary_records(
-    history: &[crate::context::Message],
-    compact: &[crate::context::Message],
-    cache: &Arc<dyn Cache>,
-    event_bus: &Arc<dyn EventBus>,
-) -> corework::error::Result<()> {
-    let existing_summaries = history
-        .iter()
-        .filter(|message| {
-            message.role == crate::context::roles::SUMMARY
-                || message.role == crate::context::roles::COMPACT_SUMMARY
-        })
-        .map(|message| message.content.as_str())
-        .collect::<std::collections::HashSet<_>>();
-
-    for summary in compact.iter().filter(|message| {
-        message.role == crate::context::roles::SUMMARY
-            || message.role == crate::context::roles::COMPACT_SUMMARY
-    }) {
-        if existing_summaries.contains(summary.content.as_str()) {
-            continue;
-        }
-
-        let (agent_id, agent_name) = crate::agent::source_meta_from_cache(&**cache).await;
-        event_bus
-            .publish(BaseEvent::new(
-                crate::events::types::AGENT_MESSAGE_PRODUCED,
-                serde_json::to_value(crate::events::AgentMessageProducedPayload {
-                    conversation_id: crate::ledger::DEFAULT_CONVERSATION_ID.to_string(),
-                    agent_id,
-                    agent_name,
-                    role: crate::ledger::LedgerRole::Summary,
-                    content: summary.content.clone(),
-                    metadata: crate::ledger::LedgerMessageMeta::default(),
-                    display: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                })?,
-            ))
-            .await?;
-    }
-    Ok(())
-}
-
 // ============================================================================
 // ============================================================================
 
@@ -984,19 +939,94 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     }
 
     let ctx = sm_ctx.create_context();
-    let history = crate::systems::ledger::QueryAgentLlmExecutionSnapshotSystem
+    let records = crate::systems::ledger::QueryLedgerSystem
         .execute(
-            crate::systems::ledger::QueryAgentContextInput {
+            crate::systems::ledger::QueryLedgerInput {
                 conversation_id: conversation_id.clone(),
-                agent_id: agent_id.clone(),
             },
             &ctx,
         )
-        .await
-        .map(|snapshot| snapshot.messages)
-        .map_err(|e| corework::error::FrameworkError::SystemError(e.to_string()))?;
+        .await?;
+    let projected_records = crate::ledger::agent_context_records(&records, &agent_id);
+    let history: Vec<_> = projected_records
+        .iter()
+        .filter_map(|r| r.to_context_message())
+        .collect();
+    let max_msgs: usize = cache
+        .get(keys::MAX_HISTORY_MESSAGES)
+        .await?
+        .unwrap_or(DEFAULT_MAX_HISTORY_MESSAGES);
+    let retrieval_query = projected_records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.role == crate::ledger::LedgerRole::User && !record.content.trim().is_empty()
+        })
+        .map(|record| record.content.clone());
+    let mut dynamic_context = Vec::new();
+    if !combined_structures_section.is_empty() {
+        dynamic_context.push(combined_structures_section.clone());
+    }
+    if recorder_active {
+        let chain = cache
+            .get::<String>(keys::RECORDER_CHAIN)
+            .await?
+            .unwrap_or_default();
+        dynamic_context.push(render_recording_chain_section(&chain));
+    }
+    if let Some(plan) = AssistantContext::get_current_plan(&cache).await? {
+        if plan.is_active() {
+            dynamic_context.push(render_current_plan_section(
+                &plan.title,
+                if plan.summary.is_empty() {
+                    "(none)"
+                } else {
+                    &plan.summary
+                },
+                &plan.status,
+                &plan.updated_at,
+                &plan.prompt_content(),
+            ));
+        }
+    }
+    if let Some(user_msg) = retrieval_query.as_ref() {
+        let retrieval_config: crate::RetrievalConfig =
+            cache.get(keys::RETRIEVAL_CONFIG).await?.unwrap_or_default();
+        if retrieval_config.before_thinking_enabled() {
+            if let Some(retrieval_context) = crate::retrieval::retrieve_before_thinking(
+                &ctx,
+                &cache,
+                &retrieval_config,
+                user_msg,
+                turn_id,
+            )
+            .await?
+            {
+                dynamic_context.push(retrieval_context);
+            }
+        }
+    }
+    dynamic_context.push(build_env_context_section());
+    dynamic_context.push(crate::prompt_assets::render(
+        "runtime_context.md",
+        &[("{{OS}}", std::env::consts::OS)],
+    ));
 
-    let compact = if crate::systems::history::needs_compaction(&history, model_uid) {
+    let dynamic_context_message = (!dynamic_context.is_empty()).then(|| {
+        llm_gateway::ChatMessage::user(render_dynamic_context_message(
+            &dynamic_context.join("\n\n---\n\n"),
+        ))
+    });
+    let history_budget = crate::systems::history::input_budget(model_uid)
+        .saturating_sub(crate::systems::history::estimate_tokens(&system_text))
+        .saturating_sub(crate::systems::history::estimate_tokens(
+            &native_tool_definitions,
+        ))
+        .saturating_sub(crate::systems::history::estimate_tokens(
+            &dynamic_context_message,
+        ))
+        .saturating_sub(128);
+    if crate::systems::history::needs_compaction(&history, history_budget, max_msgs) {
         cache.set(keys::COMPACT_IN_PROGRESS, &true, None).await?;
         sm_ctx
             .event_bus()
@@ -1012,10 +1042,12 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
             .as_ref()
             .map(|lease| lease.token())
             .unwrap_or_else(take_cancel_token);
-        let compact_result = tokio::select! {
+        let result = tokio::select! {
             biased;
-            _ = compact_cancel.cancelled() => Ok(history.clone()),
-            result = crate::systems::history::compress_for_llm_call(&history, model_uid, &cache) => result,
+            _ = compact_cancel.cancelled() => Ok(None),
+            result = crate::systems::history::prepare_compaction(
+                &projected_records, model_uid, &cache, history_budget, max_msgs,
+            ) => result,
         };
         cache.set(keys::COMPACT_IN_PROGRESS, &false, None).await?;
         sm_ctx
@@ -1025,33 +1057,42 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 serde_json::json!({}),
             ))
             .await?;
-        compact_result?
-    } else {
-        history.clone()
-    };
+        if super::consume_pause_with_results(&cache, &sm_ctx.event_bus()).await? {
+            cache
+                .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
+                .await?;
+            return Ok(());
+        }
+        if let Some(prepared) = result? {
+            let (_, agent_name) = crate::agent::source_meta_from_cache(&*cache).await;
+            crate::systems::history::commit_compaction(
+                prepared,
+                conversation_id.clone(),
+                agent_id.clone(),
+                agent_name,
+                &ctx,
+            )
+            .await?;
+        }
+    }
     if super::consume_pause_with_results(&cache, &sm_ctx.event_bus()).await? {
         cache
             .set(keys::NEXT_STATE, &states::SUSPENDED.to_string(), None)
             .await?;
         return Ok(());
     }
-    publish_new_summary_records(&history, &compact, &cache, &sm_ctx.event_bus()).await?;
-
-    let max_msgs: usize = cache
-        .get(keys::MAX_HISTORY_MESSAGES)
+    // Re-read canonical state so arrivals during summarization remain visible.
+    let selected = crate::systems::ledger::QueryAgentLlmExecutionSnapshotSystem
+        .execute(
+            crate::systems::ledger::QueryAgentContextInput {
+                conversation_id: conversation_id.clone(),
+                agent_id: agent_id.clone(),
+            },
+            &ctx,
+        )
         .await?
-        .unwrap_or(DEFAULT_MAX_HISTORY_MESSAGES);
-    let (selected_slice, _truncated) = select_history(&compact, max_msgs);
-    let selected = selected_slice.to_vec();
-    log_thinking_context_probe(&history, &compact, &selected, &agent_id, turn_id, round);
-
-    tracing::debug!(
-        "message selection: history={}, selected={}, truncated={}, limit={}",
-        history.len(),
-        selected.len(),
-        _truncated,
-        max_msgs
-    );
+        .messages;
+    log_thinking_context_probe(&history, &selected, &selected, &agent_id, turn_id, round);
 
     let legacy_system_context = selected
         .iter()
@@ -1066,12 +1107,6 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
     let mut messages: Vec<llm_gateway::ChatMessage> = Vec::with_capacity(5 + selected.len());
     messages.push(leading_system_message(system_text, prompt_cache_control));
-
-    let retrieval_query = selected
-        .iter()
-        .rev()
-        .find(|msg| msg.role == "user" && !msg.content.trim().is_empty())
-        .map(|msg| msg.content.clone());
 
     let complete_native_fc_messages = if tool_protocol == crate::ToolProtocol::NativeFc {
         complete_native_fc_message_indexes(&selected)
@@ -1211,59 +1246,15 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
 
     mark_conversation_history_cache_boundary(&mut messages, prompt_cache_control);
 
-    let mut dynamic_context = Vec::new();
-    if !combined_structures_section.is_empty() {
-        dynamic_context.push(combined_structures_section.clone());
+    if let Some(dynamic) = dynamic_context_message {
+        messages.push(dynamic);
     }
-    if recorder_active {
-        let chain = cache
-            .get::<String>(keys::RECORDER_CHAIN)
-            .await?
-            .unwrap_or_default();
-        dynamic_context.push(render_recording_chain_section(&chain));
-    }
-    if let Some(plan) = AssistantContext::get_current_plan(&cache).await? {
-        if plan.is_active() {
-            dynamic_context.push(render_current_plan_section(
-                &plan.title,
-                if plan.summary.is_empty() {
-                    "(none)"
-                } else {
-                    &plan.summary
-                },
-                &plan.status,
-                &plan.updated_at,
-                &plan.prompt_content(),
-            ));
-        }
-    }
-    if let Some(user_msg) = retrieval_query.as_ref() {
-        let retrieval_config: crate::RetrievalConfig =
-            cache.get(keys::RETRIEVAL_CONFIG).await?.unwrap_or_default();
-        if retrieval_config.before_thinking_enabled() {
-            if let Some(retrieval_context) = crate::retrieval::retrieve_before_thinking(
-                &ctx,
-                &cache,
-                &retrieval_config,
-                user_msg,
-                turn_id,
-            )
-            .await?
-            {
-                dynamic_context.push(retrieval_context);
-            }
-        }
-    }
-    dynamic_context.push(build_env_context_section());
-    dynamic_context.push(crate::prompt_assets::render(
-        "runtime_context.md",
-        &[("{{OS}}", std::env::consts::OS)],
-    ));
-
-    if !dynamic_context.is_empty() {
-        let content = dynamic_context.join("\n\n---\n\n");
-        messages.push(llm_gateway::ChatMessage::user(
-            render_dynamic_context_message(&content),
+    if crate::systems::history::estimate_tokens(&messages).saturating_add(
+        crate::systems::history::estimate_tokens(&native_tool_definitions),
+    ) > crate::systems::history::input_budget(model_uid)
+    {
+        return Err(corework::error::FrameworkError::SystemError(
+            "LLM context exceeds budget after compaction; original ledger retained".into(),
         ));
     }
     log_llm_messages_probe(&messages, &agent_id, turn_id, round);

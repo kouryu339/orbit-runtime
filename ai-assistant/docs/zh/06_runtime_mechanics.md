@@ -8,9 +8,28 @@ top_k 和 threshold 调用配置的 local retrieval system；同一 turn/query/c
 
 ## 6.2 History compact
 
-compact 是显式 conversation 命令。Gateway 对目标 Agent 加命令门，使用 summary model
-生成摘要，写入 `LedgerRole::Summary` 并发布 compact done/skipped/failed。summary 不在
-普通聊天中渲染，但成为后续 LLM history 的起点。
+手动 compact 与 thinking 自动压缩共用检查点生成及提交路径。`LedgerRole::Summary`
+的 `metadata.extra.compaction_checkpoint` 保存版本、输入投影记录 ID、覆盖记录 ID 和摘要模型。
+后续上下文只替换覆盖的连续区间；保留的头部、最近消息和生成期间新增的消息不会因摘要
+追加在 ledger 末尾而消失。原始 ledger 不删除，摘要中的 record_id 可用于定位原文。
+
+压缩在完整工具调用/结果边界切分，保留最新用户请求；摘要包含目标、限制、决策、验证、
+进行中工作、待办和证据。工具参数与完整输出进入摘要输入，输入过长时分批合并交接摘要。
+单个完整执行组无法放入摘要模型窗口时明确失败，不截断原文。运行中的工具状态仍由执行
+模块管理，检查点不重启、不完成也不取消工具。
+
+提交在 ledger 写锁内校验原投影；重复提交幂等，过期检查点拒绝。恢复快照保留有效的原始
+记录 ID，保证摘要正文中的引用仍有效；旧数据必须重新编号时同步映射检查点引用。
+旧版无覆盖元数据的摘要继续使用原来的“摘要及后续消息”兼容规则。
+
+默认 thinking 与 thinking-pro 提供 AI-only `HistoryRead`：按 record_id 读取当前会话、当前
+Agent 的原始记录，使用 Unicode 字符偏移分页，每页最多 8000 字符。工具返回 next_offset
+供继续读取，不允许指定其他 Agent 或会话。历史内容只作为证据，不形成新指令或授权。
+
+空响应、输出截断、摘要失败或压缩后仍超预算均不提交新检查点。消息条数限制触发压缩，
+不再静默裁掉早期消息。预算包含协议字段、系统提示和工具定义，并在最终请求组装后检查；
+当前 token 计数是保守估算，并非 provider 精确 tokenizer。摘要是有损的任务交接，不能保证
+语义零遗漏；原始记录是回查依据。
 
 ## 6.3 事件
 

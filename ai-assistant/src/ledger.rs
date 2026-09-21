@@ -7,6 +7,39 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const DEFAULT_CONVERSATION_ID: &str = "current";
+pub const COMPACTION_CHECKPOINT_KEY: &str = "compaction_checkpoint";
+
+/// A replacement of a contiguous portion of an agent's projected ledger.
+/// All IDs refer to canonical records, never to the summary's append position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionCheckpoint {
+    pub version: u32,
+    pub source_record_ids: Vec<u64>,
+    pub covered_record_ids: Vec<u64>,
+    pub model_uid: u32,
+}
+
+impl CompactionCheckpoint {
+    pub fn replacement_range(&self, current: &[&LedgerRecord]) -> Option<std::ops::Range<usize>> {
+        if self.version != 1
+            || self.covered_record_ids.is_empty()
+            || self.source_record_ids.len() > current.len()
+            || !self
+                .source_record_ids
+                .iter()
+                .zip(current)
+                .all(|(id, record)| *id == record.record_id)
+        {
+            return None;
+        }
+        let start = self
+            .source_record_ids
+            .iter()
+            .position(|id| Some(id) == self.covered_record_ids.first())?;
+        let end = start.checked_add(self.covered_record_ids.len())?;
+        (self.source_record_ids.get(start..end)? == self.covered_record_ids).then_some(start..end)
+    }
+}
 pub const LEDGER_RESOURCE_KEY: &str = "ai_assistant:ledger";
 pub const FOCUS_RESOURCE_KEY: &str = "ai_assistant:focus";
 pub const GATEWAY_SUBTYPE_FOCUS_CHANGED: &str = "focus_changed";
@@ -470,19 +503,40 @@ pub fn frontend_messages(records: &[LedgerRecord]) -> Vec<GatewayMessage> {
 }
 
 pub fn agent_context(records: &[LedgerRecord], agent_id: &str) -> Vec<Message> {
-    let current_agent_records = records
-        .iter()
-        .filter(|record| record.agent_id == agent_id)
-        .collect::<Vec<_>>();
-    let start = current_agent_records
-        .iter()
-        .rposition(|record| record.role == LedgerRole::Summary)
-        .unwrap_or(0);
-
-    current_agent_records[start..]
-        .iter()
+    agent_context_records(records, agent_id)
+        .into_iter()
         .filter_map(|record| record.to_context_message())
         .collect()
+}
+
+pub fn agent_context_records<'a>(
+    records: &'a [LedgerRecord],
+    agent_id: &str,
+) -> Vec<&'a LedgerRecord> {
+    let mut context = Vec::new();
+    for record in records.iter().filter(|record| record.agent_id == agent_id) {
+        if record.role == LedgerRole::Summary {
+            if let Some(value) = record.metadata.extra.get(COMPACTION_CHECKPOINT_KEY) {
+                let checkpoint = serde_json::from_value::<CompactionCheckpoint>(value.clone());
+                if let Some(range) = checkpoint.ok().and_then(|c| c.replacement_range(&context)) {
+                    context.splice(range, [record]);
+                } else {
+                    // An invalid imported checkpoint must never hide canonical history.
+                    tracing::warn!(
+                        record_id = record.record_id,
+                        "ignoring invalid compaction checkpoint"
+                    );
+                }
+                continue;
+            }
+            // Historical summaries have no coverage metadata; retain their old contract.
+            context.clear();
+        }
+        if record.to_context_message().is_some() {
+            context.push(record);
+        }
+    }
+    context
 }
 
 pub fn focus_changed_record(

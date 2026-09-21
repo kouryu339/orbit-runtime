@@ -737,16 +737,54 @@ impl ConversationState {
         tasks
     }
 
-    pub async fn append(&self, mut record: LedgerRecord) -> Result<LedgerRecord, FrameworkError> {
+    pub async fn append(&self, record: LedgerRecord) -> Result<LedgerRecord, FrameworkError> {
+        self.append_once(record).await.map(|(record, _)| record)
+    }
+
+    pub(crate) async fn append_once(
+        &self,
+        mut record: LedgerRecord,
+    ) -> Result<(LedgerRecord, bool), FrameworkError> {
         let _guard = self.append_lock.lock().await;
         let mut ledger = self.ledger.write().await;
+        if let Some(value) = record
+            .metadata
+            .extra
+            .get(crate::ledger::COMPACTION_CHECKPOINT_KEY)
+        {
+            let checkpoint: crate::ledger::CompactionCheckpoint =
+                serde_json::from_value(value.clone())?;
+            if record.role != LedgerRole::Summary || record.content.trim().is_empty() {
+                return Err(FrameworkError::InvalidOperation(
+                    "invalid compaction summary".into(),
+                ));
+            }
+            if let Some(existing) = ledger.iter().find(|existing| {
+                existing.agent_id == record.agent_id
+                    && existing
+                        .metadata
+                        .extra
+                        .get(crate::ledger::COMPACTION_CHECKPOINT_KEY)
+                        == Some(value)
+            }) {
+                return Ok((existing.clone(), false));
+            }
+            let current = crate::ledger::agent_context_records(&ledger, &record.agent_id);
+            if checkpoint.replacement_range(&current).is_none() {
+                return Err(FrameworkError::InvalidOperation(
+                    "stale or invalid compaction checkpoint".into(),
+                ));
+            }
+        }
         record.conversation_id = self.conversation_id.clone();
         record.record_id = ledger
             .last()
-            .map(|record| record.record_id + 1)
-            .unwrap_or(1);
+            .map(|record| record.record_id)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| FrameworkError::InvalidOperation("ledger record ID exhausted".into()))?;
         ledger.push(record.clone());
-        Ok(record)
+        Ok((record, true))
     }
 
     pub async fn list_recent(&self, opts: LedgerReadOptions) -> Vec<LedgerRecord> {
@@ -768,12 +806,57 @@ impl ConversationState {
         records
     }
 
+    pub(crate) async fn agent_record(
+        &self,
+        agent_id: &str,
+        record_id: u64,
+    ) -> Option<LedgerRecord> {
+        self.ledger
+            .read()
+            .await
+            .iter()
+            .find(|record| record.agent_id == agent_id && record.record_id == record_id)
+            .cloned()
+    }
+
     pub async fn replace(&self, mut records: Vec<LedgerRecord>) {
         let _guard = self.append_lock.lock().await;
         records.sort_by_key(|record| record.record_id);
+        // Valid canonical IDs are durable evidence references (including IDs
+        // quoted in summary prose). Do not renumber them on snapshot restore.
+        let renumber = records.first().is_some_and(|record| record.record_id == 0)
+            || records
+                .windows(2)
+                .any(|pair| pair[0].record_id == pair[1].record_id);
+        let ids: HashMap<u64, u64> = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (record.record_id, index as u64 + 1))
+            .collect();
         for (index, record) in records.iter_mut().enumerate() {
+            if let Some(value) = record
+                .metadata
+                .extra
+                .get_mut(crate::ledger::COMPACTION_CHECKPOINT_KEY)
+                .filter(|_| renumber)
+            {
+                if let Ok(mut checkpoint) =
+                    serde_json::from_value::<crate::ledger::CompactionCheckpoint>(value.clone())
+                {
+                    for id in checkpoint
+                        .source_record_ids
+                        .iter_mut()
+                        .chain(checkpoint.covered_record_ids.iter_mut())
+                    {
+                        *id = ids.get(id).copied().unwrap_or(0);
+                    }
+                    *value = serde_json::json!(checkpoint);
+                }
+            }
             record.conversation_id = self.conversation_id.clone();
-            record.record_id = index as u64 + 1;
+            if renumber {
+                record.record_id = index as u64 + 1;
+            }
         }
         *self.ledger.write().await = records;
     }
