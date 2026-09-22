@@ -1000,15 +1000,16 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
             &dynamic_context.join("\n\n---\n\n"),
         ))
     });
-    let history_budget = crate::systems::history::input_budget(model_uid)
-        .saturating_sub(crate::systems::history::estimate_tokens(&system_text))
-        .saturating_sub(crate::systems::history::estimate_tokens(
+    let model_input_budget = crate::systems::history::input_budget(model_uid);
+    let fixed_context_tokens = crate::systems::history::estimate_tokens(&system_text)
+        .saturating_add(crate::systems::history::estimate_tokens(
             &native_tool_definitions,
         ))
-        .saturating_sub(crate::systems::history::estimate_tokens(
+        .saturating_add(crate::systems::history::estimate_tokens(
             &dynamic_context_message,
         ))
-        .saturating_sub(128);
+        .saturating_add(128);
+    let history_budget = model_input_budget.saturating_sub(fixed_context_tokens);
     if crate::systems::history::needs_compaction(&history, history_budget, max_msgs) {
         cache.set(keys::COMPACT_IN_PROGRESS, &true, None).await?;
         sm_ctx
@@ -1232,13 +1233,27 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     if let Some(dynamic) = dynamic_context_message {
         messages.push(dynamic);
     }
-    if crate::systems::history::estimate_tokens(&messages).saturating_add(
-        crate::systems::history::estimate_tokens(&native_tool_definitions),
-    ) > crate::systems::history::input_budget(model_uid)
-    {
-        return Err(corework::error::FrameworkError::SystemError(
-            "LLM context exceeds budget after compaction; original ledger retained".into(),
+    let projected_input_tokens = crate::systems::history::estimate_tokens(&messages)
+        .saturating_add(crate::systems::history::estimate_tokens(
+            &native_tool_definitions,
         ));
+    if projected_input_tokens > model_input_budget {
+        let context_window = crate::systems::history::context_window(model_uid);
+        let reason = if fixed_context_tokens >= model_input_budget {
+            format!(
+                "LLM fixed system/tool context exceeds the model input budget; \
+                 model_context_window={context_window}, input_budget={model_input_budget}, \
+                 fixed_context_estimate={fixed_context_tokens}. History compaction cannot help."
+            )
+        } else {
+            format!(
+                "LLM input exceeds the model context budget and no safe completed history range \
+                 can reduce it; model_context_window={context_window}, \
+                 input_budget={model_input_budget}, input_estimate={projected_input_tokens}. \
+                 Original ledger retained."
+            )
+        };
+        return Err(corework::error::FrameworkError::SystemError(reason));
     }
     log_llm_messages_probe(&messages, &agent_id, turn_id, round);
 

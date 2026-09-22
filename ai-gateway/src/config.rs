@@ -302,17 +302,7 @@ pub fn build_index_and_resolver(config: LlmConfig) {
         .iter()
         .flat_map(|p| {
             p.enabled_models.iter().map(move |em| {
-                // 从 builtin 查模型的 context_window 上限
-                let builtin_cw = find_model(&em.model_id)
-                    .and_then(|m| m.context_window)
-                    .unwrap_or(8192);
-
-                // 取用户自定义值与 builtin 上限的较小值
-                let effective_cw = match em.max_context_tokens {
-                    Some(user_cw) => user_cw.min(builtin_cw),
-                    // 未配置：取 builtin 的 75%，最低 4096
-                    None => ((builtin_cw as f64 * 0.75) as u32).max(4096),
-                };
+                let effective_cw = effective_context_window(em);
 
                 (
                     em.uid,
@@ -346,6 +336,22 @@ pub fn build_index_and_resolver(config: LlmConfig) {
                 strict_tool_schema: p.strict_tool_schema,
             })
     });
+}
+
+/// Resolve the actual context window used for budgeting.
+///
+/// A builtin model definition is an authoritative upper bound. A custom or
+/// newly released model may not exist in the embedded catalog yet; in that
+/// case an explicit host value is authoritative and must not be clamped to an
+/// unrelated fallback window.
+pub fn effective_context_window(model: &EnabledModel) -> u32 {
+    let builtin = find_model(&model.model_id).and_then(|item| item.context_window);
+    match (model.max_context_tokens, builtin) {
+        (Some(configured), Some(limit)) => configured.min(limit),
+        (Some(configured), None) => configured,
+        (None, Some(limit)) => ((limit as f64 * 0.75) as u32).max(4096),
+        (None, None) => 60_000,
+    }
 }
 
 /// app 启动时调用：加载配置并建立内存索引
@@ -406,4 +412,32 @@ pub fn models_by_provider(provider_id: &str) -> Vec<&'static ModelDefinition> {
         .iter()
         .filter(|m| m.provider_prefix == provider.prefix)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_context_window_is_authoritative_for_unknown_models() {
+        let model = EnabledModel {
+            uid: 1,
+            model_id: "deepseek-flash".to_string(),
+            max_context_tokens: Some(128_000),
+        };
+
+        assert!(find_model(&model.model_id).is_none());
+        assert_eq!(effective_context_window(&model), 128_000);
+    }
+
+    #[test]
+    fn builtin_context_window_remains_an_upper_bound() {
+        let model = EnabledModel {
+            uid: 1,
+            model_id: "deepseek-v4-flash".to_string(),
+            max_context_tokens: Some(2_000_000),
+        };
+
+        assert_eq!(effective_context_window(&model), 1_000_000);
+    }
 }

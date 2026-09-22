@@ -5505,6 +5505,40 @@ fn provider_config_v1_accepts_api_paradigm() {
 }
 
 #[test]
+fn provider_definitions_report_the_effective_configured_context_window() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("provider-context-window");
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+    facade
+        .configure_providers(
+            &json!({
+                "schema": "agent-runtime-provider-config/v1",
+                "providers": [{
+                    "id": 1,
+                    "name": "DeepSeek Compatible",
+                    "type": "deepseek",
+                    "api_key": "sk-test",
+                    "base_url": "https://example.invalid",
+                    "enabled_models": [{
+                        "uid": 1001,
+                        "model_id": "deepseek-flash",
+                        "max_context_tokens": 128000
+                    }]
+                }],
+                "current_model_uid": 1001
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    assert_eq!(key_store::get(1001).unwrap().context_window, 128_000);
+    let definitions: Value = serde_json::from_str(&facade.provider_definitions().unwrap()).unwrap();
+    assert_eq!(definitions["models"][0]["context_window"], json!(128_000));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn provider_bundle_import_hot_loads_and_model_switch_updates_same_json() {
     let _guard = runtime_start_test_guard();
     let root = unique_test_dir("provider-bundle-hot-load");

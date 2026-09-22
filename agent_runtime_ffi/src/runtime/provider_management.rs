@@ -174,7 +174,9 @@ impl RuntimeFacade {
                     uid: m.uid,
                     provider_uid: p.id,
                     model_name: m.model_id.clone(),
-                    context_window: 0,
+                    context_window: key_store::get(m.uid)
+                        .map(|entry| entry.context_window)
+                        .unwrap_or_else(|| llm_gateway::config::effective_context_window(m)),
                 })
             })
             .collect();

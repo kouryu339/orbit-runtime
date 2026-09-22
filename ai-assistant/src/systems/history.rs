@@ -8,8 +8,8 @@ use corework::error::{FrameworkError, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-const OUTPUT_RESERVE_TOKENS: usize = 4000;
 const DEFAULT_CONTEXT_WINDOW: usize = 8192;
+const AUTO_COMPACTION_PERCENT: usize = 90;
 const HEAD_KEEP: usize = 4;
 const TAIL_KEEP: usize = 20;
 
@@ -27,10 +27,17 @@ pub fn estimate_tokens<T: serde::Serialize + ?Sized>(value: &T) -> usize {
 }
 
 pub fn input_budget(model_uid: u32) -> usize {
+    automatic_input_budget(context_window(model_uid))
+}
+
+pub fn context_window(model_uid: u32) -> usize {
     llm_gateway::key_store::get(model_uid)
         .map(|entry| entry.context_window as usize)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW)
-        .saturating_sub(OUTPUT_RESERVE_TOKENS)
+}
+
+fn automatic_input_budget(context_window: usize) -> usize {
+    context_window.saturating_mul(AUTO_COMPACTION_PERCENT) / 100
 }
 
 pub fn needs_compaction(messages: &[Message], budget: usize, max_messages: usize) -> bool {
@@ -61,11 +68,10 @@ pub async fn prepare_compaction(
         .iter()
         .rposition(|r| r.role == crate::ledger::LedgerRole::User);
     let Some(range) = compact_range(&messages, latest_user, budget) else {
-        if needs_compaction(&messages, budget, max_messages) {
-            return Err(failure(
-                "no safe completed history range fits the context budget",
-            ));
-        }
+        // Automatic compaction cannot help a new conversation, an unfinished
+        // tool group, or a request whose fixed system/tool context already
+        // consumes the model budget. Leave the canonical ledger untouched and
+        // let the caller either proceed or report the actual context overflow.
         return Ok(None);
     };
     let summary_uid = crate::config_resolver::resolve_summary_model_uid(cache, model_uid).await;
@@ -74,15 +80,9 @@ pub async fn prepare_compaction(
     let mut summary = String::new();
     while offset < middle.len() {
         let (count, input) = summary_batch(&middle[offset..], &summary, input_budget(summary_uid))?;
-        let response = llm_gateway::call_llm(
-            summary_uid,
-            &input,
-            None,
-            None,
-            Some(OUTPUT_RESERVE_TOKENS as u32),
-        )
-        .await
-        .map_err(|error| failure(error.to_string()))?;
+        let response = llm_gateway::call_llm(summary_uid, &input, None, None, None)
+            .await
+            .map_err(|error| failure(error.to_string()))?;
         summary = validated_summary(response)?;
         offset += count;
     }
@@ -317,6 +317,12 @@ mod tests {
     use super::*;
     use crate::conversation_state::{ConversationState, LedgerReadOptions};
     use crate::ledger::{agent_context, agent_context_records, LedgerRole};
+
+    #[test]
+    fn automatic_compaction_starts_at_ninety_percent_of_the_model_window() {
+        assert_eq!(automatic_input_budget(128_000), 115_200);
+        assert_eq!(automatic_input_budget(8192), 7372);
+    }
 
     fn records() -> Vec<LedgerRecord> {
         (1..=80)
@@ -581,5 +587,25 @@ mod tests {
             compact_range(&messages, Some(0), usize::MAX).unwrap().end,
             55
         );
+    }
+
+    #[tokio::test]
+    async fn new_conversation_with_no_compactable_range_is_not_a_compaction_failure() {
+        let source = vec![LedgerRecord::from_message(
+            1,
+            "test",
+            "agent",
+            "Agent",
+            Message::user("hello"),
+            None,
+        )];
+        let refs = source.iter().collect::<Vec<_>>();
+        let cache: Arc<dyn Cache> = Arc::new(corework::cache::InMemoryCache::new());
+
+        let result = prepare_compaction(&refs, 1, &cache, 0, usize::MAX)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
     }
 }
