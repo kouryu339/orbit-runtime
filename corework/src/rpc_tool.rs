@@ -80,6 +80,10 @@ pub struct RuntimeToolMetadata {
     pub open_world: bool,
     #[serde(default)]
     pub secret: bool,
+    #[serde(default = "default_true")]
+    pub agent_enabled: bool,
+    #[serde(default = "default_true")]
+    pub jev_enabled: bool,
     #[serde(default = "default_workflow_enabled")]
     pub workflow_enabled: bool,
     #[serde(default)]
@@ -93,6 +97,10 @@ pub struct RuntimeToolMetadata {
 }
 
 fn default_workflow_enabled() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -207,6 +215,12 @@ pub struct AgentToolRequest {
     #[serde(default)]
     pub node_id: String,
     #[serde(default)]
+    pub jev_name: String,
+    #[serde(default)]
+    pub jev_run_id: String,
+    #[serde(default)]
+    pub jev_snapshot_revision: u64,
+    #[serde(default)]
     pub permissions: Vec<String>,
     #[serde(default)]
     pub host_context: Value,
@@ -234,6 +248,9 @@ fn append_rpc_diagnostic(
         "workflow_id": request.workflow_id,
         "workflow_run_id": request.workflow_run_id,
         "node_id": request.node_id,
+        "jev_name": request.jev_name,
+        "jev_run_id": request.jev_run_id,
+        "jev_snapshot_revision": request.jev_snapshot_revision,
         "timeout_ms": endpoint.timeout_ms,
         "to_ai_max_chars": endpoint.to_ai_max_chars,
         "elapsed_ms": started.elapsed().as_millis() as u64,
@@ -602,6 +619,12 @@ pub fn validate_runtime_tool_metadata(tool: &RuntimeToolMetadata) -> Result<()> 
             "Runtime tool name must not be empty".to_string(),
         ));
     }
+    if !tool.agent_enabled && !tool.workflow_enabled && !tool.jev_enabled {
+        return Err(FrameworkError::InvalidData(format!(
+            "Runtime tool '{}' is disabled for Agent, Workflow, and Jev execution",
+            tool.name
+        )));
+    }
 
     validate_unique_named_items(
         &tool.name,
@@ -757,6 +780,8 @@ pub fn runtime_tool_metadata_from_descriptor(
         idempotent: descriptor.idempotent,
         open_world: descriptor.open_world,
         secret: descriptor.secret,
+        agent_enabled: descriptor.agent_enabled.unwrap_or(true),
+        jev_enabled: descriptor.jev_enabled.unwrap_or(true),
         workflow_enabled: descriptor.workflow_enabled.unwrap_or(true),
         required_capabilities: descriptor.required_capabilities,
         endpoint_id: endpoint_id.to_string(),
@@ -934,6 +959,22 @@ impl DynamicExecute for RpcStubSystem {
                 )));
             }
         }
+        let jev_run_id = resolve_rpc_tool_jev_run_id(ctx).await?;
+        if !jev_run_id.is_empty() && !metadata.jev_enabled {
+            return Err(FrameworkError::InvalidOperation(format!(
+                "Runtime tool '{}' is not callable from Jev because jev_enabled=false",
+                self.tool_name
+            )));
+        }
+        if jev_run_id.is_empty()
+            && resolve_rpc_tool_workflow_run_id(ctx).await?.is_empty()
+            && !metadata.agent_enabled
+        {
+            return Err(FrameworkError::InvalidOperation(format!(
+                "Runtime tool '{}' is Jev-only because agent_enabled=false",
+                self.tool_name
+            )));
+        }
         let endpoint = self.endpoints.get(&metadata.endpoint_id).ok_or_else(|| {
             FrameworkError::InvalidOperation(format!(
                 "RPC endpoint '{}' for tool '{}' is not registered",
@@ -959,6 +1000,9 @@ impl DynamicExecute for RpcStubSystem {
         let workflow_id = resolve_rpc_tool_workflow_id(ctx).await?;
         let workflow_run_id = resolve_rpc_tool_workflow_run_id(ctx).await?;
         let node_id = resolve_rpc_tool_node_id(ctx).await?;
+        let jev_name = resolve_rpc_tool_jev_name(ctx).await?;
+        let jev_run_id = resolve_rpc_tool_jev_run_id(ctx).await?;
+        let jev_snapshot_revision = ctx.get::<u64>("jev_snapshot_revision")?.unwrap_or_default();
         let host_context = resolve_rpc_tool_host_context(ctx).await?;
         let request = AgentToolRequest {
             tool_name: self.tool_name.clone(),
@@ -977,6 +1021,9 @@ impl DynamicExecute for RpcStubSystem {
             workflow_id,
             workflow_run_id,
             node_id,
+            jev_name,
+            jev_run_id,
+            jev_snapshot_revision,
             permissions: metadata.required_capabilities.clone(),
             host_context,
         };
@@ -1182,6 +1229,14 @@ async fn resolve_rpc_tool_node_id(ctx: &Context) -> Result<String> {
         ],
     )
     .await
+}
+
+async fn resolve_rpc_tool_jev_name(ctx: &Context) -> Result<String> {
+    resolve_rpc_tool_identity(ctx, "jev_name", &["jev_name"], &[]).await
+}
+
+async fn resolve_rpc_tool_jev_run_id(ctx: &Context) -> Result<String> {
+    resolve_rpc_tool_identity(ctx, "jev_run_id", &["jev_run_id"], &[]).await
 }
 
 #[derive(Default)]
@@ -1598,6 +1653,9 @@ impl RpcToolClient for GrpcRpcToolClient {
                         workflow_id: request.workflow_id.clone(),
                         workflow_run_id: request.workflow_run_id.clone(),
                         node_id: request.node_id.clone(),
+                        jev_name: request.jev_name.clone(),
+                        jev_run_id: request.jev_run_id.clone(),
+                        jev_snapshot_revision: request.jev_snapshot_revision,
                         permissions: request.permissions.clone(),
                         host_context_json: serde_json::to_string(&request.host_context)
                             .map_err(FrameworkError::SerializationError)?,
@@ -1966,6 +2024,8 @@ mod tests {
             idempotent: true,
             open_world: false,
             secret: false,
+            agent_enabled: true,
+            jev_enabled: true,
             workflow_enabled: true,
             required_capabilities: vec![CAPABILITY_WORKSPACE_RESOLVE_PATH.to_string()],
             endpoint_id: "test".to_string(),
@@ -2414,6 +2474,8 @@ mod tests {
                 open_world: false,
                 secret: false,
                 workflow_enabled: None,
+                agent_enabled: None,
+                jev_enabled: None,
                 category: "debug".to_string(),
                 display_name: "Remote Probe".to_string(),
                 required_capabilities: vec![CAPABILITY_WORKSPACE_RESOLVE_PATH.to_string()],
@@ -2476,6 +2538,9 @@ mod tests {
             workflow_id: "workflow-1".to_string(),
             workflow_run_id: "wf-run-1".to_string(),
             node_id: "node-1".to_string(),
+            jev_name: "selector-1".to_string(),
+            jev_run_id: "jev-run-1".to_string(),
+            jev_snapshot_revision: 2,
             permissions: vec![CAPABILITY_WORKSPACE_RESOLVE_PATH.to_string()],
             host_context: serde_json::json!({ "subject": "opaque" }),
         };

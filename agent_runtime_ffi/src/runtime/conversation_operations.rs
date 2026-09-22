@@ -273,6 +273,7 @@ impl RuntimeFacade {
                 self.runtime_tools.clone(),
             ),
         );
+        let jev_manager = self.jev_manager.clone();
         let state_store = Arc::clone(&self.state_store);
         let grep = self
             .registries
@@ -323,6 +324,12 @@ impl RuntimeFacade {
                     .attach_shared_component(&conversation_id, Arc::clone(&workflow_tool_catalog))
                     .await
                     .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                if let Some(jev_manager) = jev_manager {
+                    manager
+                        .attach_shared_component(&conversation_id, jev_manager)
+                        .await
+                        .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                }
 
                 // Search authority is installed before tools can be activated.
                 if let Some(grep) = grep {

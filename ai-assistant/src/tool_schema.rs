@@ -167,6 +167,9 @@ pub fn definitions_for_active_tools(
             .iter()
             .find(|factory| factory.metadata.name == name)
         {
+            if !factory.metadata.agent_enabled {
+                continue;
+            }
             if strict {
                 validate_strict_parameter_compatibility(
                     factory.metadata.name,
@@ -178,18 +181,10 @@ pub fn definitions_for_active_tools(
                         .collect::<Vec<_>>(),
                 )?;
             }
-            let description = tool_description(
+            let description = resident_tool_description(
                 factory.metadata.description,
-                workflow_script_enabled
-                    && (!factory.metadata.workflow_enabled
-                        || NodeRegistry::get(factory.metadata.name).is_none()),
+                !factory.metadata.workflow_enabled,
                 workflow_script_enabled,
-                factory
-                    .metadata
-                    .outputs
-                    .iter()
-                    .map(|output| (output.name, output.field_type, output.description))
-                    .collect(),
             );
             definitions.push(definition(
                 factory.metadata.name,
@@ -205,6 +200,9 @@ pub fn definitions_for_active_tools(
             continue;
         }
         if let Some(metadata) = crate::runtime_tools::get_runtime_tool(name) {
+            if !metadata.agent_enabled {
+                continue;
+            }
             if strict {
                 validate_strict_parameter_compatibility(
                     &metadata.name,
@@ -215,21 +213,10 @@ pub fn definitions_for_active_tools(
                         .collect::<Vec<_>>(),
                 )?;
             }
-            let description = tool_description(
+            let description = resident_tool_description(
                 &metadata.description,
-                workflow_script_enabled && !metadata.workflow_enabled,
+                !metadata.workflow_enabled,
                 workflow_script_enabled,
-                metadata
-                    .outputs
-                    .iter()
-                    .map(|output| {
-                        (
-                            output.name.as_str(),
-                            output.field_type.as_str(),
-                            output.description.as_str(),
-                        )
-                    })
-                    .collect(),
             );
             definitions.push(definition(
                 &metadata.name,
@@ -248,48 +235,186 @@ pub fn definitions_for_active_tools(
     Ok(definitions)
 }
 
-fn tool_description(
+fn resident_tool_description(
     description: &str,
     ai_only: bool,
     workflow_script_enabled: bool,
-    outputs: Vec<(&str, &str, &str)>,
 ) -> String {
-    if !ai_only && (!workflow_script_enabled || outputs.is_empty()) {
-        return description.to_string();
-    }
-
-    let mut sections = vec![description.trim().to_string()];
+    let mut sections = vec![if ai_only {
+        description.trim().to_string()
+    } else {
+        compact_summary(description)
+    }];
     if ai_only {
-        sections.push(
-            crate::prompt_assets::template("tool_ai_only_description.md")
-                .trim()
-                .to_string(),
-        );
-    }
-    if workflow_script_enabled && !outputs.is_empty() {
-        let mut output_contract = crate::prompt_assets::template("tool_output_fields_label.md")
-            .trim()
-            .to_string();
-        for (name, field_type, description) in outputs {
-            let description = if description.trim().is_empty() {
-                crate::prompt_assets::template("tool_output_value_fallback.md")
+        if workflow_script_enabled {
+            sections.push(
+                crate::prompt_assets::template("tool_ai_only_description.md")
                     .trim()
-                    .to_string()
-            } else {
-                description.trim().to_string()
-            };
-            output_contract.push_str(&format!(
-                "\n- `{name}` ({}): {description}",
-                corework::data_type::public_type_name(field_type)
-            ));
+                    .to_string(),
+            );
         }
-        sections.push(output_contract);
     }
     sections
         .into_iter()
         .filter(|section| !section.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+pub(crate) fn compact_summary(description: &str) -> String {
+    let trimmed = description.trim();
+    let first_line = trimmed
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let sentence_end = first_line
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '。' | '！' | '？').then_some(index + ch.len_utf8()))
+        .or_else(|| first_line.find(". ").map(|index| index + 1));
+    let summary = sentence_end
+        .map(|end| &first_line[..end])
+        .unwrap_or(first_line)
+        .trim();
+    const MAX_CHARS: usize = 240;
+    if summary.chars().count() <= MAX_CHARS {
+        summary.to_string()
+    } else {
+        let mut value = summary.chars().take(MAX_CHARS - 1).collect::<String>();
+        value.push('…');
+        value
+    }
+}
+
+pub fn describe_registered_tools(names: &[String]) -> Result<Vec<Value>, String> {
+    let factories = inventory::iter::<AISystemFactory>
+        .into_iter()
+        .collect::<Vec<_>>();
+    names
+        .iter()
+        .map(|name| {
+            if let Some(factory) = factories
+                .iter()
+                .find(|factory| factory.metadata.name == name)
+            {
+                let metadata = &factory.metadata;
+                let mut descriptor = json!({
+                    "name": metadata.name,
+                    "display_name": metadata.display_name,
+                    "description": metadata.description,
+                    "tool_kind": metadata.tool_kind,
+                    "ai_only": !metadata.workflow_enabled,
+                    "availability": {
+                        "agent": metadata.agent_enabled,
+                        "workflow": metadata.workflow_enabled,
+                        "jev": metadata.jev_enabled
+                    },
+                    "parameters": metadata.parameters.iter().map(|parameter| json!({
+                        "name": parameter.name,
+                        "type": parameter.param_type,
+                        "required": parameter.required,
+                        "default": parameter.default_value,
+                        "description": parameter.description
+                    })).collect::<Vec<_>>(),
+                    "outputs": metadata.outputs.iter().map(|output| json!({
+                        "name": output.name,
+                        "type": output.field_type,
+                        "description": output.description
+                    })).collect::<Vec<_>>(),
+                    "behavior": {
+                        "readonly": metadata.readonly,
+                        "destructive": metadata.destructive,
+                        "idempotent": metadata.idempotent,
+                        "open_world": metadata.open_world,
+                        "secret": metadata.secret
+                    }
+                });
+                add_workflow_descriptor(&mut descriptor, metadata.name, metadata.workflow_enabled);
+                add_descriptor_identity(&mut descriptor);
+                return Ok(descriptor);
+            }
+            if let Some(metadata) = crate::runtime_tools::get_runtime_tool(name) {
+                let mut descriptor = json!({
+                    "name": metadata.name,
+                    "display_name": metadata.display_name,
+                    "description": metadata.description,
+                    "tool_kind": metadata.tool_kind,
+                    "ai_only": !metadata.workflow_enabled,
+                    "availability": {
+                        "agent": metadata.agent_enabled,
+                        "workflow": metadata.workflow_enabled,
+                        "jev": metadata.jev_enabled
+                    },
+                    "parameters": metadata.parameters.iter().map(|parameter| json!({
+                        "name": parameter.name,
+                        "type": parameter.param_type,
+                        "required": parameter.required,
+                        "default": parameter.default_value,
+                        "description": parameter.description
+                    })).collect::<Vec<_>>(),
+                    "outputs": metadata.outputs.iter().map(|output| json!({
+                        "name": output.name,
+                        "type": output.field_type,
+                        "description": output.description
+                    })).collect::<Vec<_>>(),
+                    "behavior": {
+                        "readonly": metadata.readonly,
+                        "destructive": metadata.destructive,
+                        "idempotent": metadata.idempotent,
+                        "open_world": metadata.open_world,
+                        "secret": metadata.secret
+                    }
+                });
+                add_workflow_descriptor(&mut descriptor, &metadata.name, metadata.workflow_enabled);
+                add_descriptor_identity(&mut descriptor);
+                return Ok(descriptor);
+            }
+            Err(format!("tool '{name}' has no registered metadata"))
+        })
+        .collect()
+}
+
+fn add_workflow_descriptor(descriptor: &mut Value, name: &str, enabled: bool) {
+    let node = NodeRegistry::get(name);
+    descriptor["workflow"] = if let Some(node) = node {
+        json!({
+            "enabled": enabled,
+            "node_type": node.node_type,
+            "version": node.version,
+            "category": node.category,
+            "display_name": node.display_name,
+            "description": node.description,
+            "pins": node.pins.iter().map(|pin| json!({
+                "name": pin.name,
+                "kind": format!("{:?}", pin.kind),
+                "type": pin.data_type,
+                "description": pin.description,
+                "default": pin.default_value
+            })).collect::<Vec<_>>(),
+            "wildcard_constraints": node.wildcard_constraints.iter().map(|(pin, allowed)| json!({
+                "pin": pin,
+                "allowed": allowed
+            })).collect::<Vec<_>>()
+        })
+    } else {
+        json!({"enabled": enabled, "node_type": Value::Null, "version": "1"})
+    };
+}
+
+fn add_descriptor_identity(descriptor: &mut Value) {
+    let revision = descriptor
+        .pointer("/workflow/version")
+        .and_then(Value::as_str)
+        .unwrap_or("1")
+        .to_string();
+    descriptor["schema_revision"] = Value::String(revision);
+    let canonical = serde_json::to_string(descriptor).unwrap_or_default();
+    let hash = canonical
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+    descriptor["descriptor_hash"] = Value::String(format!("{hash:016x}"));
 }
 
 fn validate_strict_parameter_compatibility(
@@ -454,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn fc_includes_output_contract_only_when_workflow_scripts_are_enabled() {
+    fn fc_keeps_output_contract_out_of_resident_tool_definitions() {
         let names = vec!["executeWorkflowScript".to_string()];
         let regular = definitions_for_active_tools(&names, false, false).unwrap();
         let script_capable = definitions_for_active_tools(&names, false, true).unwrap();
@@ -463,14 +588,73 @@ mod tests {
             .function
             .description
             .contains("`outputs` (Object)"));
-        assert!(script_capable[0]
+        assert!(!script_capable[0]
             .function
             .description
             .contains("`outputs` (Object)"));
-        assert!(script_capable[0]
+        assert!(!script_capable[0]
             .function
             .description
             .contains("`trace` (Array)"));
+    }
+
+    #[test]
+    fn general_tools_compact_only_the_usage_description() {
+        let summary = resident_tool_description(
+            "筛选 Excel 物理行号。这里是只应通过 ToolDescribe 按需读取的长篇适用说明。",
+            false,
+            false,
+        );
+        assert_eq!(summary, "筛选 Excel 物理行号。");
+
+        let definition = definition(
+            "ExcelQuerySessionRows",
+            &summary,
+            vec![ParameterSpec {
+                name: "query".into(),
+                param_type: "String".into(),
+                required: true,
+                default_value: None,
+                description: "必填。SQL WHERE 表达式；不得包含 SELECT。".into(),
+            }],
+            false,
+        );
+        assert_eq!(
+            definition.function.parameters["properties"]["query"]["description"],
+            "必填。SQL WHERE 表达式；不得包含 SELECT。"
+        );
+        assert_eq!(definition.function.parameters["required"], json!(["query"]));
+    }
+
+    #[test]
+    fn tool_describe_keeps_a_typed_required_name_array() {
+        let definitions =
+            definitions_for_active_tools(&["ToolDescribe".to_string()], false, false).unwrap();
+        let parameters = &definitions[0].function.parameters;
+
+        assert_eq!(parameters["properties"]["tool_names"]["type"], "array");
+        assert_eq!(
+            parameters["properties"]["tool_names"]["items"]["type"],
+            "string"
+        );
+        assert_eq!(parameters["required"], json!(["tool_names"]));
+    }
+
+    #[test]
+    fn describe_returns_full_outputs_workflow_contract_and_identity() {
+        let descriptors = describe_registered_tools(&["Wait".to_string()]).unwrap();
+        let descriptor = &descriptors[0];
+
+        assert_eq!(descriptor["name"], "Wait");
+        assert!(descriptor["outputs"]
+            .as_array()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(descriptor["workflow"]["enabled"], true);
+        assert!(descriptor["schema_revision"].as_str().is_some());
+        assert_eq!(
+            descriptor["descriptor_hash"].as_str().map(str::len),
+            Some(16)
+        );
     }
 
     #[test]

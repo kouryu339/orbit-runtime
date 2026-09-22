@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use corework::ai_system::AISystemFactory;
 use corework::cache::CacheExt;
 use corework::event::{BaseEvent, EventBus, EventHandler, InMemoryEventBus};
+use corework::jev::{JevDefinition, JevManager};
 use corework::prelude::{
     CacheBackendConfig as CoreCacheBackendConfig, CacheConfig, FrameworkState,
 };
@@ -48,6 +49,7 @@ mod conversation;
 mod conversation_operations;
 mod coordination;
 mod events;
+mod jev_operations;
 mod llm;
 mod provider_management;
 mod recovery;
@@ -104,6 +106,12 @@ const WORKFLOW_NODE_COMPLETED_EVENT: &str = "workflow.node_completed";
 const WORKFLOW_NODE_FAILED_EVENT: &str = "workflow.node_failed";
 const WORKFLOW_TRACE_EVENT: &str = "workflow.trace_event";
 const WORKFLOW_EXECUTION_COMPLETED_EVENT: &str = "workflow.execution_completed";
+const JEV_EXECUTION_STARTED_EVENT: &str = "jev.execution_started";
+const JEV_DECISION_EVENT: &str = "jev.decision";
+const JEV_TOOL_STARTED_EVENT: &str = "jev.tool_started";
+const JEV_TOOL_COMPLETED_EVENT: &str = "jev.tool_completed";
+const JEV_SNAPSHOT_UPDATED_EVENT: &str = "jev.snapshot_updated";
+const JEV_EXECUTION_COMPLETED_EVENT: &str = "jev.execution_completed";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -234,6 +242,10 @@ pub struct RuntimeFacade {
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
     workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
+    jev_manager: Option<Arc<JevManager>>,
+    jev_definitions: Vec<JevDefinition>,
+    jev_api_key: Option<String>,
+    jev_endpoint: String,
     provider_bundle: Option<ProviderBundle>,
     llm_config: llm_gateway::LlmConfig,
     ai_auth_context_headers: BTreeMap<String, String>,
@@ -297,6 +309,10 @@ impl RuntimeFacade {
             event_sender: Arc::new(Mutex::new(None)),
             event_log: Arc::new(StdMutex::new(VecDeque::new())),
             workflow_runs: Arc::new(StdMutex::new(workflow_runs::WorkflowRunRegistry::default())),
+            jev_manager: None,
+            jev_definitions: Vec::new(),
+            jev_api_key: None,
+            jev_endpoint: "https://api.typesafe.ai/v1/systemone".to_string(),
             provider_bundle: None,
             llm_config,
             ai_auth_context_headers: BTreeMap::new(),
@@ -790,6 +806,7 @@ impl RuntimeFacade {
         );
         self.conversation_manager = Some(manager);
         self.workflow_module = Some(workflow_module);
+        self.install_jev_manager()?;
         self.sidecar_children = sidecar_children;
         self.runtime_tools = runtime_tools;
         self.state_store = state_store;

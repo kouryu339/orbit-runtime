@@ -54,6 +54,7 @@ pub mod event_line;
 pub mod execution_unit; // 执行单元基础设施入口
 pub mod hierarchical_cache;
 pub mod instance;
+pub mod jev;
 pub mod module; // 轻量模块封装：Arc<ExecutionUnit>
 pub mod monitoring;
 pub mod orchestration;
@@ -88,6 +89,11 @@ pub mod prelude {
     pub use crate::event_line::{EventLineAccess, EventLineHandle, EventLinePolicy};
     pub use crate::hierarchical_cache::HierarchicalCache;
     pub use crate::instance::InstanceHandle;
+    pub use crate::jev::{
+        HttpJevClient, JevAction, JevArgumentBinding, JevDefinition, JevExecutionContext,
+        JevManager, JevRunOutcome, JevRunStatus, JevSnapshotUpdate, JevToolExecutor, JevToolResult,
+        RegistryJevToolExecutor,
+    };
     pub use crate::monitoring::{Metrics, NoopTelemetry, Telemetry};
     pub use crate::orchestration::{Context, Orchestrator, OrchestratorBuilder};
     pub use crate::rpc_tool::{

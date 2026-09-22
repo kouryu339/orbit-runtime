@@ -40,8 +40,14 @@ ToolHandler handler = (context, arguments) ->
 - `workflowId`
 - `workflowRunId`
 - `nodeId`
+- `jevName`
+- `jevRunId`
+- `jevSnapshotRevision`
 - `permissions`
 - `hostContextJson`
+
+`ToolDescriptor` exposes Agent, Workflow, and Jev visibility flags. They
+default to true in the convenience constructor.
 
 Dynamic AI context is host-owned and must be published through the Runtime FFI.
 The removed `snapshot.*` helpers are not compatible with this version.

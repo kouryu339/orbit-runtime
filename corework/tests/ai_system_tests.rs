@@ -1,4 +1,48 @@
-use corework::ai_system::{AIOutput, SimpleArgs};
+use corework::ai_system::{AIInput, AIOutput, SimpleArgs};
+use corework::define_operation;
+
+#[define_operation(
+    name = "JevOnlyFixture",
+    category = "Test",
+    jev_only,
+    description = "fixture used to verify Jev-only metadata",
+    params { value: "test value" },
+    destructive = false,
+    readonly = true,
+    idempotent = true,
+    open_world = false
+)]
+struct JevOnlyFixture;
+
+#[async_trait::async_trait]
+impl corework::system::SystemOperation for JevOnlyFixture {
+    type Input = AIInput;
+    type Output = AIOutput;
+    type Error = corework::error::FrameworkError;
+
+    async fn execute(
+        &self,
+        _input: AIInput,
+        _ctx: &corework::orchestration::Context,
+    ) -> Result<AIOutput, Self::Error> {
+        Ok(AIOutput::success(serde_json::Value::Null, "ok"))
+    }
+
+    fn name(&self) -> &str {
+        "JevOnlyFixture"
+    }
+}
+
+#[test]
+fn jev_only_operation_is_hidden_from_agent_and_workflow() {
+    let factory = inventory::iter::<corework::ai_system::AISystemFactory>()
+        .find(|factory| factory.metadata.name == "JevOnlyFixture")
+        .expect("JevOnlyFixture metadata");
+    let metadata = &factory.metadata;
+    assert!(!metadata.agent_enabled);
+    assert!(!metadata.workflow_enabled);
+    assert!(metadata.jev_enabled);
+}
 
 #[test]
 fn test_simple_args_dash_format() {

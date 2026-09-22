@@ -9,9 +9,11 @@ pub mod agent_wake;
 pub mod grep;
 pub mod history;
 pub mod history_read;
+pub mod jev;
 pub mod ledger;
 pub mod plan_file;
 pub mod prompt;
+pub mod tool_describe;
 pub mod workflow;
 pub mod workflow_studio;
 

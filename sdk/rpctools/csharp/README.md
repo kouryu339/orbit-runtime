@@ -15,4 +15,6 @@ compatible. The SDK generates server bindings from
 `ToolContext` also exposes runtime execute metadata: `CallId`, `ToolCallId`,
 `IdempotencyKey`, `SessionId`, `ProviderId`, `ClusterId`, `RuntimeInstanceId`,
 `ConversationId`, `AgentId`, `TurnId`, `WorkflowId`, `WorkflowRunId`, `NodeId`,
-`Permissions`, and `HostContextJson`.
+`JevName`, `JevRunId`, `JevSnapshotRevision`, `Permissions`, and
+`HostContextJson`. `ToolDescriptor` exposes `AgentEnabled`, `WorkflowEnabled`,
+and `JevEnabled`; all three default to true.

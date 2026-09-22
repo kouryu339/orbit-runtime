@@ -76,6 +76,9 @@ class ToolContext:
         self.workflow_id = getattr(execute_request, "workflow_id", "") if execute_request is not None else ""
         self.workflow_run_id = getattr(execute_request, "workflow_run_id", "") if execute_request is not None else ""
         self.node_id = getattr(execute_request, "node_id", "") if execute_request is not None else ""
+        self.jev_name = getattr(execute_request, "jev_name", "") if execute_request is not None else ""
+        self.jev_run_id = getattr(execute_request, "jev_run_id", "") if execute_request is not None else ""
+        self.jev_snapshot_revision = getattr(execute_request, "jev_snapshot_revision", 0) if execute_request is not None else 0
         self.permissions = list(getattr(execute_request, "permissions", [])) if execute_request is not None else []
         self.host_context = _decode_host_context(getattr(execute_request, "host_context_json", "")) if execute_request is not None else None
         self._calls = calls
@@ -239,6 +242,8 @@ class _AgentToolService:
             open_world=bool(metadata.get("open_world", False)),
             secret=bool(metadata.get("secret", False)),
             workflow_enabled=bool(metadata.get("workflow_enabled", True)),
+            agent_enabled=bool(metadata.get("agent_enabled", True)),
+            jev_enabled=bool(metadata.get("jev_enabled", True)),
             category=metadata.get("category", ""),
             display_name=metadata.get("display_name", ""),
             required_capabilities=list(metadata.get("required_capabilities", [])),

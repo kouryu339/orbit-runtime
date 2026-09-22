@@ -35,7 +35,10 @@ sidecars should not duplicate those rules.
 `ToolContext` also exposes runtime execute metadata: `call_id`, `tool_call_id`,
 `idempotency_key`, `session_id`, `provider_id`, `cluster_id`,
 `runtime_instance_id`, `conversation_id`, `agent_id`, `turn_id`, `workflow_id`,
-`workflow_run_id`, `node_id`, `permissions`, and `host_context`.
+`workflow_run_id`, `node_id`, `jev_name`, `jev_run_id`,
+`jev_snapshot_revision`, `permissions`, and `host_context`. Registration
+metadata accepts `agent_enabled`, `workflow_enabled`, and `jev_enabled`; all
+three default to true.
 
 The SDK compiles `corework/proto/corework_agent_tool_v1.proto` at startup for
 local development. If the proto lives outside this repository layout, set

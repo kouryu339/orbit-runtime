@@ -23,4 +23,6 @@ compatible. `serve()` accepts either
 `ToolContext` also exposes runtime execute metadata: `callId`, `toolCallId`,
 `idempotencyKey`, `sessionId`, `providerId`, `clusterId`, `runtimeInstanceId`,
 `conversationId`, `agentId`, `turnId`, `workflowId`, `workflowRunId`, `nodeId`,
-`permissions`, and `hostContext`.
+`jevName`, `jevRunId`, `jevSnapshotRevision`, `permissions`, and `hostContext`.
+Descriptors may set `agent_enabled`, `workflow_enabled`, and `jev_enabled`;
+all three default to true.

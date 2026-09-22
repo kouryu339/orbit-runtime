@@ -51,6 +51,43 @@ fn unique_test_dir(name: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn jev_configuration_and_registry_are_available_before_start() {
+    let root = unique_test_dir("jev-registry");
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+    let configured = facade
+        .configure_jev(
+            "test-key".to_string(),
+            Some("http://127.0.0.1:9/v1/systemone".to_string()),
+        )
+        .unwrap();
+    assert_eq!(configured["configured"], true);
+
+    let definition = corework::jev::JevDefinition {
+        name: "test-selector".to_string(),
+        description: "select a test action".to_string(),
+        model: "jev-latest".to_string(),
+        initial_state: json!({}),
+        instructions: "Choose finish.".to_string(),
+        actions: BTreeMap::from([(
+            "finish".to_string(),
+            corework::jev::JevAction {
+                description: "The task is complete.".to_string(),
+                tool: None,
+                arguments: BTreeMap::new(),
+                terminal_status: Some(corework::jev::JevRunStatus::Completed),
+            },
+        )]),
+        max_steps: 1,
+    };
+    facade.register_jev(definition).unwrap();
+    let listed = facade.list_jev();
+    assert_eq!(listed["jev"][0]["name"], "test-selector");
+    assert!(facade
+        .register_jev(serde_json::from_value(listed["jev"][0].clone()).unwrap())
+        .is_err());
+}
+
 fn write_role_skill(skills_dir: &Path, name: &str, kind: &str, body: &str) {
     let skill_dir = skills_dir.join("role").join(name);
     fs::create_dir_all(&skill_dir).unwrap();
@@ -1538,6 +1575,8 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         idempotent: false,
         open_world: true,
         secret: false,
+        agent_enabled: true,
+        jev_enabled: true,
         workflow_enabled: true,
         required_capabilities: Vec::new(),
         endpoint_id: "browser-test".to_string(),
@@ -4019,6 +4058,8 @@ fn restored_ledger_readonly_open_tool_has_no_recovery_result() {
         idempotent: true,
         open_world: false,
         secret: false,
+        agent_enabled: true,
+        jev_enabled: true,
         workflow_enabled: true,
         required_capabilities: vec![],
         endpoint_id: "test".to_string(),
@@ -5055,7 +5096,7 @@ async fn start_validation_accepts_embedded_thinking_pro_and_rejects_unknown_stat
 }
 
 #[test]
-fn runtime_facade_dynamic_snapshot_reaches_agent_prompt_context() {
+fn runtime_facade_dynamic_snapshot_remains_available_for_state_projection() {
     let _guard = runtime_start_test_guard();
     let root = unique_test_dir("dynamic-snapshot-runtime");
     let skills_dir = root.join("skills");

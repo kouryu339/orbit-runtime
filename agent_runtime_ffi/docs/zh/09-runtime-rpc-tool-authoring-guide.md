@@ -5,6 +5,9 @@
 > 页面或文档等动态状态必须由宿主通过 `agent_runtime_invoke_v1` 的
 > `conversation.set_dynamic_snapshot` command 面向对应
 > `(conversation_id, agent_id)` 发布纯文本字段。
+> 唯一的执行期状态写入例外是 Jev 环境：工具可在普通 `result` 中返回
+> `jev_snapshot_update`，它只修改当前 `jev_run_id` 的有限状态快照，不会修改
+> conversation 动态快照。
 >
 > **旧接口不支持：** 旧 endpoint 配置会被拒绝，旧
 > `required_capabilities` 声明无效，旧 HostCall 操作会失败；sidecar

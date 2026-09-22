@@ -47,6 +47,8 @@ async fn main() -> corework::error::Result<()> {
         idempotent: false,
         open_world: true,
         secret: false,
+        agent_enabled: true,
+        jev_enabled: true,
         workflow_enabled: true,
         required_capabilities: vec![],
         endpoint_id: "python-demo".to_string(),

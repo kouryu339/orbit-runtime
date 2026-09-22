@@ -81,6 +81,9 @@ message ToolDescriptor {
   // Whether this tool may be used as a Workflow node. Runtime treats absence
   // as true for compatibility with older Tool servers.
   optional bool workflow_enabled = 22;
+  // Direct Agent and Jev selector visibility. Absence means true.
+  optional bool agent_enabled = 23;
+  optional bool jev_enabled = 24;
 
   // Host capability declarations. v1 supports:
   // - "workspace.resolve_path"
@@ -147,6 +150,11 @@ message ExecuteRequest {
 
   // Stable Blueprint node id. Present for Workflow-node calls.
   string node_id = 18;
+
+  // Jev selector identity. Present only for Jev-origin tool calls.
+  string jev_name = 19;
+  string jev_run_id = 20;
+  uint64 jev_snapshot_revision = 21;
 }
 
 // The required execution response envelope.

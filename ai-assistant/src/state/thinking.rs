@@ -781,20 +781,6 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     };
     tracing::debug!("built {} tool descriptions", all_tools.len());
 
-    // Host-published dynamic text fields for the current agent.
-    let dynamic_snapshots = sm_ctx
-        .resolve_shared_component::<crate::conversation_state::ConversationState>()
-        .ok_or_else(|| {
-            corework::error::FrameworkError::InvalidOperation(
-                "conversation state is unavailable from the agent hierarchy".to_string(),
-            )
-        })?
-        .dynamic_snapshots(&agent_id)
-        .await;
-    let combined_structures_section =
-        crate::systems::prompt::format_host_dynamic_snapshots_section(&dynamic_snapshots);
-    log_host_dynamic_snapshot_probe(&dynamic_snapshots, &agent_id, turn_id, round);
-
     let workflows_section = {
         let world = sm_ctx.world();
         let registry: Vec<serde_json::Value> = world
@@ -964,9 +950,6 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         })
         .map(|record| record.content.clone());
     let mut dynamic_context = Vec::new();
-    if !combined_structures_section.is_empty() {
-        dynamic_context.push(combined_structures_section.clone());
-    }
     if recorder_active {
         let chain = cache
             .get::<String>(keys::RECORDER_CHAIN)
@@ -2878,56 +2861,6 @@ fn log_thinking_context_probe(
             role = %msg.role,
             content = %truncate_probe_text(&msg.content, 500),
             "thinking_context_probe_selected_tail"
-        );
-    }
-}
-
-fn log_host_dynamic_snapshot_probe(
-    snapshots: &std::collections::HashMap<String, String>,
-    agent_id: &str,
-    turn_id: u64,
-    round: u32,
-) {
-    if !runtime_context_probe_enabled() {
-        return;
-    }
-    let total_bytes: usize = snapshots.values().map(|value| value.len()).sum();
-    append_context_probe_log(&format!(
-        "host_dynamic_snapshot_probe agent={} turn={} round={} field_count={} total_bytes={}",
-        agent_id,
-        turn_id,
-        round,
-        snapshots.len(),
-        total_bytes
-    ));
-    tracing::info!(
-        agent_id = %agent_id,
-        turn_id = turn_id,
-        round = round,
-        field_count = snapshots.len(),
-        total_bytes = total_bytes,
-        "host_dynamic_snapshot_probe"
-    );
-    let mut sorted: Vec<_> = snapshots.iter().collect();
-    sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (field_name, text) in sorted {
-        append_context_probe_log(&format!(
-            "host_dynamic_snapshot_field agent={} turn={} round={} field={} bytes={} content={}",
-            agent_id,
-            turn_id,
-            round,
-            field_name,
-            text.len(),
-            truncate_probe_text(text, 1200)
-        ));
-        tracing::info!(
-            agent_id = %agent_id,
-            turn_id = turn_id,
-            round = round,
-            field = %field_name,
-            bytes = text.len(),
-            content = %truncate_probe_text(text, 1200),
-            "host_dynamic_snapshot_field"
         );
     }
 }

@@ -57,8 +57,8 @@ Runtime 不替宿主保活外部资源。以下内容恢复后必须由宿主重
 - 由 `conversation.set_dynamic_snapshot` 注入的 host-owned 动态快照。
 - 任何时效性强、只能由宿主判断是否仍有效的业务事实。
 
-恢复后，宿主应先绑定当前外部资源，再重新发布当前 dynamic snapshot，避免模型读取旧的
-host-owned 状态。
+恢复后，宿主应先绑定当前外部资源，再重新发布当前 dynamic snapshot，避免 UI、导出或
+诊断读取旧的 host-owned 状态。dynamic snapshot 不会自动进入模型输入。
 
 ## 7.4 恢复调用
 

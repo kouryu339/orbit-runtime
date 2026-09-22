@@ -15,6 +15,9 @@ public record ToolContext(
     String turnId,
     String workflowId,
     String workflowRunId,
+    String jevName,
+    String jevRunId,
+    long jevSnapshotRevision,
     String nodeId,
     List<String> permissions,
     String hostContextJson

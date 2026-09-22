@@ -520,6 +520,41 @@ fn invoke_command(
             facade.set_language(&required_string(payload, "language")?)?;
             json!({})
         }
+        "jev.configure" => facade.configure_jev(
+            required_string(payload, "api_key")?,
+            payload
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )?,
+        "jev.register" => {
+            let definition_value = payload
+                .get("definition")
+                .cloned()
+                .unwrap_or_else(|| Value::Object(payload.clone()));
+            let definition =
+                serde_json::from_value::<corework::jev::JevDefinition>(definition_value).map_err(
+                    |error| FfiError::invalid_argument(format!("invalid Jev definition: {error}")),
+                )?;
+            facade.register_jev(definition)?
+        }
+        "jev.list" => facade.list_jev(),
+        "jev.run" => facade.run_jev(
+            &required_string(payload, "jevname")?,
+            &required_string(payload, "task")?,
+            payload
+                .get("conversation_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            payload
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            payload
+                .get("parent_run_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )?,
         "workflow.create" => facade.create_workflow_draft(&workflow_resource(payload)?)?,
         "workflow.read" => facade.read_workflow_resource(&required_string(payload, "id")?)?,
         "workflow.register" => facade.register_workflow_draft(
@@ -863,6 +898,18 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
                 .as_array_mut()
                 .expect("capabilities commands must be an array");
             commands.push(Value::String("workflow.describe_inputs".to_string()));
+            for command in ["jev.configure", "jev.register", "jev.list", "jev.run"] {
+                commands.push(Value::String(command.to_string()));
+            }
+            let event_types = capabilities["events"]["types"]
+                .as_array_mut()
+                .expect("capabilities event types must be an array");
+            for event_type in [
+                "jev.execution_started", "jev.decision", "jev.tool_started",
+                "jev.tool_completed", "jev.snapshot_updated", "jev.execution_completed",
+            ] {
+                event_types.push(Value::String(event_type.to_string()));
+            }
             CString::new(capabilities.to_string())
                 .expect("generated capabilities JSON contains no NUL")
         })

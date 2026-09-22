@@ -7,6 +7,8 @@ public record ToolDescriptor(
     String description,
     String sideEffect,
     boolean workflowEnabled,
+    boolean agentEnabled,
+    boolean jevEnabled,
     List<String> requiredCapabilities
 ) {
     public ToolDescriptor(
@@ -15,6 +17,6 @@ public record ToolDescriptor(
         String sideEffect,
         List<String> requiredCapabilities
     ) {
-        this(name, description, sideEffect, true, requiredCapabilities);
+        this(name, description, sideEffect, true, true, true, requiredCapabilities);
     }
 }

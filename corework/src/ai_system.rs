@@ -65,6 +65,12 @@ pub struct AISystemMetadata {
     /// 默认 false（假设无敏感数据）
     pub secret: bool,
 
+    /// Whether an Agent may call this tool directly.
+    pub agent_enabled: bool,
+
+    /// Whether a Jev run may select this tool.
+    pub jev_enabled: bool,
+
     /// Whether this AI-callable system may also be used as a Workflow node.
     /// Defaults to true in registration macros. `system_only` is the legacy
     /// `define_operation` spelling for false.

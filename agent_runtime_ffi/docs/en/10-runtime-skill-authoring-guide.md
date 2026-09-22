@@ -276,6 +276,14 @@ With only step one, the AI cannot see `OrderList`. With only step two, the AI ma
 
 An RPC tool endpoint may expose multiple concrete tools through `ListTools`. The skill `tools` list should reference concrete tool names, not the tool-set endpoint name. Tool implementations must return non-empty `AIOutput.to_ai`; both success and failure should provide a summary that can be written into AI context. RPC tools cannot update dynamic context: if a tool changes state that later reasoning needs, the host must send `conversation.set_dynamic_snapshot` through `agent_runtime_invoke_v1`. Old `snapshot.get` / `snapshot.put` methods are not compatible. For details, see [`09-runtime-rpc-tool-authoring-guide.md`](./09-runtime-rpc-tool-authoring-guide.md).
 
+Runtime projects a compact resident tool catalog to the Agent. Every active
+tool remains directly callable, and parameter names, types, required flags,
+defaults, and parameter guidance remain resident. AI-only tools
+(`workflow_enabled=false`) also retain their full usage description, while
+general tools use a short purpose summary. Output documentation and Workflow
+pins are available by name through `ToolDescribe`; reading a descriptor neither
+activates a tool nor changes its permissions.
+
 ## 10.7 Advanced Thinking and Workflow Tools
 
 The default `thinking` Skill stays lightweight. To give an Agent advanced

@@ -36,24 +36,27 @@ type wireMessage struct {
 }
 
 type executeRequest struct {
-	ToolName          string          `json:"tool_name"`
-	ArgsCLI           string          `json:"args_cli"`
-	ArgsJSON          json.RawMessage `json:"args_json"`
-	CallID            string          `json:"call_id"`
-	ToolCallID        string          `json:"tool_call_id"`
-	IdempotencyKey    string          `json:"idempotency_key"`
-	SessionID         string          `json:"session_id"`
-	ProviderID        string          `json:"provider_id"`
-	ClusterID         string          `json:"cluster_id"`
-	RuntimeInstanceID string          `json:"runtime_instance_id"`
-	ConversationID    string          `json:"conversation_id"`
-	AgentID           string          `json:"agent_id"`
-	TurnID            string          `json:"turn_id"`
-	WorkflowID        string          `json:"workflow_id"`
-	WorkflowRunID     string          `json:"workflow_run_id"`
-	NodeID            string          `json:"node_id"`
-	Permissions       []string        `json:"permissions"`
-	HostContext       any             `json:"host_context"`
+	ToolName            string          `json:"tool_name"`
+	ArgsCLI             string          `json:"args_cli"`
+	ArgsJSON            json.RawMessage `json:"args_json"`
+	CallID              string          `json:"call_id"`
+	ToolCallID          string          `json:"tool_call_id"`
+	IdempotencyKey      string          `json:"idempotency_key"`
+	SessionID           string          `json:"session_id"`
+	ProviderID          string          `json:"provider_id"`
+	ClusterID           string          `json:"cluster_id"`
+	RuntimeInstanceID   string          `json:"runtime_instance_id"`
+	ConversationID      string          `json:"conversation_id"`
+	AgentID             string          `json:"agent_id"`
+	TurnID              string          `json:"turn_id"`
+	WorkflowID          string          `json:"workflow_id"`
+	WorkflowRunID       string          `json:"workflow_run_id"`
+	NodeID              string          `json:"node_id"`
+	JevName             string          `json:"jev_name"`
+	JevRunID            string          `json:"jev_run_id"`
+	JevSnapshotRevision uint64          `json:"jev_snapshot_revision"`
+	Permissions         []string        `json:"permissions"`
+	HostContext         any             `json:"host_context"`
 }
 
 type remoteAIOutput struct {
@@ -185,21 +188,24 @@ func callTool(tool registeredTool, request *executeRequest) (AIOutput, error) {
 		}
 	}
 	toolCtx := Context{
-		CallID:            request.CallID,
-		ToolCallID:        request.ToolCallID,
-		IdempotencyKey:    request.IdempotencyKey,
-		SessionID:         request.SessionID,
-		ProviderID:        request.ProviderID,
-		ClusterID:         request.ClusterID,
-		RuntimeInstanceID: request.RuntimeInstanceID,
-		ConversationID:    request.ConversationID,
-		AgentID:           request.AgentID,
-		TurnID:            request.TurnID,
-		WorkflowID:        request.WorkflowID,
-		WorkflowRunID:     request.WorkflowRunID,
-		NodeID:            request.NodeID,
-		Permissions:       append([]string(nil), request.Permissions...),
-		HostContext:       request.HostContext,
+		CallID:              request.CallID,
+		ToolCallID:          request.ToolCallID,
+		IdempotencyKey:      request.IdempotencyKey,
+		SessionID:           request.SessionID,
+		ProviderID:          request.ProviderID,
+		ClusterID:           request.ClusterID,
+		RuntimeInstanceID:   request.RuntimeInstanceID,
+		ConversationID:      request.ConversationID,
+		AgentID:             request.AgentID,
+		TurnID:              request.TurnID,
+		WorkflowID:          request.WorkflowID,
+		WorkflowRunID:       request.WorkflowRunID,
+		JevName:             request.JevName,
+		JevRunID:            request.JevRunID,
+		JevSnapshotRevision: request.JevSnapshotRevision,
+		NodeID:              request.NodeID,
+		Permissions:         append([]string(nil), request.Permissions...),
+		HostContext:         request.HostContext,
 	}
 	result := handlerValue.Call([]reflect.Value{
 		reflect.ValueOf(context.Background()),

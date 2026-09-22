@@ -71,6 +71,8 @@ public sealed class ToolDescriptor
     public bool OpenWorld { get; set; }
     public bool Secret { get; set; }
     public bool WorkflowEnabled { get; set; } = true;
+    public bool AgentEnabled { get; set; } = true;
+    public bool JevEnabled { get; set; } = true;
     public string Category { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public List<string> RequiredCapabilities { get; set; } = [];
@@ -97,6 +99,9 @@ public sealed class ToolContext
         WorkflowId = executeRequest.WorkflowId;
         WorkflowRunId = executeRequest.WorkflowRunId;
         NodeId = executeRequest.NodeId;
+        JevName = executeRequest.JevName;
+        JevRunId = executeRequest.JevRunId;
+        JevSnapshotRevision = executeRequest.JevSnapshotRevision;
         Permissions = executeRequest.Permissions.ToArray();
         HostContextJson = executeRequest.HostContextJson;
     }
@@ -114,6 +119,9 @@ public sealed class ToolContext
     public string WorkflowId { get; }
     public string WorkflowRunId { get; }
     public string NodeId { get; }
+    public string JevName { get; }
+    public string JevRunId { get; }
+    public ulong JevSnapshotRevision { get; }
     public IReadOnlyList<string> Permissions { get; }
     public string HostContextJson { get; }
 
@@ -351,6 +359,8 @@ public sealed class ToolApp
                 OpenWorld = descriptor.OpenWorld,
                 Secret = descriptor.Secret,
                 WorkflowEnabled = descriptor.WorkflowEnabled,
+                AgentEnabled = descriptor.AgentEnabled,
+                JevEnabled = descriptor.JevEnabled,
                 Category = descriptor.Category,
                 DisplayName = descriptor.DisplayName,
             };

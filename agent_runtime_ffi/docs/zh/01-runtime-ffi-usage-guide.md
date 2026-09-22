@@ -166,6 +166,10 @@ LLM 和 Agent Cluster 三类注册配置表达。
 | `runtime.set_current_model` | `model_uid:uint32`；仅设置新会话默认模型 | `{}` |
 | `runtime.set_language` | `language:string` | `{}` |
 | `runtime.export_snapshot` | 空 payload | runtime snapshot |
+| `jev.configure` | `api_key`, `endpoint?`；必须在 `runtime.start` 前调用 | 配置状态；密钥不进入事件或快照 |
+| `jev.register` | `definition`，或直接展开 definition 字段 | 注册后的 Jev 定义 |
+| `jev.list` | 空 payload | `agent-runtime-jev-list/v1` |
+| `jev.run` | `jevname`, `task`, `conversation_id?`, `agent_id?`, `parent_run_id?` | Jev 运行结果与最终快照 |
 | `workflow.create` | `resource` | 不可信 Draft |
 | `workflow.read` | `id` | Draft 或 Registered |
 | `workflow.register` | `id`, `expected_revision?`, `name?` | 提升后的 Registered |
@@ -222,7 +226,11 @@ token 或 header。`health_scope: "startup_only"` 表示它不是持续健康探
 
 `conversation.spawn_from_snapshot` 消费的是持久化的
 `agent-runtime-conversation-snapshot/v1`，用于恢复或复制 conversation。它不是
-“从尾部观察快照继续运行”的语义；尾部快照更适合 UI 刷新、导出或诊断。
+“从尾部观察快照继续运行”的语义；动态快照只用于 UI 刷新、导出、诊断和恢复镜像，
+不会自动拼接进 Agent 的下一次模型输入。
+
+Jev 的注册、有限状态迭代、工具可见性和审计事件见
+[`Runtime Jev 执行契约`](12-runtime-jev-execution-contract.md)。
 
 Workflow resource、输出展开、程序 result、trace 与审计事件的完整 schema 见
 [`Runtime Workflow 契约`](11-runtime-workflow-execution-contract.md)。

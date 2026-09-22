@@ -285,6 +285,7 @@ pub enum UnitType {
     Blueprint,
     StateMachine,
     Module,
+    Jev,
 }
 
 pub const MAX_EXECUTION_UNIT_DEPTH: usize = 16;
@@ -347,6 +348,7 @@ impl ExecutionUnit {
                 UnitType::Blueprint => "blueprint",
                 UnitType::Module => "module",
                 UnitType::StateMachine => "statemachine",
+                UnitType::Jev => "jev",
             },
             Uuid::new_v4()
         )

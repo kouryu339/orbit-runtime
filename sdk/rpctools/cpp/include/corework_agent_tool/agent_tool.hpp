@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -63,6 +64,8 @@ struct ToolDescriptor {
   bool open_world = false;
   bool secret = false;
   bool workflow_enabled = true;
+  bool agent_enabled = true;
+  bool jev_enabled = true;
   std::string category;
   std::string display_name;
   std::vector<std::string> required_capabilities;
@@ -89,6 +92,9 @@ class ToolContext {
   std::string workflow_id;
   std::string workflow_run_id;
   std::string node_id;
+  std::string jev_name;
+  std::string jev_run_id;
+  std::uint64_t jev_snapshot_revision = 0;
   std::vector<std::string> permissions;
   Json host_context;
 

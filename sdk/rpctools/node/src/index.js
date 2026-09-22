@@ -54,6 +54,9 @@ export class ToolContext {
     this.workflowId = executeRequest.workflow_id ?? "";
     this.workflowRunId = executeRequest.workflow_run_id ?? "";
     this.nodeId = executeRequest.node_id ?? "";
+    this.jevName = executeRequest.jev_name ?? "";
+    this.jevRunId = executeRequest.jev_run_id ?? "";
+    this.jevSnapshotRevision = Number(executeRequest.jev_snapshot_revision ?? 0);
     this.permissions = Array.isArray(executeRequest.permissions) ? [...executeRequest.permissions] : [];
     this.hostContext = parseHostContext(executeRequest.host_context_json);
     this._hostCall = hostCall;
@@ -384,6 +387,8 @@ function descriptorToProto(metadata) {
     open_world: Boolean(metadata.open_world),
     secret: Boolean(metadata.secret),
     workflow_enabled: metadata.workflow_enabled !== false,
+    agent_enabled: metadata.agent_enabled !== false,
+    jev_enabled: metadata.jev_enabled !== false,
     category: metadata.category ?? "",
     display_name: metadata.display_name ?? "",
     required_capabilities: metadata.required_capabilities ?? [],

@@ -103,7 +103,10 @@ pub fn buns_system(attr: TokenStream, item: TokenStream) -> TokenStream {
         let idempotent_val = system_attrs.idempotent.unwrap_or(false); // 默认非幂等
         let open_world_val = system_attrs.open_world.unwrap_or(true); // 默认开放世界
         let secret_val = system_attrs.secret.unwrap_or(false); // 默认无敏感数据
-        let workflow_enabled_val = system_attrs.workflow_enabled.unwrap_or(true);
+        let workflow_enabled_val = system_attrs
+            .workflow_enabled
+            .unwrap_or(!system_attrs.jev_only);
+        let agent_enabled_val = !system_attrs.jev_only;
 
         // 如果有 outputs，生成常量
         let outputs_const = if !output_defs.is_empty() {
@@ -142,6 +145,8 @@ pub fn buns_system(attr: TokenStream, item: TokenStream) -> TokenStream {
                         idempotent: #idempotent_val,
                         open_world: #open_world_val,
                         secret: #secret_val,
+                        agent_enabled: #agent_enabled_val,
+                        jev_enabled: true,
                         workflow_enabled: #workflow_enabled_val,
                     },
                     constructor: || ::std::sync::Arc::new(#struct_name::default()),
@@ -907,6 +912,7 @@ struct SystemAttributes {
     idempotent: Option<bool>,       // 是否幂等
     open_world: Option<bool>,       // 是否与开放世界交互
     secret: Option<bool>,           // 是否处理敏感信息
+    jev_only: bool,                 // 是否只允许 Jev 调用
     workflow_enabled: Option<bool>, // 是否允许作为 Workflow 节点
 }
 
@@ -941,6 +947,7 @@ impl Parse for SystemAttributes {
         let mut idempotent = None;
         let mut open_world = None;
         let mut secret = None;
+        let mut jev_only = false;
         let mut workflow_enabled = None;
 
         // 解析可选参数
@@ -1132,6 +1139,9 @@ impl Parse for SystemAttributes {
                     input.parse::<Token![=]>()?;
                     let val: syn::LitBool = input.parse()?;
                     workflow_enabled = Some(val.value);
+                } else if ident == "jev_only" {
+                    input.parse::<syn::Ident>()?;
+                    jev_only = true;
                 } else {
                     return Err(syn::Error::new(
                         ident.span(),
@@ -1141,6 +1151,10 @@ impl Parse for SystemAttributes {
             } else {
                 break;
             }
+        }
+
+        if jev_only && workflow_enabled == Some(true) {
+            return Err(input.error("jev_only cannot be combined with workflow_enabled = true"));
         }
 
         Ok(SystemAttributes {
@@ -1154,6 +1168,7 @@ impl Parse for SystemAttributes {
             idempotent,
             open_world,
             secret,
+            jev_only,
             workflow_enabled,
         })
     }
@@ -1200,6 +1215,7 @@ struct OperationAttributes {
     description: String,
     category: String,
     system_only: bool,
+    jev_only: bool,
     workflow_enabled: Option<bool>,
     display_name: Option<String>,
     params: Vec<OperationParam>,
@@ -1219,6 +1235,7 @@ impl Parse for OperationAttributes {
         let mut description = None;
         let mut category = None;
         let mut system_only = false;
+        let mut jev_only = false;
         let mut workflow_enabled = None;
         let mut display_name = None;
         let mut params = Vec::new();
@@ -1253,6 +1270,9 @@ impl Parse for OperationAttributes {
                 "system_only" => {
                     system_only = true;
                     // system_only 是裸标志，无 = value
+                }
+                "jev_only" => {
+                    jev_only = true;
                 }
                 "workflow_enabled" => {
                     input.parse::<Token![=]>()?;
@@ -1378,12 +1398,17 @@ impl Parse for OperationAttributes {
                 "system_only conflicts with workflow_enabled = true; remove system_only or set workflow_enabled = false",
             ));
         }
+        if jev_only && (system_only || workflow_enabled == Some(true)) {
+            return Err(input
+                .error("jev_only cannot be combined with system_only or workflow_enabled = true"));
+        }
 
         Ok(OperationAttributes {
             name: name.ok_or_else(|| input.error("Missing 'name'"))?,
             description: description.ok_or_else(|| input.error("Missing 'description'"))?,
             category: category.unwrap_or_default(),
             system_only,
+            jev_only,
             workflow_enabled,
             display_name,
             params,
@@ -1621,7 +1646,10 @@ pub fn define_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
     let idempotent_val = op.idempotent.unwrap_or(false);
     let open_world_val = op.open_world.unwrap_or(true);
     let secret_val = op.secret.unwrap_or(false);
-    let workflow_enabled_val = op.workflow_enabled.unwrap_or(!op.system_only);
+    let workflow_enabled_val = op
+        .workflow_enabled
+        .unwrap_or(!op.system_only && !op.jev_only);
+    let agent_enabled_val = !op.jev_only;
 
     let ai_factory = quote! {
         #[allow(non_upper_case_globals)]
@@ -1648,6 +1676,8 @@ pub fn define_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
                     idempotent: #idempotent_val,
                     open_world: #open_world_val,
                     secret: #secret_val,
+                    agent_enabled: #agent_enabled_val,
+                    jev_enabled: true,
                     workflow_enabled: #workflow_enabled_val,
                 },
                 constructor: || ::std::sync::Arc::new(#struct_name::default()),

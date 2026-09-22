@@ -823,7 +823,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_dynamic_snapshot_field_is_visible_to_agent_prompt_context() {
+    async fn host_dynamic_snapshot_field_remains_available_outside_agent_prompt() {
         let _guard = crate::test_support::global_test_guard().await;
         let agent = test_agent("sunwoo-support").await;
         let state = Arc::new(crate::conversation_state::ConversationState::new(
@@ -849,11 +849,6 @@ mod tests {
             stored.get("sunwoo:conversion_ui").map(String::as_str),
             Some(snapshot)
         );
-
-        let prompt_section = crate::systems::prompt::format_host_dynamic_snapshots_section(&stored);
-        assert!(prompt_section.contains("MP3"));
-        assert!(prompt_section.contains("- Format: MP3"));
-        assert!(!prompt_section.contains("sunwoo:conversion_ui"));
     }
 
     #[tokio::test]

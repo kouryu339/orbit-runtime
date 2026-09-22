@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::{AssistantContext, Message};
 use crate::skills::systems::mgr;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct PromptSection {
@@ -170,26 +172,6 @@ pub(crate) fn format_page_structures_section(
     output
 }
 
-/// `snapshots` is host-published `HashMap<field_name, text>`. This function
-/// injects text only; field names are update keys and remain hidden from the model.
-/// Returns an empty string when no host dynamic text is present.
-pub(crate) fn format_host_dynamic_snapshots_section(snapshots: &HashMap<String, String>) -> String {
-    if snapshots.is_empty() {
-        return String::new();
-    }
-    let sorted: std::collections::BTreeMap<&str, &str> = snapshots
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-
-    let mut output = String::new();
-    for (_key, text) in &sorted {
-        output.push_str(text);
-        output.push_str("\n\n");
-    }
-    output
-}
-
 pub(crate) fn format_immutable_cache_entries_section(entries: &BTreeMap<String, String>) -> String {
     if entries.is_empty() {
         return String::new();
@@ -272,17 +254,12 @@ pub(crate) fn format_tools_section(tool_names: &[String], include_outputs: bool)
 
             output.push_str(&format!("### {}{}\n", meta.name, tags_str));
 
-            if include_outputs && !meta.outputs.is_empty() {
-                output.push_str(crate::prompt_assets::template("tool_outputs_label.md").trim());
-                let pins: Vec<String> = meta
-                    .outputs
-                    .iter()
-                    .map(|o| format!("`{}`", o.name))
-                    .collect();
-                output.push_str(&format!("{}\n", pins.join(", ")));
-            }
-
-            output.push_str(&format!("{}\n", meta.description));
+            let description = if meta.workflow_enabled {
+                crate::tool_schema::compact_summary(meta.description)
+            } else {
+                meta.description.to_string()
+            };
+            output.push_str(&format!("{}\n", description));
 
             if !meta.parameters.is_empty() {
                 output.push_str(crate::prompt_assets::template("tool_parameters_label.md").trim());
@@ -307,33 +284,17 @@ pub(crate) fn format_tools_section(tool_names: &[String], include_outputs: bool)
                         .map(|d| format!(", {}={}", default_label, d))
                         .unwrap_or_default();
                     output.push_str(&format!(
-                        "  - `{}` ({}{}): {}\n",
-                        p.name, req, default_str, p.description
+                        "  - `{}` ({}, type={}{}): {}\n",
+                        p.name,
+                        req,
+                        corework::data_type::public_type_name(p.param_type),
+                        default_str,
+                        p.description
                     ));
                 }
             } else {
                 output.push_str(crate::prompt_assets::template("tool_no_parameters.md").trim());
                 output.push('\n');
-            }
-
-            if include_outputs && !meta.outputs.is_empty() {
-                output
-                    .push_str(crate::prompt_assets::template("tool_output_fields_label.md").trim());
-                output.push('\n');
-                for o in meta.outputs {
-                    output.push_str(&format!(
-                        "  - `{}` ({}): {}\n",
-                        o.name,
-                        corework::data_type::public_type_name(o.field_type),
-                        if o.description.is_empty() {
-                            crate::prompt_assets::template("tool_output_value_fallback.md")
-                                .trim()
-                                .to_string()
-                        } else {
-                            o.description.to_string()
-                        }
-                    ));
-                }
             }
 
             output.push('\n');
@@ -387,16 +348,12 @@ fn push_runtime_tool_section(
     }
     output.push_str("`\n");
 
-    if include_outputs && !meta.outputs.is_empty() {
-        output.push_str("**Output pins**: ");
-        let pins: Vec<String> = meta
-            .outputs
-            .iter()
-            .map(|o| format!("`{}`", o.name))
-            .collect();
-        output.push_str(&format!("{}\n", pins.join(", ")));
-    }
-    output.push_str(&format!("{}\n", meta.description));
+    let description = if meta.workflow_enabled {
+        crate::tool_schema::compact_summary(&meta.description)
+    } else {
+        meta.description.clone()
+    };
+    output.push_str(&format!("{}\n", description));
 
     if !meta.parameters.is_empty() {
         output.push_str("Parameters:\n");
@@ -424,21 +381,6 @@ fn push_runtime_tool_section(
         output.push_str("(no parameters)\n");
     }
 
-    if include_outputs && !meta.outputs.is_empty() {
-        output.push_str("Outputs:\n");
-        for o in &meta.outputs {
-            output.push_str(&format!(
-                "  - `{}` ({}): {}\n",
-                o.name,
-                corework::data_type::public_type_name(&o.field_type),
-                if o.description.is_empty() {
-                    "Output value".to_string()
-                } else {
-                    o.description.clone()
-                }
-            ));
-        }
-    }
     output.push('\n');
 }
 
@@ -648,22 +590,9 @@ impl SystemOperation for ComposeMessagesSystem {
 
         let (selected, truncated_count) = select_history(&history, max_msgs);
 
-        let agent_id = ctx
-            .cache
-            .get::<String>(crate::state_machine::agent_keys::AGENT_ID)
-            .await?
-            .unwrap_or_else(|| crate::agent::keys::BOSS_AGENT_ID.to_string());
-        let dynamic_snapshots = ctx
-            .resolve_shared_component::<crate::conversation_state::ConversationState>()?
-            .dynamic_snapshots(&agent_id)
-            .await;
-        let structures_section = format_host_dynamic_snapshots_section(&dynamic_snapshots);
-        let mut messages = Vec::with_capacity(2 + selected.len());
+        let mut messages = Vec::with_capacity(1 + selected.len());
         messages.push(input.system_message);
         messages.extend(selected.into_iter().cloned());
-        if !structures_section.is_empty() {
-            messages.push(Message::user(structures_section));
-        }
 
         let message_count = messages.len();
 
@@ -1077,7 +1006,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_compose_messages_appends_host_dynamic_context_at_tail() {
+    async fn test_compose_messages_does_not_append_host_dynamic_context() {
         use std::sync::Arc;
 
         let framework = corework::world::FrameworkState::initialize().unwrap();
@@ -1116,10 +1045,11 @@ mod tests {
 
         assert_eq!(result.messages[0].content, "stable system prompt");
         assert_eq!(result.messages[1].content, "current request");
-        assert!(result.messages[2]
-            .content
-            .contains("volatile page snapshot"));
-        assert_eq!(result.messages.len(), 3);
+        assert_eq!(result.messages.len(), 2);
+        assert!(result
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("volatile page snapshot")));
     }
 
     #[test]
@@ -1129,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn local_tool_outputs_are_only_projected_for_script_capable_thinking() {
+    fn local_ai_only_guidance_is_projected_for_script_capable_thinking() {
         let tools = vec!["GetSkillsList".to_string()];
 
         let regular = format_tools_section(&tools, false);
@@ -1173,21 +1103,6 @@ mod tests {
     }
 
     #[test]
-    fn test_host_dynamic_snapshots_inject_all_text_without_field_names() {
-        let snapshots = HashMap::from([
-            ("private_location".to_string(), "Location text.".to_string()),
-            ("private_ticket".to_string(), "Ticket text.".to_string()),
-        ]);
-
-        let section = format_host_dynamic_snapshots_section(&snapshots);
-
-        assert!(section.contains("Location text."));
-        assert!(section.contains("Ticket text."));
-        assert!(!section.contains("private_location"));
-        assert!(!section.contains("private_ticket"));
-    }
-
-    #[test]
     fn test_immutable_cache_entries_inject_values_in_key_order() {
         let entries = BTreeMap::from([
             ("zeta".to_string(), "Z entry".to_string()),
@@ -1225,6 +1140,8 @@ mod tests {
             idempotent: true,
             open_world: false,
             secret: false,
+            agent_enabled: true,
+            jev_enabled: true,
             workflow_enabled: true,
             required_capabilities: Vec::new(),
             endpoint_id: "user-tools".to_string(),
@@ -1237,8 +1154,8 @@ mod tests {
 
         assert!(section.contains("Call syntax: `EXEC UserGet --user_id <num>`"));
         assert!(section.contains("`--user_id` (**required**, type=num)"));
-        assert!(section.contains("**Output pins**"));
-        assert!(section.contains("Outputs:"));
+        assert!(!section.contains("**Output pins**"));
+        assert!(!section.contains("Outputs:"));
         assert!(!section.contains("user_id ="));
 
         let mut without_outputs = String::new();

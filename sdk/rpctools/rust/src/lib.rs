@@ -86,6 +86,8 @@ pub struct ToolDescriptor {
     pub open_world: bool,
     pub secret: bool,
     pub workflow_enabled: bool,
+    pub agent_enabled: bool,
+    pub jev_enabled: bool,
     pub category: String,
     pub display_name: String,
     pub required_capabilities: Vec<String>,
@@ -114,6 +116,9 @@ pub struct ToolContext {
     pub workflow_id: String,
     pub workflow_run_id: String,
     pub node_id: String,
+    pub jev_name: String,
+    pub jev_run_id: String,
+    pub jev_snapshot_revision: u64,
     pub permissions: Vec<String>,
     pub host_context: Value,
     host_tx: mpsc::Sender<HostRequest>,
@@ -191,6 +196,8 @@ impl ToolDescriptor {
                 open_world: false,
                 secret: false,
                 workflow_enabled: true,
+                agent_enabled: true,
+                jev_enabled: true,
                 category: String::new(),
                 display_name: String::new(),
                 required_capabilities: Vec::new(),
@@ -268,6 +275,16 @@ impl ToolDescriptorBuilder {
 
     pub fn workflow_enabled(mut self, value: bool) -> Self {
         self.descriptor.workflow_enabled = value;
+        self
+    }
+
+    pub fn agent_enabled(mut self, value: bool) -> Self {
+        self.descriptor.agent_enabled = value;
+        self
+    }
+
+    pub fn jev_enabled(mut self, value: bool) -> Self {
+        self.descriptor.jev_enabled = value;
         self
     }
 
@@ -486,6 +503,9 @@ async fn run_execute(
         workflow_id: execute_request.workflow_id.clone(),
         workflow_run_id: execute_request.workflow_run_id.clone(),
         node_id: execute_request.node_id.clone(),
+        jev_name: execute_request.jev_name.clone(),
+        jev_run_id: execute_request.jev_run_id.clone(),
+        jev_snapshot_revision: execute_request.jev_snapshot_revision,
         permissions: execute_request.permissions.clone(),
         host_context: serde_json::from_str(&execute_request.host_context_json)
             .unwrap_or(Value::Null),
@@ -794,6 +814,8 @@ fn descriptor_to_proto(descriptor: &ToolDescriptor) -> ProtoToolDescriptor {
         open_world: descriptor.open_world,
         secret: descriptor.secret,
         workflow_enabled: Some(descriptor.workflow_enabled),
+        agent_enabled: Some(descriptor.agent_enabled),
+        jev_enabled: Some(descriptor.jev_enabled),
         category: descriptor.category.clone(),
         display_name: descriptor.display_name.clone(),
         required_capabilities: descriptor.required_capabilities.clone(),
@@ -996,6 +1018,9 @@ mod tests {
                     workflow_id: "workflow-1".to_string(),
                     workflow_run_id: "workflow-run-1".to_string(),
                     node_id: "1.2".to_string(),
+                    jev_name: "selector".to_string(),
+                    jev_run_id: "jev-run-1".to_string(),
+                    jev_snapshot_revision: 3,
                     permissions: Vec::new(),
                     host_context_json: "{}".to_string(),
                 },

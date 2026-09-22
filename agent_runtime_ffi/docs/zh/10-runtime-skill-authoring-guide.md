@@ -276,6 +276,13 @@ tools: ["OrderList"]
 
 RPC 工具端点可以通过 `ListTools` 暴露多个具体工具。skill 的 `tools` 中应引用具体工具名，而不是工具集端点名。工具实现必须返回非空 `AIOutput.to_ai`，成功和失败都要给出可写入 AI 上下文的摘要。RPC 工具不能更新动态上下文；如果工具改变了后续推理需要的状态，宿主必须通过 `agent_runtime_invoke_v1` 发送 `conversation.set_dynamic_snapshot`，重新发布当前纯文本字段。旧 `snapshot.get` / `snapshot.put` 方法全部不兼容。详细写法见 [`09-runtime-rpc-tool-authoring-guide.md`](./09-runtime-rpc-tool-authoring-guide.md)。
 
+Runtime 对 Agent 常驻投影采用紧凑工具目录。所有当前已激活工具仍可直接调用，参数名称、
+类型、必填、默认值和参数说明保持常驻。`workflow_enabled=false` 的 AI-only 工具同时常驻
+完整适用说明；通用工具只常驻简短用途。输出解释和 Workflow 引脚不再为每个工具重复
+注入，Agent 在具体使用、编码或编写 Workflow 前可调用
+`ToolDescribe --tool_names '["ToolA","ToolB"]'` 按名称读取完整 Descriptor。
+`ToolDescribe` 不激活工具，也不改变权限。
+
 ## 10.7 高级思考与 Workflow 工具
 
 默认 `thinking` 保持轻量。需要让某类 Agent 使用高级思考规则并执行一次性多行脚本时，

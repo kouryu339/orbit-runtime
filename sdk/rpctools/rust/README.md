@@ -35,11 +35,14 @@ should not duplicate those rules.
 Tool descriptors default to `.workflow_enabled(true)`. Use
 `.workflow_enabled(false)` for an Agent-only tool that must not be used as a
 Workflow node.
+Use `.agent_enabled(false).workflow_enabled(false).jev_enabled(true)` for a
+Jev-only tool.
 
 `ToolContext` also exposes runtime execute metadata: `call_id`, `tool_call_id`,
 `idempotency_key`, `session_id`, `provider_id`, `cluster_id`,
 `runtime_instance_id`, `conversation_id`, `agent_id`, `turn_id`, `workflow_id`,
-`workflow_run_id`, `node_id`, `permissions`, and `host_context`.
+`workflow_run_id`, `node_id`, `jev_name`, `jev_run_id`,
+`jev_snapshot_revision`, `permissions`, and `host_context`.
 
 The crate generates Rust protobuf/gRPC bindings from
 `corework/proto/corework_agent_tool_v1.proto` at build time.

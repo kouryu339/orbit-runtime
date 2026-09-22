@@ -28,11 +28,13 @@ routes AI calls back to `agenttool.Serve(...)`.
 `agenttool.Context` is populated from the runtime execute request. Tool
 handlers can read call/session fields such as `CallID`, `ToolCallID`,
 `SessionID`, `ProviderID`, `ClusterID`, `RuntimeInstanceID`, `ConversationID`,
-`AgentID`, `TurnID`, `WorkflowID`, `WorkflowRunID`, `NodeID`, `Permissions`, and
-`HostContext`.
+`AgentID`, `TurnID`, `WorkflowID`, `WorkflowRunID`, `NodeID`, `JevName`,
+`JevRunID`, `JevSnapshotRevision`, `Permissions`, and `HostContext`.
 
 Dynamic AI context is host-owned and updated through the runtime FFI.
 The removed RPC `snapshot.*` helpers are not compatible with this version.
 
 `ToolDescriptor.WorkflowEnabled` defaults to `nil`, which Runtime interprets as
 `true`. Set it to `agenttool.Bool(false)` for an Agent-only tool.
+`AgentEnabled` and `JevEnabled` use the same nil-means-true convention; set
+`AgentEnabled` and `WorkflowEnabled` to false for a Jev-only tool.

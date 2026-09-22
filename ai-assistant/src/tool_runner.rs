@@ -70,6 +70,23 @@ async fn execute_prepared(
     ctx: &Context,
 ) -> ToolResult {
     let tool_kind = tool_kind(system_name);
+    let agent_enabled = inventory::iter::<AISystemFactory>()
+        .find(|factory| factory.metadata.name == system_name)
+        .map(|factory| factory.metadata.agent_enabled)
+        .or_else(|| {
+            crate::runtime_tools::get_runtime_tool(system_name)
+                .map(|metadata| metadata.agent_enabled)
+        })
+        .unwrap_or(false);
+    if !agent_enabled {
+        return ToolResult {
+            command: command.to_string(),
+            success: false,
+            to_ai: format!("Tool '{system_name}' is not callable by an Agent."),
+            error_code: -5,
+            result: serde_json::Value::Null,
+        };
+    }
 
     let mut active_tools = match crate::AssistantContext::get_active_tools(&ctx.cache).await {
         Ok(tools) => tools,
@@ -460,7 +477,7 @@ mod tests {
     use async_trait::async_trait;
     use corework::cache::{Cache, InMemoryCache};
     use corework::event::InMemoryEventBus;
-    use corework::rpc_tool::RuntimeToolMetadata;
+    use corework::rpc_tool::{RuntimeAIParameter, RuntimeToolMetadata};
     use corework::system::SystemRegistry;
     use corework::workflow::dynamic_node::DynamicExecute;
     use serde_json::{json, Value};
@@ -470,6 +487,29 @@ mod tests {
     struct ForbiddenProbe;
 
     struct EchoStructuredScript;
+
+    fn register_agent_test_tool(name: &str, parameters: Vec<RuntimeAIParameter>) {
+        crate::runtime_tools::register_runtime_tool(RuntimeToolMetadata {
+            name: name.to_string(),
+            display_name: name.to_string(),
+            description: "Test-only Agent tool metadata".to_string(),
+            tool_kind: "local".to_string(),
+            parameters,
+            outputs: vec![],
+            destructive: false,
+            readonly: true,
+            idempotent: true,
+            open_world: false,
+            secret: false,
+            agent_enabled: true,
+            jev_enabled: true,
+            workflow_enabled: false,
+            required_capabilities: vec![],
+            endpoint_id: "test".to_string(),
+            service: "test".to_string(),
+            method: "execute".to_string(),
+        });
+    }
 
     #[async_trait]
     impl DynamicExecute for ForbiddenProbe {
@@ -507,6 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_registered_tool_when_it_is_not_active_for_agent() {
+        register_agent_test_tool("ForbiddenProbe", vec![]);
         let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
         crate::AssistantContext::set_active_tools(&cache, Vec::new())
             .await
@@ -526,6 +567,16 @@ mod tests {
     #[tokio::test]
     async fn executes_parsed_script_without_cli_roundtrip() {
         let script = "input visibility:String=\"好友可见\"\n1: EXEC BrowserClick --selector \"button[aria-label=\\\"发布\\\"]\"\nreturn";
+        register_agent_test_tool(
+            "EchoStructuredScript",
+            vec![RuntimeAIParameter {
+                name: "script".to_string(),
+                param_type: "String".to_string(),
+                required: true,
+                default_value: None,
+                description: "Script body".to_string(),
+            }],
+        );
         let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
         crate::AssistantContext::set_active_tools(&cache, vec!["EchoStructuredScript".to_string()])
             .await
@@ -617,6 +668,8 @@ mod tests {
             idempotent: true,
             open_world: false,
             secret: false,
+            agent_enabled: true,
+            jev_enabled: true,
             workflow_enabled: true,
             required_capabilities: vec![],
             endpoint_id: "test".to_string(),

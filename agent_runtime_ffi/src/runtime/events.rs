@@ -25,7 +25,7 @@ pub(super) async fn install_event_forwarders(
     Ok(())
 }
 
-fn forwarded_runtime_event_types() -> [&'static str; 12] {
+fn forwarded_runtime_event_types() -> [&'static str; 18] {
     [
         ai_assistant::events::types::FRONTEND_STATE_SNAPSHOT,
         ai_assistant::events::types::CONVERSATION_LEDGER_DELTA,
@@ -39,6 +39,12 @@ fn forwarded_runtime_event_types() -> [&'static str; 12] {
         WORKFLOW_NODE_FAILED_EVENT,
         WORKFLOW_TRACE_EVENT,
         WORKFLOW_EXECUTION_COMPLETED_EVENT,
+        JEV_EXECUTION_STARTED_EVENT,
+        JEV_DECISION_EVENT,
+        JEV_TOOL_STARTED_EVENT,
+        JEV_TOOL_COMPLETED_EVENT,
+        JEV_SNAPSHOT_UPDATED_EVENT,
+        JEV_EXECUTION_COMPLETED_EVENT,
     ]
 }
 

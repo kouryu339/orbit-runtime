@@ -586,6 +586,8 @@ pub(super) fn install_retrieval_system_from_config(
             idempotent: true,
             open_world: false,
             secret: false,
+            agent_enabled: true,
+            jev_enabled: true,
             workflow_enabled: false,
             required_capabilities: Vec::new(),
             endpoint_id: String::new(),

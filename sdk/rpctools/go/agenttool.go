@@ -39,21 +39,23 @@ type ToolOutputField struct {
 }
 
 type ToolDescriptor struct {
-	Name                 string            `json:"name"`
-	Description          string            `json:"description,omitempty"`
-	Parameters           []ToolParameter   `json:"parameters,omitempty"`
-	Outputs              []ToolOutputField `json:"outputs,omitempty"`
-	Readonly             bool              `json:"readonly"`
-	Destructive          bool              `json:"destructive"`
-	Idempotent           bool              `json:"idempotent"`
-	OpenWorld            bool              `json:"open_world"`
-	Secret               bool              `json:"secret"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Parameters  []ToolParameter   `json:"parameters,omitempty"`
+	Outputs     []ToolOutputField `json:"outputs,omitempty"`
+	Readonly    bool              `json:"readonly"`
+	Destructive bool              `json:"destructive"`
+	Idempotent  bool              `json:"idempotent"`
+	OpenWorld   bool              `json:"open_world"`
+	Secret      bool              `json:"secret"`
 	// WorkflowEnabled is nil by default, which means true for backward compatibility.
 	// Use Bool(false) to make this an Agent-only tool.
-	WorkflowEnabled      *bool             `json:"workflow_enabled,omitempty"`
-	Category             string            `json:"category,omitempty"`
-	DisplayName          string            `json:"display_name,omitempty"`
-	RequiredCapabilities []string          `json:"required_capabilities,omitempty"`
+	WorkflowEnabled      *bool    `json:"workflow_enabled,omitempty"`
+	AgentEnabled         *bool    `json:"agent_enabled,omitempty"`
+	JevEnabled           *bool    `json:"jev_enabled,omitempty"`
+	Category             string   `json:"category,omitempty"`
+	DisplayName          string   `json:"display_name,omitempty"`
+	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
 }
 
 func Bool(value bool) *bool { return &value }
@@ -65,21 +67,24 @@ type AIOutput struct {
 }
 
 type Context struct {
-	CallID            string
-	ToolCallID        string
-	IdempotencyKey    string
-	SessionID         string
-	ProviderID        string
-	ClusterID         string
-	RuntimeInstanceID string
-	ConversationID    string
-	AgentID           string
-	TurnID            string
-	WorkflowID        string
-	WorkflowRunID     string
-	NodeID            string
-	Permissions       []string
-	HostContext       any
+	CallID              string
+	ToolCallID          string
+	IdempotencyKey      string
+	SessionID           string
+	ProviderID          string
+	ClusterID           string
+	RuntimeInstanceID   string
+	ConversationID      string
+	AgentID             string
+	TurnID              string
+	WorkflowID          string
+	WorkflowRunID       string
+	JevName             string
+	JevRunID            string
+	JevSnapshotRevision uint64
+	NodeID              string
+	Permissions         []string
+	HostContext         any
 }
 
 func (Context) WorkspaceResolvePath(ctx context.Context, path string) (map[string]any, error) {
