@@ -264,6 +264,13 @@ impl PersistedMessage {
             inner: Message {
                 role: ledger.role.as_str().to_string(),
                 content: ledger.content.clone(),
+                parts: ledger
+                    .metadata
+                    .extra
+                    .get("parts")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default(),
                 cache_control: false,
                 tool_call_id,
                 name,

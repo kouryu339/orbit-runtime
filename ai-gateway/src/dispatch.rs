@@ -467,6 +467,7 @@ fn check_fc_args(resp: &LlmResponse) -> Result<(), String> {
 fn correction_message(bad_args: &str) -> ChatMessage {
     let preview = &bad_args[..bad_args.len().min(80)];
     ChatMessage {
+        parts: Vec::new(),
         role: "user".to_string(),
         content: format!(
             "[系统] 你上一次调用工具时 arguments 不是合法 JSON（收到：{:?}）。\

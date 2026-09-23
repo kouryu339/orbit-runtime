@@ -365,6 +365,14 @@ impl AgentRuntime {
     }
 
     pub async fn push_user_message(&self, input: &str) -> crate::Result<()> {
+        self.push_user_message_with_parts(input, Vec::new()).await
+    }
+
+    pub async fn push_user_message_with_parts(
+        &self,
+        input: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+    ) -> crate::Result<()> {
         if !input.is_empty() {
             if self.sm.current_state() == states::EXECUTING {
                 self.execution_control.notify_user_input_during_execution();
@@ -383,7 +391,16 @@ impl AgentRuntime {
             cache.delete(keys::LAST_STOP_REASON).await?;
             cache.delete(keys::NEXT_STATE_AFTER_SAYING).await?;
             let event_bus = self.sm.unit().event_bus();
-            AssistantContext::push_user_message_on_event_bus(&cache, &event_bus, input).await?;
+            let mut message = crate::context::Message::user(input);
+            message.parts = parts;
+            AssistantContext::push_message_with_metadata_and_display_on_event_bus(
+                &cache,
+                &event_bus,
+                message,
+                crate::ledger::LedgerMessageMeta::default(),
+                None,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -637,6 +654,7 @@ impl AgentRuntime {
             &cache,
             &event_bus,
             crate::context::Message {
+                parts: Vec::new(),
                 role: crate::context::roles::AGENT_REPORT.to_string(),
                 content: text,
                 cache_control: false,

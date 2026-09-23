@@ -29,6 +29,7 @@ futures-util = "0.3"
 
 # Base64 编码（图片/音频上传）
 base64 = "0.22"
+sha2 = "0.10"
 
 # 图像尺寸读取（OCR 返回 image_size）
 image = "0.25"

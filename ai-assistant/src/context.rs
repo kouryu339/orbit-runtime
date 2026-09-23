@@ -22,6 +22,8 @@ pub struct ToolCallRef {
 pub struct Message {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<llm_gateway::MessagePart>,
     #[serde(default)]
     pub cache_control: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +70,7 @@ impl Message {
         Self {
             role: role.to_string(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: None,
             name: None,

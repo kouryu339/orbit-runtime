@@ -623,6 +623,29 @@ impl Runtime {
         Ok(admission_from_value(result))
     }
 
+    pub fn import_image(&mut self, conversation_id: &str, source_path: &str) -> Result<Value> {
+        self.invoke(
+            "conversation.import_image",
+            json!({
+                "conversation_id": conversation_id, "source_path": source_path
+            }),
+        )
+    }
+
+    pub fn send_message_parts(
+        &mut self,
+        conversation_id: &str,
+        parts: Value,
+    ) -> Result<AdmissionResult> {
+        let result = self.invoke(
+            "conversation.send_message",
+            json!({
+                "conversation_id": conversation_id, "parts": parts
+            }),
+        )?;
+        Ok(admission_from_value(result))
+    }
+
     pub fn invoke(&mut self, command_type: &str, payload: Value) -> Result<Value> {
         self.invoke_with_options(command_type, payload, RuntimeCommandOptions::default())
     }

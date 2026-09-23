@@ -261,6 +261,17 @@ impl Conversation {
         self.gateway.send_with_admission(input, command_id).await
     }
 
+    pub async fn send_with_parts_and_admission(
+        &self,
+        input: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        self.gateway
+            .send_with_parts_and_admission(input, parts, command_id)
+            .await
+    }
+
     pub async fn set_focus(&self, agent_id: Option<String>) {
         self.gateway.set_focus(agent_id).await;
     }

@@ -1178,6 +1178,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     messages.push(llm_gateway::ChatMessage {
                         role: "assistant".to_string(),
                         content: msg.content.clone(),
+                        parts: Vec::new(),
                         cache_control: msg.cache_control,
                         tool_call_id: None,
                         name: None,
@@ -1204,8 +1205,10 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 }
             }
             "user" => {
-                if !msg.content.trim().is_empty() {
-                    messages.push(llm_gateway::ChatMessage::user(msg.content.clone()));
+                if !msg.content.trim().is_empty() || !msg.parts.is_empty() {
+                    let mut projected = llm_gateway::ChatMessage::user(msg.content.clone());
+                    projected.parts = msg.parts.clone();
+                    messages.push(projected);
                 }
             }
             "agent_report" => {
@@ -1605,6 +1608,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                                 AssistantContext::push_message_with_metadata_and_display_on_event_bus(
                                     &cache, &event_bus,
                                     crate::context::Message {
+                                        parts: Vec::new(),
                                         role: crate::context::roles::ASSISTANT.into(),
                                         content: stream.content, cache_control: false,
                                         tool_call_id: None, name: None, tool_calls: None,
@@ -2323,6 +2327,7 @@ async fn persist_paused_native_response(
         cache,
         event_bus,
         crate::context::Message {
+            parts: Vec::new(),
             role: crate::context::roles::ASSISTANT.to_string(),
             content: response.content.clone(),
             cache_control: false,
@@ -2422,6 +2427,7 @@ async fn build_thinking_payload_from_native_fc(
         .extra
         .insert("turn_id".to_string(), serde_json::json!(turn_id));
     let assistant = crate::context::Message {
+        parts: Vec::new(),
         role: crate::context::roles::ASSISTANT.to_string(),
         content: response.content.clone(),
         cache_control: false,
@@ -2622,6 +2628,7 @@ async fn build_thinking_payload_from_parsed_tool_calls(
         serde_json::json!(has_interactive_widget),
     );
     let assistant_msg = crate::context::Message {
+        parts: Vec::new(),
         role: crate::context::roles::ASSISTANT.to_string(),
         content: content.to_string(),
         cache_control: false,
@@ -2712,6 +2719,7 @@ async fn build_thinking_payload_from_plain_content(
     let mut metadata = crate::ledger::LedgerMessageMeta::default();
     metadata.display_content = Some(visible_reply.clone());
     let assistant_msg = crate::context::Message {
+        parts: Vec::new(),
         role: crate::context::roles::ASSISTANT.to_string(),
         content: canonical_content.to_string(),
         cache_control: false,
@@ -3485,6 +3493,7 @@ mod tests {
     #[test]
     fn native_fc_history_accepts_only_complete_tool_groups() {
         let assistant = crate::context::Message {
+            parts: Vec::new(),
             role: crate::context::roles::ASSISTANT.to_string(),
             content: String::new(),
             cache_control: false,
@@ -3525,6 +3534,7 @@ mod tests {
     #[test]
     fn native_fc_history_rejects_incomplete_multi_tool_group() {
         let assistant = crate::context::Message {
+            parts: Vec::new(),
             role: crate::context::roles::ASSISTANT.to_string(),
             content: String::new(),
             cache_control: false,

@@ -4,6 +4,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Ordered user input. Image bytes live in the Runtime media store, not history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagePart {
+    Text {
+        text: String,
+    },
+    Image {
+        image_id: String,
+        mime_type: String,
+        path: String,
+        sha256: String,
+    },
+}
+
 // ============================================================================
 // 通用
 // ============================================================================
@@ -35,6 +50,8 @@ pub struct ChatMessage {
     pub role: String,
     /// 文本内容
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<MessagePart>,
     #[serde(default)]
     pub cache_control: bool,
     /// tool 消息的配对 ID（对应 ToolCall.id）
@@ -60,6 +77,7 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: None,
             name: None,
@@ -72,6 +90,7 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: true,
             tool_call_id: None,
             name: None,
@@ -84,6 +103,7 @@ impl ChatMessage {
         Self {
             role: "user".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: None,
             name: None,
@@ -96,6 +116,7 @@ impl ChatMessage {
         Self {
             role: "assistant".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: None,
             name: None,
@@ -112,6 +133,7 @@ impl ChatMessage {
         Self {
             role: "assistant".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: None,
             name: None,
@@ -128,6 +150,7 @@ impl ChatMessage {
         Self {
             role: "tool".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: None,
             name: None,
@@ -145,6 +168,7 @@ impl ChatMessage {
         Self {
             role: "tool".into(),
             content: content.into(),
+            parts: Vec::new(),
             cache_control: false,
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),

@@ -109,6 +109,11 @@ pub fn log_provider_messages(
     if level == DiagnosticsLevel::Off {
         return;
     }
+    let sanitized = messages
+        .iter()
+        .map(redact_image_payload)
+        .collect::<Vec<_>>();
+    let messages = sanitized.as_slice();
     let signatures = messages.iter().map(provider_signature).collect::<Vec<_>>();
     let key = format!("provider:{label}:{provider_api}:{model}:{url}:stream={stream}");
     let changed_indexes = changed_indexes(
@@ -159,6 +164,31 @@ pub fn log_provider_messages(
             msg.get("name").and_then(Value::as_str).unwrap_or(""),
             provider_content_excerpt(content, 240)
         ));
+    }
+}
+
+fn redact_image_payload(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(redact_image_payload).collect()),
+        Value::Object(fields) => {
+            let mut fields = fields.clone();
+            if fields.get("type").and_then(Value::as_str) == Some("image") {
+                if let Some(source) = fields.get_mut("source") {
+                    *source = serde_json::json!({"type":"redacted"});
+                }
+            }
+            if fields.contains_key("image_url") {
+                fields.insert("image_url".to_string(), Value::String("[image]".into()));
+            }
+            Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(key, value)| (key, redact_image_payload(&value)))
+                    .collect(),
+            )
+        }
+        Value::String(value) if value.starts_with("data:image/") => Value::String("[image]".into()),
+        other => other.clone(),
     }
 }
 

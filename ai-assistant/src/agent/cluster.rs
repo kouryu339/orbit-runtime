@@ -241,6 +241,14 @@ impl AgentCluster {
     }
 
     pub async fn send_to_active(&self, input: &str) -> crate::Result<()> {
+        self.send_to_active_with_parts(input, Vec::new()).await
+    }
+
+    pub async fn send_to_active_with_parts(
+        &self,
+        input: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+    ) -> crate::Result<()> {
         if self.drivers.lock().await.shutdown {
             return Err(crate::Error::Other(anyhow::anyhow!(
                 "conversation is shutting down"
@@ -256,7 +264,7 @@ impl AgentCluster {
             input_len = input.len(),
             "agent send_to_active accepted"
         );
-        agent.push_user_message(input).await?;
+        agent.push_user_message_with_parts(input, parts).await?;
         if !driver_was_running {
             if agent.sm.current_state() == states::SAYING {
                 agent.sm.tick().await?;

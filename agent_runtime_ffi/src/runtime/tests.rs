@@ -52,6 +52,87 @@ fn unique_test_dir(name: &str) -> PathBuf {
 }
 
 #[test]
+fn image_import_is_conversation_scoped_and_persistent() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("image-import");
+    let source = root.join("source.png");
+    image::DynamicImage::new_rgba8(1, 1).save(&source).unwrap();
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+    let skills_dir = root.join("skills");
+    write_role_skill(
+        &skills_dir,
+        "image_test",
+        "role",
+        "# Persona\n\nDescribe images.",
+    );
+    facade.config.runtime.skills_dir = Some(skills_dir);
+    facade.config.agents = vec![AgentSection {
+        id: "image-agent".to_string(),
+        name: "Image Agent".to_string(),
+        is_default: true,
+        role: Some("image_test".to_string()),
+        ..AgentSection::default()
+    }];
+    register_test_llm(&mut facade, 7301);
+    facade.start().unwrap();
+    let conversation = facade
+        .create_conversation(
+            &json!({
+                "schema": "agent-runtime-conversation-options/v1",
+                "conversation_id": "image-owner",
+                "tenant_id": "local",
+                "user_id": "local-user"
+            })
+            .to_string(),
+        )
+        .unwrap();
+    let asset = facade
+        .import_image(&conversation.conversation_id, source.to_str().unwrap())
+        .unwrap();
+    assert_eq!(asset["mime_type"], "image/png");
+    assert_eq!(asset["width"], 1);
+    let image_id = asset["image_id"].as_str().unwrap();
+    let part = facade
+        .resolve_image_part(&conversation.conversation_id, image_id)
+        .unwrap();
+    let llm_gateway::MessagePart::Image { path, .. } = &part else {
+        panic!("expected image")
+    };
+    assert!(Path::new(&path).is_file());
+    let stored_path = path.clone();
+    let mut message = ai_assistant::context::Message::user("image");
+    message.parts = vec![part];
+    let record = ai_assistant::ledger::LedgerRecord::from_message(
+        1,
+        &conversation.conversation_id,
+        "image-agent",
+        "Image Agent",
+        message,
+        None,
+    );
+    let mut rebased = record.clone();
+    rebased.metadata.extra.get_mut("parts").unwrap()[0]["path"] = json!("Z:/old-machine/image.png");
+    facade
+        .normalize_snapshot_images(
+            &conversation.conversation_id,
+            std::slice::from_mut(&mut rebased),
+        )
+        .unwrap();
+    assert_eq!(rebased.metadata.extra["parts"][0]["path"], stored_path);
+    std::fs::remove_file(stored_path).unwrap();
+    assert!(facade
+        .normalize_snapshot_images(&conversation.conversation_id, &mut [record])
+        .is_err());
+    assert!(facade
+        .resolve_image_part(&conversation.conversation_id, "../invalid")
+        .is_err());
+    facade
+        .close_conversation(&conversation.conversation_id)
+        .unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn jev_configuration_and_registry_are_available_before_start() {
     let root = unique_test_dir("jev-registry");
     let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();

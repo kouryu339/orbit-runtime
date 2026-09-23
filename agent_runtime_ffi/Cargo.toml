@@ -26,5 +26,7 @@ thiserror = { workspace = true }
 inventory = { workspace = true }
 chrono = { workspace = true }
 uuid = { version = "1.6", features = ["v4", "serde"] }
+sha2 = "0.10"
+image = "0.25"
 
 [dev-dependencies]

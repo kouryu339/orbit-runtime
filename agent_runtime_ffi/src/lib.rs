@@ -681,12 +681,74 @@ fn invoke_command(
                 "restored": true,
             })
         }
+        "conversation.import_image" => {
+            let conversation_id = required_string(payload, "conversation_id")?;
+            let source_path = required_string(payload, "source_path")?;
+            facade.import_image(&conversation_id, &source_path)?
+        }
         "conversation.send_message" => {
             let conversation_id = required_string(payload, "conversation_id")?;
-            let content = required_string(payload, "content")?;
-            let admission = facade.send_message_with_admission(
+            let (content, parts) =
+                if let Some(raw_parts) = payload.get("parts") {
+                    let raw_parts = raw_parts.as_array().ok_or_else(|| {
+                        FfiError::invalid_argument("payload.parts must be an array")
+                    })?;
+                    if raw_parts.is_empty() || raw_parts.len() > 24 {
+                        return Err(FfiError::invalid_argument(
+                            "payload.parts must have 1 to 24 entries",
+                        ));
+                    }
+                    let mut parts = Vec::with_capacity(raw_parts.len());
+                    let mut text = String::new();
+                    let mut images = 0usize;
+                    for part in raw_parts {
+                        match part.get("type").and_then(Value::as_str) {
+                            Some("text") => {
+                                let value =
+                                    part.get("text").and_then(Value::as_str).ok_or_else(|| {
+                                        FfiError::invalid_argument("text part requires text")
+                                    })?;
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(value);
+                                parts.push(llm_gateway::MessagePart::Text {
+                                    text: value.to_owned(),
+                                });
+                            }
+                            Some("image") => {
+                                images += 1;
+                                if images > 8 {
+                                    return Err(FfiError::invalid_argument(
+                                        "at most 8 images per message",
+                                    ));
+                                }
+                                let id = part.get("image_id").and_then(Value::as_str).ok_or_else(
+                                    || FfiError::invalid_argument("image part requires image_id"),
+                                )?;
+                                parts.push(facade.resolve_image_part(&conversation_id, id)?);
+                            }
+                            _ => {
+                                return Err(FfiError::invalid_argument(
+                                    "part type must be text or image",
+                                ))
+                            }
+                        }
+                    }
+                    if images == 0 && text.trim().is_empty() {
+                        return Err(FfiError::invalid_argument("message text is empty"));
+                    }
+                    if text.trim().is_empty() {
+                        text = "[Image]".to_string();
+                    }
+                    (text, parts)
+                } else {
+                    (required_string(payload, "content")?, Vec::new())
+                };
+            let admission = facade.send_message_with_parts_and_admission(
                 &conversation_id,
                 &content,
+                parts,
                 command_id.to_owned(),
             )?;
             admission_json(admission)
@@ -888,7 +950,7 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
     CAPABILITIES
         .get_or_init(|| {
             let legacy =
-            CString::new(r#"{"schema":"agent-runtime-capabilities/v1","abi":{"major":1,"minor":3},"commands":["runtime.register_resources","runtime.register_llm","runtime.reload_llm","runtime.register_agent_cluster","runtime.set_auth_context","runtime.configure_providers","runtime.get_provider_definitions","runtime.get_tool_definitions","runtime.get_workflow_node_definitions","runtime.get_agent_cluster_definitions","runtime.get_rpc_endpoint_definitions","runtime.set_current_model","runtime.set_language","runtime.export_snapshot","workflow.get_reference_node","workflow.create","workflow.read","workflow.register","workflow.update","workflow.revise","workflow.validate_revision","workflow.compile","workflow.delete","workflow.list","workflow.convert.script_to_blueprint","workflow.convert.blueprint_to_script","workflow.execute","workflow.execute_script","workflow.start","workflow.run","conversation.spawn","conversation.spawn_from_snapshot","conversation.send_message","conversation.pause","conversation.close","conversation.export_snapshot","conversation.agent_tasks","conversation.materialize","conversation.import_snapshot","conversation.set_dynamic_snapshot","conversation.resolve_tool_permission","conversation.set_model","conversation.set_summary_model","conversation.compact_history","studio.open_workflow","studio.open_agent_test"],"events":{"transport":"pull","schema":"agent-runtime-event/v1","types":["conversation:created","conversation:closed","conversation.ledger_delta","conversation.state_delta","frontend:state_snapshot","workflow.resource_changed","workflow.execution_started","workflow.node_started","workflow.node_completed","workflow.node_failed","workflow.trace_event","workflow.execution_completed"],"lines":{"workflow":{"selector":"event_line=workflow","aggregate_id":"payload.workflow_id","conversation_scoped":false},"workflow_run":{"selector":"payload.workflow_run_id","aggregate_id":"payload.workflow_run_id","conversation_scoped":false}},"drain_after_shutdown":true},"ledger":{"delta_schema":"agent-runtime-ledger-delta/v1","ops":["append"],"idempotency":["conversation_id","record_id"]},"state":{"delta_schema":"agent-runtime-state-delta/v1","ops":["focus.set","conversation.model.set","agent.upsert","agent.retired","dynamic_snapshot.set","agent_task.upsert","agent_skills.set","agent_plan.set"],"agent_scoped":["agent.upsert","agent.retired","dynamic_snapshot.set","agent_skills.set","agent_plan.set"],"conversation_scoped":["focus.set","conversation.model.set","agent_task.upsert"],"host_owned":["dynamic_snapshot.set"]},"shutdown":{"timeout":true,"retryable":true},"threading":{"handle_calls":"safe_serialized","callbacks":false}}"#)
+            CString::new(r#"{"schema":"agent-runtime-capabilities/v1","abi":{"major":1,"minor":3},"commands":["runtime.register_resources","runtime.register_llm","runtime.reload_llm","runtime.register_agent_cluster","runtime.set_auth_context","runtime.configure_providers","runtime.get_provider_definitions","runtime.get_tool_definitions","runtime.get_workflow_node_definitions","runtime.get_agent_cluster_definitions","runtime.get_rpc_endpoint_definitions","runtime.set_current_model","runtime.set_language","runtime.export_snapshot","workflow.get_reference_node","workflow.create","workflow.read","workflow.register","workflow.update","workflow.revise","workflow.validate_revision","workflow.compile","workflow.delete","workflow.list","workflow.convert.script_to_blueprint","workflow.convert.blueprint_to_script","workflow.execute","workflow.execute_script","workflow.start","workflow.run","conversation.spawn","conversation.spawn_from_snapshot","conversation.import_image","conversation.send_message","conversation.pause","conversation.close","conversation.export_snapshot","conversation.agent_tasks","conversation.materialize","conversation.import_snapshot","conversation.set_dynamic_snapshot","conversation.resolve_tool_permission","conversation.set_model","conversation.set_summary_model","conversation.compact_history","studio.open_workflow","studio.open_agent_test"],"events":{"transport":"pull","schema":"agent-runtime-event/v1","types":["conversation:created","conversation:closed","conversation.ledger_delta","conversation.state_delta","frontend:state_snapshot","workflow.resource_changed","workflow.execution_started","workflow.node_started","workflow.node_completed","workflow.node_failed","workflow.trace_event","workflow.execution_completed"],"lines":{"workflow":{"selector":"event_line=workflow","aggregate_id":"payload.workflow_id","conversation_scoped":false},"workflow_run":{"selector":"payload.workflow_run_id","aggregate_id":"payload.workflow_run_id","conversation_scoped":false}},"drain_after_shutdown":true},"ledger":{"delta_schema":"agent-runtime-ledger-delta/v1","ops":["append"],"idempotency":["conversation_id","record_id"]},"state":{"delta_schema":"agent-runtime-state-delta/v1","ops":["focus.set","conversation.model.set","agent.upsert","agent.retired","dynamic_snapshot.set","agent_task.upsert","agent_skills.set","agent_plan.set"],"agent_scoped":["agent.upsert","agent.retired","dynamic_snapshot.set","agent_skills.set","agent_plan.set"],"conversation_scoped":["focus.set","conversation.model.set","agent_task.upsert"],"host_owned":["dynamic_snapshot.set"]},"shutdown":{"timeout":true,"retryable":true},"threading":{"handle_calls":"safe_serialized","callbacks":false}}"#)
                 .expect("static capabilities JSON contains no NUL");
             let mut capabilities: Value = serde_json::from_str(
                 legacy.to_str().expect("capabilities JSON must be UTF-8"),

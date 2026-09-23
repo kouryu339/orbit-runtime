@@ -923,7 +923,8 @@ impl RuntimeFacade {
             options.conversation_id.as_deref().unwrap_or_default(),
             "options.conversation_id",
         )?;
-        let snapshot = parse_conversation_snapshot(snapshot_json)?;
+        let mut snapshot = parse_conversation_snapshot(snapshot_json)?;
+        self.normalize_snapshot_images(&target_conversation_id, &mut snapshot.ledger)?;
         let tool_protocols = snapshot.tool_protocols.clone();
         let state_deltas = snapshot_state_deltas(&snapshot);
         self.apply_conversation_tool_protocols(&target_conversation_id, tool_protocols.as_ref())?;

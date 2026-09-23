@@ -66,6 +66,25 @@ load library
 completes. Continue polling during shutdown if the host needs final
 conversation-close, ledger, or state events.
 
+## Image input
+
+Import an image into a conversation before sending it. The Runtime copies the
+file into its managed `data_dir/media/images` store and returns an `image_id`.
+Then send ordered parts, for example:
+
+```json
+{"conversation_id":"conversation-1","parts":[
+  {"type":"text","text":"What is shown?"},
+  {"type":"image","image_id":"<image_id>"}
+]}
+```
+
+The commands are `conversation.import_image` (`conversation_id`, `source_path`)
+and `conversation.send_message` (`conversation_id`, `parts`). Python, Rust, Go,
+and C++ wrappers expose the same operations. Text-only `content` remains valid.
+Keep the media store alongside conversation snapshots; snapshots contain image
+references, not image bytes.
+
 ## Layers
 
 1. `c/include/agent_runtime.h`: frozen ABI declarations and ownership contract.

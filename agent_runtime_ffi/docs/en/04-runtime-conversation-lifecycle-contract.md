@@ -31,6 +31,28 @@ facts must be observed through the pull event stream. `conversation.close`
 closes the command gate, stops Agent drivers, and removes the conversation from
 the manager.
 
+### Image input
+
+Call `conversation.import_image` with `conversation_id` and a local `source_path`.
+The Runtime copies PNG, JPEG, WebP, or GIF data into the conversation's
+`data_dir/media/images` directory and returns an `image_id`, MIME type,
+dimensions, byte count, and SHA-256. Images are limited to 20 MiB and 100
+million pixels. Send ordered text and image parts with `conversation.send_message`:
+
+```json
+{"conversation_id":"...","parts":[
+  {"type":"text","text":"Describe this image"},
+  {"type":"image","image_id":"<returned image_id>"}
+]}
+```
+
+A message permits up to eight images and 24 parts. The old `content` form remains
+valid. Ledger and snapshots retain image references, not base64 data. The image
+store must survive recovery and be copied alongside snapshots when moving hosts.
+Missing or modified media causes an explicit request error. History compaction
+records the existence of images and subsequent text findings without inventing
+visual details.
+
 ## 4.3 Snapshots
 
 - `conversation.export_snapshot` exports `agent-runtime-conversation-snapshot/v1`.

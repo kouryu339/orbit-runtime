@@ -44,12 +44,13 @@ pub async fn call_inner(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
 ) -> crate::error::Result<LlmResponse> {
+    crate::image_content::validate_model(model, messages)?;
     let request_started = std::time::Instant::now();
     let client = http_client().clone();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
     let system = build_anthropic_system(messages);
-    let msgs = build_anthropic_messages(messages);
+    let msgs = build_anthropic_messages(messages)?;
     crate::diagnostics::log_provider_messages(
         "anthropic_compat",
         "anthropic_messages",
@@ -231,6 +232,7 @@ pub async fn call_inner_streaming<F>(
 where
     F: FnMut(crate::types::LlmStreamEvent) + Send,
 {
+    crate::image_content::validate_model(model, messages)?;
     use std::collections::BTreeMap;
 
     let request_started = std::time::Instant::now();
@@ -245,7 +247,7 @@ where
     let client = streaming_http_client().clone();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let system = build_anthropic_system(messages);
-    let msgs = build_anthropic_messages(messages);
+    let msgs = build_anthropic_messages(messages)?;
     let mut body = json!({
         "model": model,
         "max_tokens": max_tokens.unwrap_or(4096),
@@ -631,14 +633,14 @@ fn build_anthropic_system(messages: &[ChatMessage]) -> Option<Value> {
     (!blocks.is_empty()).then(|| json!(blocks))
 }
 
-fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<Value> {
-    messages
+fn build_anthropic_messages(messages: &[ChatMessage]) -> crate::Result<Vec<Value>> {
+    Ok(messages
         .iter()
         .filter(|m| m.role != "system")
-        .filter_map(|m| {
+        .map(|m| -> crate::Result<Option<Value>> {
             if let Some(ref id) = m.tool_call_id {
                 if id.trim().is_empty() {
-                    return None;
+                    return Ok(None);
                 }
                 let content = if m.content.trim().is_empty() {
                     "(empty tool result)"
@@ -653,14 +655,16 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<Value> {
                 if m.cache_control {
                     block["cache_control"] = json!({"type": "ephemeral"});
                 }
-                return Some(json!({
+                return Ok(Some(json!({
                     "role": "user",
                     "content": [block],
-                }));
+                })));
             }
 
             let mut blocks: Vec<Value> = Vec::new();
-            if !m.content.trim().is_empty() {
+            if !m.parts.is_empty() {
+                blocks.extend(crate::image_content::anthropic_blocks(m)?);
+            } else if !m.content.trim().is_empty() {
                 let mut block = json!({
                     "type": "text",
                     "text": m.content,
@@ -687,15 +691,18 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> Vec<Value> {
             }
 
             if blocks.is_empty() {
-                return None;
+                return Ok(None);
             }
 
-            Some(json!({
+            Ok(Some(json!({
                 "role": m.role,
                 "content": blocks,
-            }))
+            })))
         })
-        .collect()
+        .collect::<crate::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 #[cfg(test)]
@@ -712,7 +719,7 @@ mod tests {
 
         assert!(build_anthropic_system(&messages).is_none());
 
-        let projected = build_anthropic_messages(&messages);
+        let projected = build_anthropic_messages(&messages).unwrap();
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0]["role"], "user");
         assert_eq!(projected[0]["content"][0]["type"], "text");
@@ -735,7 +742,7 @@ mod tests {
         let mut message = ChatMessage::user("conversation prefix");
         message.cache_control = true;
 
-        let projected = build_anthropic_messages(&[message]);
+        let projected = build_anthropic_messages(&[message]).unwrap();
 
         assert_eq!(projected[0]["content"][0]["text"], "conversation prefix");
         assert_eq!(
@@ -749,7 +756,7 @@ mod tests {
         let mut message = ChatMessage::tool_with_id("result", "call-1", "Tool");
         message.cache_control = true;
 
-        let projected = build_anthropic_messages(&[message]);
+        let projected = build_anthropic_messages(&[message]).unwrap();
 
         assert_eq!(projected[0]["content"][0]["type"], "tool_result");
         assert_eq!(
@@ -765,7 +772,7 @@ mod tests {
         let mut tool = ChatMessage::user("");
         tool.tool_call_id = Some("call-1".to_string());
 
-        let projected = build_anthropic_messages(&[assistant, tool]);
+        let projected = build_anthropic_messages(&[assistant, tool]).unwrap();
 
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0]["role"], "user");

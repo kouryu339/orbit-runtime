@@ -216,6 +216,10 @@ impl LedgerMessageMeta {
     }
 
     pub fn preserve_message_protocol(&mut self, message: &Message) {
+        if !message.parts.is_empty() {
+            self.extra
+                .insert("parts".to_string(), serde_json::json!(message.parts));
+        }
         if let Some(call_id) = message.tool_call_id.as_ref() {
             self.extra
                 .insert("tool_call_id".to_string(), serde_json::json!(call_id));
@@ -428,7 +432,17 @@ impl LedgerRecord {
 
     pub fn to_context_message(&self) -> Option<Message> {
         match self.role {
-            LedgerRole::User => Some(Message::user(&self.content)),
+            LedgerRole::User => {
+                let mut message = Message::user(&self.content);
+                message.parts = self
+                    .metadata
+                    .extra
+                    .get("parts")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default();
+                Some(message)
+            }
             LedgerRole::Assistant => {
                 let tool_calls = self
                     .metadata
@@ -451,6 +465,7 @@ impl LedgerRecord {
                     Some(Message {
                         role: crate::context::roles::ASSISTANT.to_string(),
                         content: self.content.clone(),
+                        parts: Vec::new(),
                         cache_control: false,
                         tool_call_id: None,
                         name: None,
@@ -622,6 +637,28 @@ fn format_agent_report_content(record: &LedgerRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_image_parts_survive_ledger_and_persistence_roundtrip() {
+        let mut message = Message::user("inspect");
+        message.parts = vec![
+            llm_gateway::MessagePart::Text {
+                text: "inspect".into(),
+            },
+            llm_gateway::MessagePart::Image {
+                image_id: "a".repeat(64),
+                mime_type: "image/png".into(),
+                path: "stored-image.png".into(),
+                sha256: "a".repeat(64),
+            },
+        ];
+        let record = LedgerRecord::from_message(1, "conversation", "agent", "Agent", message, None);
+        let restored: LedgerRecord =
+            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        assert_eq!(restored.to_context_message().unwrap().parts.len(), 2);
+        let persisted = crate::persistence::PersistedMessage::from_ledger(restored);
+        assert_eq!(persisted.inner.parts.len(), 2);
+    }
 
     fn record(id: u64, agent_id: &str, role: LedgerRole, content: &str) -> LedgerRecord {
         LedgerRecord {

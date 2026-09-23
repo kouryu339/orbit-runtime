@@ -52,6 +52,7 @@
 //! ```
 
 pub mod error;
+mod image_content;
 pub mod types;
 
 pub mod anthropic_compat;
@@ -75,8 +76,8 @@ pub mod nodes;
 // 重新导出常用类型
 pub use types::{
     AsrResponse, AsrSegment, BBox2D, ChatMessage, FunctionCall, FunctionDefinition, ImageSize,
-    LlmResponse, LlmStreamEvent, OcrResult, OcrResultItem, TokenUsage, ToolCall, ToolDefinition,
-    VlmResponse,
+    LlmResponse, LlmStreamEvent, MessagePart, OcrResult, OcrResultItem, TokenUsage, ToolCall,
+    ToolDefinition, VlmResponse,
 };
 
 // 重新导出错误类型 + 重试策略

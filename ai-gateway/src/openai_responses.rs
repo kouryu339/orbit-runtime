@@ -37,21 +37,21 @@ fn streaming_http_client() -> &'static Client {
     })
 }
 
-fn message_input(message: &ChatMessage) -> Vec<Value> {
+fn message_input(message: &ChatMessage) -> crate::Result<Vec<Value>> {
     if let Some(items) = message
         .provider_items
         .as_ref()
         .filter(|items| !items.is_empty())
     {
-        return items.clone();
+        return Ok(items.clone());
     }
     if message.role == "tool" {
         if let Some(call_id) = message.tool_call_id.as_deref() {
-            return vec![json!({
+            return Ok(vec![json!({
                 "type": "function_call_output",
                 "call_id": call_id,
                 "output": message.content,
-            })];
+            })]);
         }
     }
     if message.role == "assistant" {
@@ -72,10 +72,12 @@ fn message_input(message: &ChatMessage) -> Vec<Value> {
                     "arguments": call.function.arguments,
                 })
             }));
-            return items;
+            return Ok(items);
         }
     }
-    vec![json!({"role": message.role, "content": message.content})]
+    Ok(vec![
+        json!({"role": message.role, "content": crate::image_content::responses_content(message)?}),
+    ])
 }
 
 pub(crate) fn build_request_body(
@@ -86,8 +88,15 @@ pub(crate) fn build_request_body(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
-) -> Value {
-    let input = messages.iter().flat_map(message_input).collect::<Vec<_>>();
+) -> crate::Result<Value> {
+    crate::image_content::validate_model(model, messages)?;
+    let input = messages
+        .iter()
+        .map(message_input)
+        .collect::<crate::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     let mut body = json!({"model": model, "input": input});
     if !tools.is_empty() {
         body["tools"] = Value::Array(
@@ -120,7 +129,7 @@ pub(crate) fn build_request_body(
     if let Some(value) = max_tokens {
         body["max_output_tokens"] = json!(value);
     }
-    body
+    Ok(body)
 }
 
 pub(crate) fn parse_response(response: Value) -> crate::error::Result<LlmResponse> {
@@ -212,7 +221,7 @@ pub async fn call_inner(
         top_p,
         max_tokens,
         force_tool_name,
-    ));
+    )?);
     let key = std::sync::Arc::new(api_key.to_string());
     let url = std::sync::Arc::new(url);
     let runtime_headers = std::sync::Arc::new(crate::request_context::current_request_headers());
@@ -266,7 +275,7 @@ where
         top_p,
         max_tokens,
         force_tool_name,
-    );
+    )?;
     if require_tool_call && force_tool_name.is_none() {
         body["tool_choice"] = json!("required");
     }
@@ -574,7 +583,8 @@ mod tests {
             ChatMessage::assistant_with_tool_calls(response.tool_calls.clone().unwrap());
         assistant.provider_items = response.provider_items;
         let tool = ChatMessage::tool_with_id("ok", "call_1", "Read");
-        let body = build_request_body(&[assistant, tool], &[], "gpt-test", None, None, None, None);
+        let body = build_request_body(&[assistant, tool], &[], "gpt-test", None, None, None, None)
+            .unwrap();
         assert_eq!(body["input"][0]["type"], "function_call");
         assert_eq!(body["input"][1]["type"], "function_call_output");
     }
@@ -590,7 +600,7 @@ mod tests {
                 strict: Some(true),
             },
         };
-        let body = build_request_body(&[], &[tool], "gpt-test", None, None, None, None);
+        let body = build_request_body(&[], &[tool], "gpt-test", None, None, None, None).unwrap();
         assert_eq!(body["tools"][0]["name"], "Read");
         assert_eq!(body["tools"][0]["strict"], true);
         assert!(body["tools"][0].get("function").is_none());

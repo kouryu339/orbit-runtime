@@ -106,16 +106,17 @@ pub async fn call_inner(
     require_tool_call: bool,
     force_json: bool,
 ) -> crate::error::Result<LlmResponse> {
+    crate::image_content::validate_model(model, messages)?;
     let request_started = std::time::Instant::now();
     let client = http_client().clone();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let msgs: Vec<Value> = messages
         .iter()
-        .map(|m| {
+        .map(|m| -> crate::Result<Value> {
             let mut msg = json!({
                 "role": m.role,
-                "content": m.content,
+                "content": crate::image_content::openai_chat_content(m)?,
             });
 
             if let Some(ref tcs) = m.tool_calls {
@@ -130,7 +131,7 @@ pub async fn call_inner(
                         }
                     }))
                     .collect::<Vec<_>>());
-                if m.content.is_empty() {
+                if m.content.is_empty() && m.parts.is_empty() {
                     msg["content"] = Value::Null;
                 }
             }
@@ -145,9 +146,9 @@ pub async fn call_inner(
                 }
             }
 
-            msg
+            Ok(msg)
         })
-        .collect();
+        .collect::<crate::Result<Vec<_>>>()?;
 
     crate::diagnostics::log_provider_messages(
         "openai_compat",
@@ -650,6 +651,7 @@ pub async fn call_inner_streaming<F>(
 where
     F: FnMut(crate::types::LlmStreamEvent) + Send,
 {
+    crate::image_content::validate_model(model, messages)?;
     use std::collections::BTreeMap;
 
     let request_started = std::time::Instant::now();
@@ -658,15 +660,16 @@ where
 
     let msgs: Vec<Value> = messages
         .iter()
-        .map(|m| {
-            let mut msg = json!({ "role": m.role, "content": m.content });
+        .map(|m| -> crate::Result<Value> {
+            let mut msg =
+                json!({ "role": m.role, "content": crate::image_content::openai_chat_content(m)? });
             if let Some(ref tcs) = m.tool_calls {
                 msg["tool_calls"] =
                     json!(tcs.iter().map(|tc| json!({
                 "id": tc.id, "type": "function",
                 "function": { "name": tc.function.name, "arguments": tc.function.arguments }
             })).collect::<Vec<_>>());
-                if m.content.is_empty() {
+                if m.content.is_empty() && m.parts.is_empty() {
                     msg["content"] = Value::Null;
                 }
             }
@@ -678,9 +681,9 @@ where
                     msg["reasoning_content"] = json!(rc);
                 }
             }
-            msg
+            Ok(msg)
         })
-        .collect();
+        .collect::<crate::Result<Vec<_>>>()?;
 
     crate::diagnostics::log_provider_messages(
         "openai_compat",

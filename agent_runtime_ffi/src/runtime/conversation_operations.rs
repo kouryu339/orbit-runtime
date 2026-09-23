@@ -1,6 +1,170 @@
 use super::*;
+use sha2::{Digest, Sha256};
+
+const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+fn image_digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn image_format(format: image::ImageFormat) -> Option<(&'static str, &'static str)> {
+    match format {
+        image::ImageFormat::Png => Some(("image/png", "png")),
+        image::ImageFormat::Jpeg => Some(("image/jpeg", "jpg")),
+        image::ImageFormat::WebP => Some(("image/webp", "webp")),
+        image::ImageFormat::Gif => Some(("image/gif", "gif")),
+        _ => None,
+    }
+}
 
 impl RuntimeFacade {
+    fn conversation_image_dir(&self, conversation_id: &str) -> PathBuf {
+        let root = self.config.runtime.data_dir.clone().unwrap_or_else(|| {
+            resolve_config_storage_dir(self.config.config_dir.as_ref(), None, "data")
+        });
+        root.join("media")
+            .join("images")
+            .join(image_digest(conversation_id.as_bytes()))
+    }
+
+    pub fn import_image(
+        &self,
+        conversation_id: &str,
+        source_path: &str,
+    ) -> Result<serde_json::Value, RuntimeError> {
+        let conversation_id = non_empty_arg(conversation_id, "conversation_id")?;
+        self.require_conversation_owner(&conversation_id)?;
+        let source = Path::new(source_path);
+        let size = std::fs::metadata(source)
+            .map_err(|e| RuntimeError::InvalidConfig(format!("image file unavailable: {e}")))?
+            .len();
+        if size == 0 || size > MAX_IMAGE_BYTES as u64 {
+            return Err(RuntimeError::InvalidConfig(
+                "image must be 1 byte to 20 MiB".into(),
+            ));
+        }
+        let bytes = std::fs::read(source)
+            .map_err(|e| RuntimeError::InvalidConfig(format!("read image failed: {e}")))?;
+        if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+            return Err(RuntimeError::InvalidConfig(
+                "image must be 1 byte to 20 MiB".into(),
+            ));
+        }
+        let format = image::guess_format(&bytes)
+            .map_err(|e| RuntimeError::InvalidConfig(format!("invalid image: {e}")))?;
+        let (mime, extension) = image_format(format).ok_or_else(|| {
+            RuntimeError::InvalidConfig("supported images: PNG, JPEG, WebP, GIF".into())
+        })?;
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(|e| RuntimeError::InvalidConfig(format!("invalid image: {e}")))?
+            .into_dimensions()
+            .map_err(|e| RuntimeError::InvalidConfig(format!("invalid image dimensions: {e}")))?;
+        if width == 0 || height == 0 || (width as u64) * (height as u64) > 100_000_000 {
+            return Err(RuntimeError::InvalidConfig(
+                "image dimensions exceed limit".into(),
+            ));
+        }
+        let image_id = image_digest(&bytes);
+        let dir = self.conversation_image_dir(&conversation_id);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| RuntimeError::Internal(format!("create image store failed: {e}")))?;
+        let target = dir.join(format!("{image_id}.{extension}"));
+        if !target.exists() {
+            let temporary = dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+            std::fs::write(&temporary, &bytes)
+                .map_err(|e| RuntimeError::Internal(format!("store image failed: {e}")))?;
+            if let Err(error) = std::fs::rename(&temporary, &target) {
+                let _ = std::fs::remove_file(&temporary);
+                if !target.exists() {
+                    return Err(RuntimeError::Internal(format!(
+                        "publish image failed: {error}"
+                    )));
+                }
+            }
+        }
+        self.append_conversation_log(
+            &conversation_id,
+            "import_image",
+            json!({"image_id": image_id, "mime_type": mime, "bytes": bytes.len(), "width": width, "height": height}),
+        );
+        Ok(
+            json!({"image_id": image_id, "mime_type": mime, "width": width, "height": height, "bytes": bytes.len(), "sha256": image_id}),
+        )
+    }
+
+    pub fn resolve_image_part(
+        &self,
+        conversation_id: &str,
+        image_id: &str,
+    ) -> Result<llm_gateway::MessagePart, RuntimeError> {
+        if image_id.len() != 64 || !image_id.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(RuntimeError::InvalidConfig("invalid image_id".into()));
+        }
+        self.require_conversation_owner(conversation_id)?;
+        let dir = self.conversation_image_dir(conversation_id);
+        for (extension, mime) in [
+            ("png", "image/png"),
+            ("jpg", "image/jpeg"),
+            ("webp", "image/webp"),
+            ("gif", "image/gif"),
+        ] {
+            let path = dir.join(format!("{image_id}.{extension}"));
+            if path.is_file() {
+                let metadata = std::fs::metadata(&path).map_err(|e| {
+                    RuntimeError::InvalidConfig(format!("image {image_id} unavailable: {e}"))
+                })?;
+                if metadata.len() > MAX_IMAGE_BYTES as u64 {
+                    return Err(RuntimeError::InvalidConfig(format!(
+                        "image {image_id} exceeds 20 MiB"
+                    )));
+                }
+                let bytes = std::fs::read(&path).map_err(|e| {
+                    RuntimeError::InvalidConfig(format!("image {image_id} unavailable: {e}"))
+                })?;
+                if image_digest(&bytes) != image_id {
+                    return Err(RuntimeError::InvalidConfig(format!(
+                        "image {image_id} checksum mismatch"
+                    )));
+                }
+                return Ok(llm_gateway::MessagePart::Image {
+                    image_id: image_id.to_owned(),
+                    mime_type: mime.to_owned(),
+                    path: path.to_string_lossy().into_owned(),
+                    sha256: image_id.to_owned(),
+                });
+            }
+        }
+        Err(RuntimeError::InvalidConfig(format!(
+            "image {image_id} is unavailable for this conversation"
+        )))
+    }
+
+    pub(super) fn normalize_snapshot_images(
+        &self,
+        conversation_id: &str,
+        records: &mut [ai_assistant::ledger::LedgerRecord],
+    ) -> Result<(), RuntimeError> {
+        for record in records {
+            let Some(raw_parts) = record.metadata.extra.get("parts") else {
+                continue;
+            };
+            let mut parts: Vec<llm_gateway::MessagePart> =
+                serde_json::from_value(raw_parts.clone()).map_err(|e| {
+                    RuntimeError::InvalidConfig(format!("invalid snapshot message parts: {e}"))
+                })?;
+            for part in &mut parts {
+                if let llm_gateway::MessagePart::Image { image_id, .. } = part {
+                    *part = self.resolve_image_part(conversation_id, image_id)?;
+                }
+            }
+            record
+                .metadata
+                .extra
+                .insert("parts".to_owned(), serde_json::json!(parts));
+        }
+        Ok(())
+    }
     pub fn set_conversation_model_with_admission(
         &self,
         conversation_id: &str,
@@ -111,8 +275,14 @@ impl RuntimeFacade {
         spawn_json: &str,
         snapshot_json: &str,
     ) -> Result<ConversationInfo, RuntimeError> {
-        let snapshot = parse_conversation_snapshot(snapshot_json)?;
+        let mut snapshot = parse_conversation_snapshot(snapshot_json)?;
         let info = self.spawn_conversation(spawn_json)?;
+        if let Err(error) =
+            self.normalize_snapshot_images(&info.conversation_id, &mut snapshot.ledger)
+        {
+            let _ = self.close_conversation(&info.conversation_id);
+            return Err(error);
+        }
         let tool_protocols = snapshot.tool_protocols.clone();
         let state_deltas = snapshot_state_deltas(&snapshot);
         if let Err(error) =
@@ -603,6 +773,16 @@ impl RuntimeFacade {
         content: &str,
         command_id: String,
     ) -> Result<ai_assistant::gateway::AdmissionResult, RuntimeError> {
+        self.send_message_with_parts_and_admission(conversation_id, content, Vec::new(), command_id)
+    }
+
+    pub fn send_message_with_parts_and_admission(
+        &self,
+        conversation_id: &str,
+        content: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+        command_id: String,
+    ) -> Result<ai_assistant::gateway::AdmissionResult, RuntimeError> {
         self.append_conversation_log(
             conversation_id,
             "send_message_with_admission",
@@ -667,7 +847,12 @@ impl RuntimeFacade {
                 renewer_stop_rx,
             ));
             let send_result = manager
-                .send_message_with_admission(&conversation_id, &content, Some(command_id))
+                .send_message_with_parts_and_admission(
+                    &conversation_id,
+                    &content,
+                    parts,
+                    Some(command_id),
+                )
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()));
             let _ = stop_renewer.send(true);

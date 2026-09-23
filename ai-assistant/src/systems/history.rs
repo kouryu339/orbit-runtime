@@ -21,9 +21,25 @@ pub struct PreparedCompaction {
 /// Conservative fallback until a provider-specific tokenizer is available.
 /// Includes protocol fields, not just visible content. This is not an exact count.
 pub fn estimate_tokens<T: serde::Serialize + ?Sized>(value: &T) -> usize {
-    serde_json::to_string(value)
-        .map(|s| s.len().div_ceil(3))
+    serde_json::to_value(value)
+        .map(|json| {
+            json.to_string()
+                .len()
+                .div_ceil(3)
+                .saturating_add(count_image_parts(&json).saturating_mul(8192))
+        })
         .unwrap_or(usize::MAX)
+}
+
+fn count_image_parts(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(items) => items.iter().map(count_image_parts).sum(),
+        serde_json::Value::Object(fields) => {
+            usize::from(fields.get("type").and_then(serde_json::Value::as_str) == Some("image"))
+                + fields.values().map(count_image_parts).sum::<usize>()
+        }
+        _ => 0,
+    }
 }
 
 pub fn input_budget(model_uid: u32) -> usize {
@@ -269,10 +285,19 @@ fn summary_input(records: &[&LedgerRecord]) -> Vec<llm_gateway::ChatMessage> {
     let entries: Vec<_> = records
         .iter()
         .map(|record| {
+            let mut message = record.to_context_message();
+            if let Some(message) = message.as_mut() {
+                for part in &message.parts {
+                    if let llm_gateway::MessagePart::Image { image_id, mime_type, .. } = part {
+                        message.content.push_str(&format!("\n[image attachment {image_id} ({mime_type}); visual details are unavailable to the summarizer]"));
+                    }
+                }
+                message.parts.clear();
+            }
             serde_json::json!({
                 "record_id": record.record_id,
                 "role": record.role,
-                "message": record.to_context_message(),
+                "message": message,
             })
         })
         .collect();

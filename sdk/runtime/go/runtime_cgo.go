@@ -418,6 +418,40 @@ func (r *Runtime) SendMessage(ctx context.Context, conversationID string, conten
 	return err
 }
 
+func (r *Runtime) ImportImage(ctx context.Context, conversationID string, sourcePath string) (map[string]any, error) {
+	raw, err := r.invoke(ctx, "conversation.import_image", map[string]any{
+		"conversation_id": conversationID,
+		"source_path":     sourcePath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *Runtime) SendMessagePartsAdmission(ctx context.Context, conversationID string, parts []map[string]string) (AdmissionResult, error) {
+	raw, err := r.invoke(ctx, "conversation.send_message", map[string]any{
+		"conversation_id": conversationID,
+		"parts":           parts,
+	})
+	if err != nil {
+		return AdmissionResult{}, err
+	}
+	var admission struct {
+		CommandID string `json:"command_id"`
+		Decision  string `json:"decision"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &admission); err != nil {
+		return AdmissionResult{}, err
+	}
+	return AdmissionResult{CommandID: admission.CommandID, Accepted: admission.Decision == "accepted", Decision: admission.Decision, RejectReason: admission.Reason}, nil
+}
+
 func (r *Runtime) SendMessageAdmission(
 	ctx context.Context,
 	conversationID string,

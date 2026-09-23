@@ -140,6 +140,7 @@ impl SystemOperation for AppendLedgerMessageSystem {
             if input.display.is_some() || input.tool_call_id.is_some() || input.tool_name.is_some()
             {
                 let mut message = Message {
+                    parts: Vec::new(),
                     role: input.role.as_str().to_string(),
                     content: input.content,
                     cache_control: false,

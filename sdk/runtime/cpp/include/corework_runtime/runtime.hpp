@@ -1006,6 +1006,23 @@ public:
         return send_message_admission(conversation_id, content).json;
     }
 
+    std::string import_image(const std::string& conversation_id, const std::string& source_path)
+    {
+        return invoke("conversation.import_image",
+            std::string("{\"conversation_id\":") + detail::quote(conversation_id)
+                + ",\"source_path\":" + detail::quote(source_path) + "}");
+    }
+
+    AdmissionResult send_message_parts_admission(
+        const std::string& conversation_id,
+        const std::string& parts_json,
+        RuntimeCommandOptions options = {})
+    {
+        return admission_from_result(invoke("conversation.send_message",
+            std::string("{\"conversation_id\":") + detail::quote(conversation_id)
+                + ",\"parts\":" + parts_json + "}", std::move(options)));
+    }
+
     AdmissionResult pause_admission(
         const std::string& conversation_id,
         RuntimeCommandOptions options = {})

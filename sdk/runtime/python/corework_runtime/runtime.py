@@ -918,6 +918,18 @@ class Runtime:
             {"conversation_id": conversation_id, "content": content},
         )
 
+    def import_image(self, conversation_id: str, source_path: str | Path) -> Any:
+        return self.invoke(
+            "conversation.import_image",
+            {"conversation_id": conversation_id, "source_path": str(source_path)},
+        )
+
+    def send_message_parts(self, conversation_id: str, parts: list[dict[str, str]]) -> Any:
+        return self.invoke(
+            "conversation.send_message",
+            {"conversation_id": conversation_id, "parts": parts},
+        )
+
     def pause_conversation(
         self, conversation_id: str, mode: str = "wait_for_tool"
     ) -> Any:

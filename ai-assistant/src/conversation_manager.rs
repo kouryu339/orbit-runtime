@@ -234,6 +234,19 @@ impl ConversationManager {
             .await
     }
 
+    pub async fn send_message_with_parts_and_admission(
+        &self,
+        conversation_id: &str,
+        content: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        self.require_runtime(conversation_id)
+            .await?
+            .send_message_with_parts_and_admission(content, parts, command_id)
+            .await
+    }
+
     pub async fn request_pause_with_admission(
         &self,
         conversation_id: &str,
@@ -760,12 +773,23 @@ impl ConversationRuntime {
         content: &str,
         command_id: Option<String>,
     ) -> Result<crate::gateway::AdmissionResult> {
+        self.send_message_with_parts_and_admission(content, Vec::new(), command_id)
+            .await
+    }
+
+    pub async fn send_message_with_parts_and_admission(
+        &self,
+        content: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
         let _guard = self.lock_command().await?;
         let headers = self.effective_llm_request_headers();
         llm_gateway::request_context::scope_request_headers(
             headers,
             self.allow_insecure_llm_request_headers,
-            self.conversation.send_with_admission(content, command_id),
+            self.conversation
+                .send_with_parts_and_admission(content, parts, command_id),
         )
         .await
     }

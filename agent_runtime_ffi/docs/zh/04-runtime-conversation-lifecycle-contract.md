@@ -26,6 +26,26 @@ Cluster 和 Agent 实例。成功结果给出 conversation/scope/tenant/user/cre
 accepted 只说明命令获准，后续事实由 pull event 流观察。`conversation.close` 关闭命令
 门、停止 Agent drivers 并从 manager 移除会话。
 
+### 图片输入
+
+宿主先调用 `conversation.import_image`，传入 `conversation_id` 和本机 `source_path`。
+Runtime 将 PNG/JPEG/WebP/GIF 复制到其 `data_dir/media/images` 下的会话专属目录，
+返回 `image_id`、MIME、尺寸、字节数及 SHA-256。单张图片最多 20 MiB、1 亿像素。
+随后调用 `conversation.send_message`：
+
+```json
+{"conversation_id":"...","parts":[
+  {"type":"text","text":"请描述这张图片"},
+  {"type":"image","image_id":"<import_image 返回值>"}
+]}
+```
+
+内容块保持输入顺序；每条消息最多 8 张图片、24 个内容块。旧的 `content` 字符串
+调用保持不变。Ledger 和快照只保存图片引用，不保存 base64；模型请求时才读取文件并
+校验 SHA-256。已知不支持图片的模型会拒绝请求。媒体目录必须与快照一起保留；迁移
+到另一宿主时也需要复制对应媒体目录，缺失或被修改的图片会导致明确错误。历史压缩
+只记录图片存在及后续文字结论，不会凭空生成图片的视觉描述。
+
 ## 4.3 快照
 
 - `conversation.export_snapshot` 导出 `agent-runtime-conversation-snapshot/v1`。

@@ -641,6 +641,16 @@ impl AgentGateway {
         input: &str,
         command_id: Option<String>,
     ) -> crate::Result<AdmissionResult> {
+        self.send_with_parts_and_admission(input, Vec::new(), command_id)
+            .await
+    }
+
+    pub async fn send_with_parts_and_admission(
+        &self,
+        input: &str,
+        parts: Vec<llm_gateway::MessagePart>,
+        command_id: Option<String>,
+    ) -> crate::Result<AdmissionResult> {
         let command = crate::admission::Command::SendMessage {
             content: input.to_string(),
         };
@@ -649,9 +659,9 @@ impl AgentGateway {
             crate::admission::Decision::Accepted { .. } => {
                 if admission.decision.inserted_during_state().is_some() {
                     let agent = self.cluster.active_agent().await?;
-                    agent.push_user_message(input).await?;
+                    agent.push_user_message_with_parts(input, parts).await?;
                 } else {
-                    self.cluster.send_to_active(input).await?;
+                    self.cluster.send_to_active_with_parts(input, parts).await?;
                 }
             }
             crate::admission::Decision::Rejected { .. } => {}
