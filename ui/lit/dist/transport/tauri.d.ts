@@ -1,4 +1,4 @@
-import { type CommandResult, type ConversationConnectContext, type ConversationConnection, type ConversationTransport, type ConversationTransportEvent, type ConversationTransportHandlers, type SendMessageRequest, type SendResult, type ResolveToolPermissionRequest } from '../host/types.js';
+import { type CommandResult, type ConversationConnectContext, type ConversationConnection, type ConversationTransport, type ConversationTransportEvent, type ConversationTransportHandlers, type SendMessageRequest, type SendResult, type ImportImageRequest, type ImportedImage, type ResolveToolPermissionRequest } from '../host/types.js';
 import type { RuntimeEventEnvelope } from '../protocol/types.js';
 export type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 export type TauriListen = <T>(event: string, handler: (event: {
@@ -23,6 +23,7 @@ export type TauriConversationTransportConfig = {
     };
     prepareArgs?: (context: ConversationConnectContext) => Record<string, unknown> | Promise<Record<string, unknown>>;
     sendArgs?: (request: SendMessageRequest) => Record<string, unknown> | Promise<Record<string, unknown>>;
+    imageImport?: (request: ImportImageRequest) => Promise<ImportedImage>;
     commandArgs?: (conversationId: string) => Record<string, unknown> | Promise<Record<string, unknown>>;
     snapshotArgs?: (conversationId: string | null) => Record<string, unknown> | Promise<Record<string, unknown>>;
     permissionArgs?: (request: ResolveToolPermissionRequest) => Record<string, unknown> | Promise<Record<string, unknown>>;
@@ -31,6 +32,9 @@ export type TauriConversationTransportConfig = {
 export declare class TauriConversationTransport implements ConversationTransport {
     readonly contract: "agent-conversation-transport/v1";
     readonly id: string;
+    readonly imageInput?: {
+        importImage(request: ImportImageRequest): Promise<ImportedImage>;
+    };
     private readonly config;
     private readonly unlisten;
     private handlers;

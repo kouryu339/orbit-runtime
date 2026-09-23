@@ -191,6 +191,21 @@ describe('TauriConversationTransport', () => {
         metadata: undefined,
       },
     });
+    await transport.send({
+      conversationId,
+      content: 'look',
+      clientMessageId: 'client-image',
+      parts: [{ type: 'text', text: 'look' }, { type: 'image', image_id: 'a'.repeat(64) }],
+    });
+    expect(invoke).toHaveBeenCalledWith('ai_send_message', {
+      args: {
+        conversationId: 'c-1',
+        content: 'look',
+        parts: [{ type: 'text', text: 'look' }, { type: 'image', image_id: 'a'.repeat(64) }],
+        clientMessageId: 'client-image',
+        metadata: undefined,
+      },
+    });
     expect(invoke).toHaveBeenCalledWith('ai_pause_conversation', {
       args: { conversationId: 'c-1' },
     });

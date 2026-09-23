@@ -1,4 +1,4 @@
-import { type CommandResult, type ConversationConnectContext, type ConversationConnection, type ConversationTransport, type ConversationTransportEvent, type ConversationTransportHandlers, type SendMessageRequest, type SendResult, type ResolveToolPermissionRequest } from '../host/types.js';
+import { type CommandResult, type ConversationConnectContext, type ConversationConnection, type ConversationTransport, type ConversationTransportEvent, type ConversationTransportHandlers, type SendMessageRequest, type SendResult, type ImportImageRequest, type ImportedImage, type ResolveToolPermissionRequest } from '../host/types.js';
 import type { RuntimeEventEnvelope } from '../protocol/types.js';
 export type HttpSseTransportConfig = {
     id?: string;
@@ -16,10 +16,14 @@ export type HttpSseTransportConfig = {
     mapContext?: (value: unknown, context: ConversationConnectContext) => ConversationTransportEvent[];
     mapEvent?: (envelope: RuntimeEventEnvelope) => ConversationTransportEvent[];
     createSendBody?: (request: SendMessageRequest) => unknown;
+    imageImport?: (request: ImportImageRequest) => Promise<ImportedImage>;
 };
 export declare class HttpSseConversationTransport implements ConversationTransport {
     readonly contract: "agent-conversation-transport/v1";
     readonly id: string;
+    readonly imageInput?: {
+        importImage(request: ImportImageRequest): Promise<ImportedImage>;
+    };
     private readonly config;
     private readonly fetchImplementation;
     private source;

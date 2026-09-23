@@ -19,6 +19,7 @@ import {
 class TestTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id = 'test';
+  imageInput?: ConversationTransport['imageInput'];
   disconnect = vi.fn();
   resolveToolPermission = vi.fn(async (): Promise<CommandResult> => ({ accepted: true }));
 
@@ -160,6 +161,63 @@ describe('AgentRuntimeConversationElement', () => {
 
     element.remove();
     expect(transport.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('imports selected images and sends Runtime image references with text', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new TestTransport();
+    const importImage = vi.fn(async () => ({ imageId: 'a'.repeat(64) }));
+    transport.imageInput = { importImage };
+    const send = vi.spyOn(transport, 'send');
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+    await element.updateComplete;
+
+    const input = element.shadowRoot!.querySelector<HTMLInputElement>('.image-input')!;
+    const file = new File(['image'], 'sample.png', { type: 'image/png' });
+    Object.defineProperty(input, 'files', { value: [file] });
+    input.dispatchEvent(new Event('change'));
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).toContain('sample.png');
+
+    expect(await element.send('What is this?')).toMatchObject({ accepted: true });
+    expect(importImage).toHaveBeenCalledWith({ conversationId: 'conversation-1', file });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'What is this?',
+      parts: [{ type: 'text', text: 'What is this?' }, { type: 'image', image_id: 'a'.repeat(64) }],
+    }));
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).not.toContain('sample.png');
+  });
+
+  it('keeps a selected image when import fails and shows ledger image references', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new TestTransport();
+    transport.imageInput = { importImage: vi.fn(async () => { throw new Error('Import failed'); }) };
+    const send = vi.spyOn(transport, 'send');
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+    await element.updateComplete;
+    const input = element.shadowRoot!.querySelector<HTMLInputElement>('.image-input')!;
+    Object.defineProperty(input, 'files', {
+      value: [new File(['image'], 'retry.png', { type: 'image/png' })],
+    });
+    input.dispatchEvent(new Event('change'));
+    expect(await element.send('')).toMatchObject({ accepted: false, rejectReason: 'Import failed' });
+    expect(send).not.toHaveBeenCalled();
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).toContain('retry.png');
+
+    element.state = conversationReducer(element.state, { type: 'snapshot', payload: {
+      revision: 2,
+      ledger_records: [{ record_id: 'image-user', role: 'user', content: 'See image',
+        metadata: { extra: { parts: [{ type: 'image', image_id: 'b'.repeat(64), path: 'private' }] } } }],
+    } });
+    await element.updateComplete;
+    expect(element.shadowRoot?.textContent).toContain('Image 1 · bbbbbbbbbbbb…');
+    expect(element.shadowRoot?.textContent).not.toContain('private');
   });
 
   it('renders a permission request and returns the decision through the transport', async () => {

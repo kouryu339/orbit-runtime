@@ -8,6 +8,8 @@ import {
   type ConversationTransportHandlers,
   type SendMessageRequest,
   type SendResult,
+  type ImportImageRequest,
+  type ImportedImage,
   type ResolveToolPermissionRequest,
 } from '../host/types.js';
 import type {
@@ -49,6 +51,7 @@ export type TauriConversationTransportConfig = {
   sendArgs?: (
     request: SendMessageRequest,
   ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  imageImport?: (request: ImportImageRequest) => Promise<ImportedImage>;
   commandArgs?: (
     conversationId: string,
   ) => Record<string, unknown> | Promise<Record<string, unknown>>;
@@ -81,6 +84,7 @@ type PendingMessage = {
 export class TauriConversationTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id: string;
+  readonly imageInput?: { importImage(request: ImportImageRequest): Promise<ImportedImage> };
 
   private readonly config: TauriConversationTransportConfig;
   private readonly unlisten = new Set<() => void>();
@@ -90,6 +94,7 @@ export class TauriConversationTransport implements ConversationTransport {
   constructor(config: TauriConversationTransportConfig) {
     this.config = config;
     this.id = config.id ?? 'tauri-events';
+    if (config.imageImport) this.imageInput = { importImage: config.imageImport };
   }
 
   async connect(
@@ -148,6 +153,7 @@ export class TauriConversationTransport implements ConversationTransport {
       args: {
         conversationId: request.conversationId,
         content: request.content,
+        ...(request.parts ? { parts: request.parts } : {}),
         clientMessageId: request.clientMessageId,
         metadata: request.metadata,
       },

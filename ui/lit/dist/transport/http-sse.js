@@ -2,12 +2,15 @@ import { EXTENSION_CONTRACT, TRANSPORT_CONTRACT, } from '../host/types.js';
 export class HttpSseConversationTransport {
     contract = TRANSPORT_CONTRACT;
     id;
+    imageInput;
     config;
     fetchImplementation;
     source = null;
     constructor(config = {}) {
         this.config = config;
         this.id = config.id ?? 'http-sse';
+        if (config.imageImport)
+            this.imageInput = { importImage: config.imageImport };
         this.fetchImplementation = config.fetch ?? globalThis.fetch.bind(globalThis);
     }
     async connect(context, handlers) {
@@ -52,6 +55,7 @@ export class HttpSseConversationTransport {
             signal: request.signal,
             body: JSON.stringify(this.config.createSendBody?.(request) ?? {
                 message: request.content,
+                ...(request.parts ? { parts: request.parts } : {}),
                 conversation_id: request.conversationId,
                 client_message_id: request.clientMessageId,
                 metadata: request.metadata,

@@ -82,6 +82,35 @@ Go SDK 可在 `runtimehost.Start(options)` 中传入 resource 和 cluster regist
 前端命令必须经过宿主白名单和身份校验。模型配置和资源注册不能直接暴露给浏览器。
 Agent 路由和焦点交接是 Runtime 内置机制；宿主只授权相关内置命令，不自己管理路由。
 
+### Lit 图片输入的宿主契约
+
+Lit 的附件按钮由 `ConversationTransport.imageInput` 控制。Tauri 和 HTTP/SSE
+传输均可在配置中提供 `imageImport({ conversationId, file })`；没有该回调时不显示
+附件按钮。`file` 是浏览器 `File`，不是 Runtime 可以直接打开的路径。宿主应：
+
+1. 校验当前用户可访问 `conversationId`，并把文件写入宿主可访问的临时路径；
+2. 调用 `conversation.import_image`，参数为
+   `{ "conversation_id": "...", "source_path": "..." }`；
+3. 将返回的 `image_id` 映射为 `{ imageId: "..." }`，无论成功或失败都清理临时副本。
+
+Runtime 自行保存导入后的媒体，不依赖宿主临时路径。导入成功后，Lit 在
+`SendMessageRequest.parts` 中按顺序发送文字和图片引用，例如：
+
+```json
+[
+  { "type": "text", "text": "这是什么？" },
+  { "type": "image", "image_id": "<导入返回的 image_id>" }
+]
+```
+
+宿主的消息发送入口须将 `parts` 原样映射到 `conversation.send_message` 的
+`parts` 字段，并同时传入 `conversation_id`。只有图片时，`parts` 可以没有文字块；
+纯文本仍可沿用 `content`。自定义 Tauri `sendArgs` 或 HTTP `createSendBody` 不能丢弃
+`request.parts`。前端列表从 Ledger `metadata.extra.parts` 读取图片 ID 并显示引用；
+本地预览 URL 只用于发送前预览，不进入快照。图片文件上限、类型、哈希和模型能力由
+Runtime 再次校验。HTTP 宿主须自行提供文件上传/暂存接口，这不是默认 `/api/chat`
+提供的功能。
+
 ## 5.3 转发事件
 
 Runtime Host SDK 通过事件轮询或 `EventSink` 得到完整的

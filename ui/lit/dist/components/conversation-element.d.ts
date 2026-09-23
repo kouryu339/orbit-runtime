@@ -111,6 +111,12 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
         permissionError: {
             state: boolean;
         };
+        pendingImages: {
+            state: boolean;
+        };
+        imageSending: {
+            state: boolean;
+        };
     };
     static styles: import("lit").CSSResult;
     transport: ConversationTransport | null;
@@ -146,6 +152,8 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private providerOperation;
     private permissionOperation;
     private permissionError;
+    private pendingImages;
+    private imageSending;
     private connection;
     private connectAbort;
     private localMessageSequence;
@@ -230,6 +238,10 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private emitConnectionChange;
     private emit;
     private onDraftInput;
+    private onImageInput;
+    private removePendingImage;
+    private clearPendingImages;
+    private recordImageIds;
     private resetComposerHeight;
     private onComposerKeydown;
     private onScroll;

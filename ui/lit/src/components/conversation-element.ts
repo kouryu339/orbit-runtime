@@ -47,6 +47,8 @@ type DisplayItem =
   | { kind: 'record'; key: string; record: LedgerRecord }
   | { kind: 'presentation'; key: string; item: ConversationPresentationItem };
 
+type PendingImage = { file: File; previewUrl: string };
+
 function isVisibleGatewayRecord(record: LedgerRecord): boolean {
   if (record.role !== 'gateway_message') return false;
   const subtype = record.metadata?.subtype;
@@ -115,6 +117,8 @@ export class AgentRuntimeConversationElement
     providerOperation: { state: true },
     permissionOperation: { state: true },
     permissionError: { state: true },
+    pendingImages: { state: true },
+    imageSending: { state: true },
   };
 
   static styles = css`
@@ -853,6 +857,17 @@ export class AgentRuntimeConversationElement
       font: 14px/1.5 var(--conversation-font-body);
     }
     textarea::placeholder { color: var(--conversation-text-muted); }
+    .image-input { display: none; }
+    .image-attachments { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+    .image-attachment, .image-reference {
+      display: inline-flex; align-items: center; gap: 7px;
+      max-width: 220px; padding: 5px 8px; border-radius: 9px;
+      border: 1px solid var(--conversation-border); font: 12px/1.3 var(--conversation-font-body);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .image-attachment img { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
+    .image-attachment .remove-image { width: 22px; height: 22px; flex: none; }
+    .image-reference { margin-top: 6px; border-color: currentColor; }
     .actions { display: flex; align-items: center; gap: 5px; }
     button {
       display: inline-grid;
@@ -935,6 +950,8 @@ export class AgentRuntimeConversationElement
   declare private providerOperation: string | null;
   declare private permissionOperation: string | null;
   declare private permissionError: { toolCallId: string; message: string } | null;
+  declare private pendingImages: PendingImage[];
+  declare private imageSending: boolean;
   private connection: ConversationConnection | null = null;
   private connectAbort: AbortController | null = null;
   private localMessageSequence = 0;
@@ -981,10 +998,13 @@ export class AgentRuntimeConversationElement
     this.providerOperation = null;
     this.permissionOperation = null;
     this.permissionError = null;
+    this.pendingImages = [];
+    this.imageSending = false;
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.clearPendingImages();
     this.persistenceUnsubscribe?.();
     this.persistenceUnsubscribe = null;
     this.disconnect();
@@ -1043,6 +1063,7 @@ export class AgentRuntimeConversationElement
 
   async openConversation(conversationId: string): Promise<void> {
     this.disconnect();
+    this.clearPendingImages();
     this.completedRevealKeys.clear();
     this.conversationId = conversationId;
     this.dispatch({ type: 'reset', conversationId });
@@ -1136,20 +1157,45 @@ export class AgentRuntimeConversationElement
 
   async send(content: string, options: SendOptions = {}): Promise<SendResult> {
     const value = content.trim();
-    if (!value) return { accepted: false, rejectReason: 'Message is empty.' };
+    if (!value && !this.pendingImages.length) return { accepted: false, rejectReason: 'Message is empty.' };
     if (!this.transport) return { accepted: false, rejectReason: 'Transport is not configured.' };
     if (!this.state.conversationId) return { accepted: false, rejectReason: 'Conversation is not ready.' };
-    if (!this.canCompose()) {
+    if (!this.canCompose() || this.imageSending) {
       return { accepted: false, rejectReason: 'Conversation is still running.' };
+    }
+
+    const images = [...this.pendingImages];
+    const conversationId = this.state.conversationId;
+    this.imageSending = true;
+    let parts: Array<{ type: 'text'; text: string } | { type: 'image'; image_id: string }> | undefined;
+    try {
+      if (images.length) {
+        const importer = this.transport.imageInput;
+        if (!importer) throw new Error('Image input is not supported by this host.');
+        parts = value ? [{ type: 'text', text: value }] : [];
+        for (const image of images) {
+          const imported = await importer.importImage({ conversationId, file: image.file });
+          if (!imported.imageId) throw new Error(`Image import returned no ID: ${image.file.name}`);
+          parts.push({ type: 'image', image_id: imported.imageId });
+        }
+      }
+    } catch (error) {
+      this.imageSending = false;
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('agent-conversation-error', { code: 'image-import-failed', message, recoverable: true });
+      return { accepted: false, rejectReason: message };
+    }
+    if (this.state.conversationId !== conversationId || !this.canCompose()) {
+      this.imageSending = false;
+      return { accepted: false, rejectReason: 'Conversation changed while importing images.' };
     }
 
     const clientMessageId =
       `local-user-${Date.now()}-${++this.localMessageSequence}`;
     this.dispatch({
       type: 'local-message-added',
-      message: createPendingUserMessage(clientMessageId, value),
+      message: createPendingUserMessage(clientMessageId, value || `${images.length} image${images.length === 1 ? '' : 's'}`),
     });
-    this.draft = '';
     this.resetComposerHeight();
     this.stickToBottom = true;
 
@@ -1157,6 +1203,7 @@ export class AgentRuntimeConversationElement
       const result = await this.transport.send({
         conversationId: this.state.conversationId,
         content: value,
+        parts,
         clientMessageId,
         metadata: { ...options.metadata, source: options.source },
         signal: options.signal,
@@ -1170,6 +1217,11 @@ export class AgentRuntimeConversationElement
               error: result.rejectReason ?? 'Message rejected.',
             },
       );
+      if (result.accepted) {
+        this.draft = '';
+        this.clearPendingImages();
+        this.resetComposerHeight();
+      }
       this.emit('agent-conversation-send', {
         conversationId: this.state.conversationId,
         clientMessageId,
@@ -1190,6 +1242,8 @@ export class AgentRuntimeConversationElement
         result,
       });
       return result;
+    } finally {
+      this.imageSending = false;
     }
   }
 
@@ -1405,6 +1459,14 @@ export class AgentRuntimeConversationElement
       <footer class="composer-wrap" part="composer">
         <div class="composer">
           <slot name="composer-prefix"></slot>
+          ${this.pendingImages.length ? html`<div class="image-attachments" aria-label="Selected images">
+            ${this.pendingImages.map((image) => html`<span class="image-attachment">
+              ${image.previewUrl ? html`<img src=${image.previewUrl} alt="" />` : nothing}
+              <span title=${image.file.name}>${image.file.name}</span>
+              <button class="secondary remove-image" type="button" aria-label=${`Remove ${image.file.name}`}
+                ?disabled=${this.imageSending} @click=${() => this.removePendingImage(image)}>×</button>
+            </span>`)}
+          </div>` : nothing}
           <textarea
             rows="1"
             aria-label="Message"
@@ -1416,6 +1478,14 @@ export class AgentRuntimeConversationElement
           ></textarea>
           <div class="actions">
             <slot name="composer-suffix"></slot>
+            ${this.transport?.imageInput ? html`
+              <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple @change=${this.onImageInput} />
+              <button class="secondary" type="button" aria-label="Attach images" title="Attach images"
+                ?disabled=${!this.canCompose() || this.imageSending || this.pendingImages.length >= 8}
+                @click=${() => this.renderRoot.querySelector<HTMLInputElement>('.image-input')?.click()}
+              ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l2-2h4l2 2h4v12H4z"></path><circle cx="12" cy="13" r="3"></circle></svg></button>
+            ` : nothing}
             ${this.state.runtimeState === 'thinking' ||
             this.state.runtimeState === 'executing'
               ? html`<button
@@ -1432,7 +1502,7 @@ export class AgentRuntimeConversationElement
               type="button"
               aria-label="Send message"
               title="Send message"
-              ?disabled=${!this.canCompose() || !this.draft.trim()}
+              ?disabled=${!this.canCompose() || this.imageSending || (!this.draft.trim() && !this.pendingImages.length)}
               @click=${() => void this.send(this.draft)}
             ><svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="m5 12 14-7-4.5 14-3-5.5L5 12Z"></path>
@@ -2351,8 +2421,13 @@ export class AgentRuntimeConversationElement
     }
     const record = item.record;
     if (record.role === 'user') {
+      const imageIds = this.recordImageIds(record);
       return html`<article class="message user" part="user-message">
         <div class="user-bubble">${displayText(record)}</div>
+        ${imageIds.map((imageId, index) => html`<span class="image-reference"
+          title=${imageId} aria-label=${`Image reference ${index + 1}`}>
+          Image ${index + 1} · ${imageId.slice(0, 12)}…
+        </span>`)}
       </article>`;
     }
     if (record.role === 'gateway_message') {
@@ -2609,6 +2684,48 @@ export class AgentRuntimeConversationElement
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }
 
+  private onImageInput(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    for (const file of files) {
+      if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) ||
+          file.size > 20 * 1024 * 1024 || this.pendingImages.length >= 8) {
+        this.emit('agent-conversation-error', {
+          code: 'invalid-image',
+          message: `Unsupported image, image larger than 20 MiB, or more than 8 images: ${file.name}`,
+          recoverable: true,
+        });
+        continue;
+      }
+      const previewUrl = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '';
+      this.pendingImages = [...this.pendingImages, { file, previewUrl }];
+    }
+  }
+
+  private removePendingImage(image: PendingImage): void {
+    this.pendingImages = this.pendingImages.filter((item) => item !== image);
+    if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+  }
+
+  private clearPendingImages(): void {
+    for (const image of this.pendingImages) {
+      if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+    }
+    this.pendingImages = [];
+  }
+
+  private recordImageIds(record: LedgerRecord): string[] {
+    const parts = record.metadata?.extra?.parts;
+    if (!Array.isArray(parts)) return [];
+    return parts.flatMap((part) => {
+      if (!part || typeof part !== 'object') return [];
+      const value = part as Record<string, unknown>;
+      return value.type === 'image' && typeof value.image_id === 'string'
+        ? [value.image_id] : [];
+    });
+  }
+
   private resetComposerHeight(): void {
     requestAnimationFrame(() => {
       const textarea = this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
@@ -2623,7 +2740,7 @@ export class AgentRuntimeConversationElement
       event.isComposing
     ) return;
     event.preventDefault();
-    if (this.canCompose() && this.draft.trim()) void this.send(this.draft);
+    if (this.canCompose() && (this.draft.trim() || this.pendingImages.length)) void this.send(this.draft);
   }
 
   private onScroll(event: Event): void {

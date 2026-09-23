@@ -9,6 +9,8 @@ import {
   type ConversationTransportHandlers,
   type SendMessageRequest,
   type SendResult,
+  type ImportImageRequest,
+  type ImportedImage,
   type ResolveToolPermissionRequest,
 } from '../host/types.js';
 import type {
@@ -38,11 +40,13 @@ export type HttpSseTransportConfig = {
     envelope: RuntimeEventEnvelope,
   ) => ConversationTransportEvent[];
   createSendBody?: (request: SendMessageRequest) => unknown;
+  imageImport?: (request: ImportImageRequest) => Promise<ImportedImage>;
 };
 
 export class HttpSseConversationTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id: string;
+  readonly imageInput?: { importImage(request: ImportImageRequest): Promise<ImportedImage> };
 
   private readonly config: HttpSseTransportConfig;
   private readonly fetchImplementation: typeof globalThis.fetch;
@@ -51,6 +55,7 @@ export class HttpSseConversationTransport implements ConversationTransport {
   constructor(config: HttpSseTransportConfig = {}) {
     this.config = config;
     this.id = config.id ?? 'http-sse';
+    if (config.imageImport) this.imageInput = { importImage: config.imageImport };
     this.fetchImplementation = config.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -106,6 +111,7 @@ export class HttpSseConversationTransport implements ConversationTransport {
       body: JSON.stringify(
         this.config.createSendBody?.(request) ?? {
           message: request.content,
+          ...(request.parts ? { parts: request.parts } : {}),
           conversation_id: request.conversationId,
           client_message_id: request.clientMessageId,
           metadata: request.metadata,

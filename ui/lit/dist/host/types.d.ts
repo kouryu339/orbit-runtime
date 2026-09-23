@@ -97,6 +97,19 @@ export type ConversationCommandRequest = {
 export type SendMessageRequest = ConversationCommandRequest & {
     content: string;
     clientMessageId: string;
+    parts?: Array<{
+        type: 'text';
+        text: string;
+    } | {
+        type: 'image';
+        image_id: string;
+    }>;
+};
+export type ImportImageRequest = ConversationCommandRequest & {
+    file: File;
+};
+export type ImportedImage = {
+    imageId: string;
 };
 export type SendResult = {
     accepted: boolean;
@@ -120,6 +133,9 @@ export interface ConversationTransport {
     readonly repository?: ConversationRepository;
     connect(context: ConversationConnectContext, handlers: ConversationTransportHandlers): Promise<ConversationConnection>;
     send(request: SendMessageRequest): Promise<SendResult>;
+    imageInput?: {
+        importImage(request: ImportImageRequest): Promise<ImportedImage>;
+    };
     pause?(request: ConversationCommandRequest): Promise<CommandResult>;
     close?(request: ConversationCommandRequest): Promise<CommandResult>;
     requestSnapshot?(request: ConversationCommandRequest): Promise<void>;
