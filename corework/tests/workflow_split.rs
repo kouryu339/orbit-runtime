@@ -51,3 +51,38 @@ return parts=split(input.value, ["-", ",", "，"])"#,
         );
     }
 }
+
+#[tokio::test]
+async fn split_null_produces_no_foreach_iterations() {
+    let blueprint = compile_chain_v2(
+        r#"input value:String
+$count = 0
+1: FOR split(input.value, [","])
+1.1: setvar count = add($count, 1)
+END
+return count=$count"#,
+    )
+    .unwrap();
+    let ctx = FrameworkState::initialize().unwrap().create_context();
+    let loaded = BlueprintLoader::new()
+        .load_from_json_str(&serde_json::to_string(&blueprint).unwrap(), &ctx)
+        .unwrap();
+    let mut exec = ExecutionContext::from_context(ctx);
+    loaded
+        .compiled
+        .initialize_defaults(&mut exec)
+        .await
+        .unwrap();
+
+    let output = loaded
+        .compiled
+        .executor()
+        .execute_with_params(
+            &mut exec,
+            HashMap::from([("value".into(), DataValue::null())]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(output["count"].as_f64(), Some(0.0));
+}

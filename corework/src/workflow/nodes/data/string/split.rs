@@ -10,9 +10,9 @@ use std::collections::HashMap;
 #[register_node(
     node_type = "Pure", version = "1.0.0", category = "String",
     display_name = "按{Separators}分割{Value}",
-    description = "按多个字面分隔符分割字符串；保留空项和空白，重叠时优先最长匹配；空分隔符无效",
+    description = "按多个字面分隔符分割字符串；null 返回空数组；保留空项和空白，重叠时优先最长匹配；空分隔符无效",
     permissions = 0,
-    data_in = ["Value:String@输入字符串", "Separators:Array<String>@自定义字面分隔符数组"],
+    data_in = ["Value:String@输入字符串；null 表示没有项目并返回空数组", "Separators:Array<String>@自定义字面分隔符数组"],
     data_out = ["Parts:Array<String>@分割后的字符串数组"]
 )]
 pub struct SplitNode;
@@ -28,8 +28,7 @@ impl SplitNode {
         let invalid = |message: &str| FrameworkError::InvalidData(format!("Split: {message}"));
         let value = inputs
             .get("Value")
-            .and_then(DataValue::as_str)
-            .ok_or_else(|| invalid("Value must be a string"))?;
+            .ok_or_else(|| invalid("Value must be a string or null"))?;
         let separators = inputs
             .get("Separators")
             .and_then(DataValue::as_array)
@@ -43,6 +42,15 @@ impl SplitNode {
                     .ok_or_else(|| invalid("each separator must be a non-empty string"))
             })
             .collect::<Result<Vec<_>>>()?;
+        if value.is_null() {
+            return Ok(HashMap::from([(
+                "Parts".to_string(),
+                DataValue::from_array(Vec::<String>::new(), "String"),
+            )]));
+        }
+        let value = value
+            .as_str()
+            .ok_or_else(|| invalid("Value must be a string or null"))?;
         separators.sort_unstable_by_key(|s| std::cmp::Reverse(s.len()));
         separators.dedup();
         let mut parts = Vec::new();
@@ -127,6 +135,35 @@ mod tests {
                 (
                     "Separators".into(),
                     DataValue::from_array(vec![""], "String")
+                ),
+            ]))
+            .is_err());
+    }
+
+    #[test]
+    fn null_value_returns_an_empty_string_array() {
+        let output = SplitNode
+            .evaluate(HashMap::from([
+                ("Value".into(), DataValue::null()),
+                (
+                    "Separators".into(),
+                    DataValue::from_array(vec![","], "String"),
+                ),
+            ]))
+            .unwrap();
+
+        assert_eq!(output["Parts"].type_name(), "Vec<String>");
+        assert!(output["Parts"]
+            .extract_array::<String>()
+            .unwrap()
+            .is_empty());
+
+        assert!(SplitNode
+            .evaluate(HashMap::from([
+                ("Value".into(), DataValue::null()),
+                (
+                    "Separators".into(),
+                    DataValue::from_array(vec![""], "String"),
                 ),
             ]))
             .is_err());
