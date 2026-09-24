@@ -786,7 +786,7 @@ export class AgentRuntimeConversationElement extends LitElement {
     textarea::placeholder { color: var(--conversation-text-muted); }
     .image-input { display: none; }
     .image-attachments { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
-    .image-attachment, .image-reference {
+    .image-attachment {
       display: inline-flex; align-items: center; gap: 7px;
       max-width: 220px; padding: 5px 8px; border-radius: 9px;
       border: 1px solid var(--conversation-border); font: 12px/1.3 var(--conversation-font-body);
@@ -794,7 +794,21 @@ export class AgentRuntimeConversationElement extends LitElement {
     }
     .image-attachment img { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
     .image-attachment .remove-image { width: 22px; height: 22px; flex: none; }
-    .image-reference { margin-top: 6px; border-color: currentColor; }
+    .image-reference {
+      display: inline-block;
+      margin-top: 6px;
+      padding: 4px 8px;
+      border: 1px solid var(--image-reference-color);
+      border-radius: 7px;
+      background: var(--image-reference-color);
+      color: #fff;
+      font: 12px/1.3 var(--conversation-font-body);
+    }
+    .image-reference.tone-0 { --image-reference-color: #8b3a52; }
+    .image-reference.tone-1 { --image-reference-color: #215b82; }
+    .image-reference.tone-2 { --image-reference-color: #27624f; }
+    .image-reference.tone-3 { --image-reference-color: #6f4b91; }
+    .image-reference.tone-4 { --image-reference-color: #8a4f1e; }
     .actions { display: flex; align-items: center; gap: 5px; }
     button {
       display: inline-grid;
@@ -1356,6 +1370,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             ?disabled=${!this.canCompose()}
             @input=${this.onDraftInput}
             @keydown=${this.onComposerKeydown}
+            @paste=${this.onComposerPaste}
           ></textarea>
           <div class="actions">
             <slot name="composer-suffix"></slot>
@@ -2254,11 +2269,13 @@ export class AgentRuntimeConversationElement extends LitElement {
         const record = item.record;
         if (record.role === 'user') {
             const imageIds = this.recordImageIds(record);
+            const message = displayText(record);
             return html `<article class="message user" part="user-message">
-        <div class="user-bubble">${displayText(record)}</div>
-        ${imageIds.map((imageId, index) => html `<span class="image-reference"
-          title=${imageId} aria-label=${`Image reference ${index + 1}`}>
-          Image ${index + 1} · ${imageId.slice(0, 12)}…
+        ${message && !(imageIds.length && message === '[Image]')
+                ? html `<div class="user-bubble">${message}</div>` : nothing}
+        ${imageIds.map((_, index) => html `<span class=${`image-reference tone-${index % 5}`}
+          aria-label=${`图片${index + 1}`}>
+          （图片${index + 1}）
         </span>`)}
       </article>`;
         }
@@ -2492,6 +2509,27 @@ export class AgentRuntimeConversationElement extends LitElement {
         const input = event.target;
         const files = Array.from(input.files ?? []);
         input.value = '';
+        this.addPendingImages(files);
+    }
+    onComposerPaste(event) {
+        if (!this.transport?.imageInput || !this.canCompose() || this.imageSending)
+            return;
+        const items = Array.from(event.clipboardData?.items ?? []);
+        const itemFiles = items
+            .filter((item) => item.kind === 'file')
+            .map((item) => item.getAsFile())
+            .filter((file) => file !== null && file.type.startsWith('image/'));
+        const files = itemFiles.length
+            ? itemFiles
+            : Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'));
+        if (!files.length)
+            return;
+        if (!items.some((item) => item.kind === 'string' && item.type === 'text/plain')) {
+            event.preventDefault();
+        }
+        this.addPendingImages(files);
+    }
+    addPendingImages(files) {
         for (const file of files) {
             if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) ||
                 file.size > 20 * 1024 * 1024 || this.pendingImages.length >= 8) {

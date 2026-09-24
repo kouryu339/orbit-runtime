@@ -52,7 +52,7 @@ class TestTransport implements ConversationTransport {
   }
 
   async send(request: SendMessageRequest) {
-    return { accepted: Boolean(request.content) };
+    return { accepted: Boolean(request.content || request.parts?.length) };
   }
 }
 
@@ -212,12 +212,65 @@ describe('AgentRuntimeConversationElement', () => {
 
     element.state = conversationReducer(element.state, { type: 'snapshot', payload: {
       revision: 2,
-      ledger_records: [{ record_id: 'image-user', role: 'user', content: 'See image',
-        metadata: { extra: { parts: [{ type: 'image', image_id: 'b'.repeat(64), path: 'private' }] } } }],
+      ledger_records: [
+        { record_id: 'image-user', role: 'user', content: 'See image',
+          metadata: { extra: { parts: [{ type: 'image', image_id: 'b'.repeat(64), path: 'private' }] } } },
+        { record_id: 'image-only', role: 'user', content: '[Image]',
+          metadata: { extra: { parts: [
+            { type: 'image', image_id: 'c'.repeat(64) },
+            { type: 'image', image_id: 'd'.repeat(64) },
+          ] } } },
+      ],
     } });
     await element.updateComplete;
-    expect(element.shadowRoot?.textContent).toContain('Image 1 · bbbbbbbbbbbb…');
+    expect(Array.from(element.shadowRoot?.querySelectorAll('.image-reference') ?? [], (item) => item.textContent?.trim()))
+      .toEqual(['（图片1）', '（图片1）', '（图片2）']);
+    expect(Array.from(element.shadowRoot?.querySelectorAll('.image-reference') ?? [], (item) =>
+      Array.from(item.classList).find((name) => name.startsWith('tone-'))))
+      .toEqual(['tone-0', 'tone-0', 'tone-1']);
     expect(element.shadowRoot?.textContent).not.toContain('private');
+    expect(element.shadowRoot?.textContent).not.toContain('bbbbbbbbbbbb');
+    expect(element.shadowRoot?.textContent).not.toContain('[Image]');
+  });
+
+  it('adds pasted clipboard images without changing pasted text', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new TestTransport();
+    const importImage = vi.fn(async () => ({ imageId: 'c'.repeat(64) }));
+    transport.imageInput = { importImage };
+    const send = vi.spyOn(transport, 'send');
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+    await element.updateComplete;
+
+    const textarea = element.shadowRoot!.querySelector('textarea')!;
+    const image = new File(['image'], 'clipboard.png', { type: 'image/png' });
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', { value: { items: [
+      { kind: 'file', type: 'image/png', getAsFile: () => image },
+    ] } });
+    textarea.dispatchEvent(paste);
+    await element.updateComplete;
+    expect(paste.defaultPrevented).toBe(true);
+    expect(element.shadowRoot?.textContent).toContain('clipboard.png');
+
+    const mixedPaste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(mixedPaste, 'clipboardData', { value: { items: [
+      { kind: 'string', type: 'text/plain' },
+      { kind: 'file', type: 'image/png', getAsFile: () => image },
+    ] } });
+    textarea.dispatchEvent(mixedPaste);
+    expect(mixedPaste.defaultPrevented).toBe(false);
+
+    expect(await element.send('')).toMatchObject({ accepted: true });
+    expect(importImage).toHaveBeenCalledWith({ conversationId: 'conversation-1', file: image });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      parts: [
+        { type: 'image', image_id: 'c'.repeat(64) },
+        { type: 'image', image_id: 'c'.repeat(64) },
+      ],
+    }));
   });
 
   it('renders a permission request and returns the decision through the transport', async () => {

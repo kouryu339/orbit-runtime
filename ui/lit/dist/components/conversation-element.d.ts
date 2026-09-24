@@ -239,6 +239,8 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private emit;
     private onDraftInput;
     private onImageInput;
+    private onComposerPaste;
+    private addPendingImages;
     private removePendingImage;
     private clearPendingImages;
     private recordImageIds;

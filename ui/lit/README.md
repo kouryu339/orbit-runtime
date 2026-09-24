@@ -26,10 +26,12 @@ loading and authorization belong to the host, never to the browser component.
 
 The attachment button appears when the transport provides `imageInput.importImage`.
 The component accepts up to eight PNG, JPEG, WebP, or GIF files (20 MiB each),
-shows local previews, and allows removal before sending. It calls the host's
+shows local previews, allows removal before sending, and also accepts images
+pasted into the message composer. Pasting text with an image keeps normal text
+paste behavior. It calls the host's
 importer for each file and sends the returned `imageId` in ordered message
 `parts`. A message can contain images without text. User messages display
-stable image-ID references from the Runtime ledger after sending or recovery;
+solid-color `（图片1）` references from the Runtime ledger after sending or recovery;
 local preview URLs are not persisted.
 
 The browser cannot supply a native path to `conversation.import_image`. The

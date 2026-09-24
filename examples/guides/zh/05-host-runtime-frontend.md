@@ -86,7 +86,8 @@ Agent 路由和焦点交接是 Runtime 内置机制；宿主只授权相关内�
 
 Lit 的附件按钮由 `ConversationTransport.imageInput` 控制。Tauri 和 HTTP/SSE
 传输均可在配置中提供 `imageImport({ conversationId, file })`；没有该回调时不显示
-附件按钮。`file` 是浏览器 `File`，不是 Runtime 可以直接打开的路径。宿主应：
+附件按钮，也不接收粘贴的图片。选择文件和在输入框粘贴剪贴板图片共用这条导入
+链路。`file` 是浏览器 `File`，不是 Runtime 可以直接打开的路径。宿主应：
 
 1. 校验当前用户可访问 `conversationId`，并把文件写入宿主可访问的临时路径；
 2. 调用 `conversation.import_image`，参数为
