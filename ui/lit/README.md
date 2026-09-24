@@ -27,12 +27,16 @@ loading and authorization belong to the host, never to the browser component.
 The attachment button appears when the transport provides `imageInput.importImage`.
 The component accepts up to eight PNG, JPEG, WebP, or GIF files (20 MiB each),
 shows local previews, allows removal before sending, and also accepts images
-pasted into the message composer. Pasting text with an image keeps normal text
-paste behavior. It calls the host's
+pasted into the message composer. Each image inserts an `@图片1`-style reference
+at the cursor; pasted text and image references stay in their original order.
+It calls the host's
 importer for each file and sends the returned `imageId` in ordered message
 `parts`. A message can contain images without text. User messages display
-solid-color `（图片1）` references from the Runtime ledger after sending or recovery;
-local preview URLs are not persisted.
+inline `@图片1` references from the Runtime ledger after sending or recovery.
+References use a stable color derived from the referenced object's ID; the
+same object keeps the same color across messages. Plain `@name` mentions use
+the same palette, keyed by name. The reference color helper is exported for
+other host reference types. Local preview URLs are not persisted.
 
 The browser cannot supply a native path to `conversation.import_image`. The
 host's importer must save the selected `File` to a host-accessible temporary

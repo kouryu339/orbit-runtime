@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import { visiblePresentationItems } from '../content/presentation.js';
+import { referenceColor } from '../content/references.js';
 import { conversationReducer, createConversationState, createPendingUserMessage, displayText, displayTextWithToolAnchors, recordKey, summarizePermissionTargets, snapshotRecords, } from '../protocol/index.js';
 import './rich-content.js';
 import './plan-card.js';
@@ -794,21 +795,17 @@ export class AgentRuntimeConversationElement extends LitElement {
     }
     .image-attachment img { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
     .image-attachment .remove-image { width: 22px; height: 22px; flex: none; }
-    .image-reference {
-      display: inline-block;
-      margin-top: 6px;
-      padding: 4px 8px;
-      border: 1px solid var(--image-reference-color);
-      border-radius: 7px;
-      background: var(--image-reference-color);
+    .at-reference {
+      display: inline;
+      padding: 2px 5px;
+      border: 1px solid var(--reference-color);
+      border-radius: 5px;
+      background: var(--reference-color);
       color: #fff;
-      font: 12px/1.3 var(--conversation-font-body);
+      font: inherit;
+      white-space: nowrap;
+      box-decoration-break: clone;
     }
-    .image-reference.tone-0 { --image-reference-color: #8b3a52; }
-    .image-reference.tone-1 { --image-reference-color: #215b82; }
-    .image-reference.tone-2 { --image-reference-color: #27624f; }
-    .image-reference.tone-3 { --image-reference-color: #6f4b91; }
-    .image-reference.tone-4 { --image-reference-color: #8a4f1e; }
     .actions { display: flex; align-items: center; gap: 5px; }
     button {
       display: inline-grid;
@@ -1063,8 +1060,9 @@ export class AgentRuntimeConversationElement extends LitElement {
         }
     }
     async send(content, options = {}) {
-        const value = content.trim();
-        if (!value && !this.pendingImages.length)
+        const images = [...this.pendingImages];
+        const draft = (content || (images.length ? this.draft : content)).trim();
+        if (!draft && !images.length)
             return { accepted: false, rejectReason: 'Message is empty.' };
         if (!this.transport)
             return { accepted: false, rejectReason: 'Transport is not configured.' };
@@ -1073,22 +1071,54 @@ export class AgentRuntimeConversationElement extends LitElement {
         if (!this.canCompose() || this.imageSending) {
             return { accepted: false, rejectReason: 'Conversation is still running.' };
         }
-        const images = [...this.pendingImages];
         const conversationId = this.state.conversationId;
         this.imageSending = true;
         let parts;
+        let value = draft;
         try {
             if (images.length) {
                 const importer = this.transport.imageInput;
                 if (!importer)
                     throw new Error('Image input is not supported by this host.');
-                parts = value ? [{ type: 'text', text: value }] : [];
+                const importedImages = new Map();
                 for (const image of images) {
                     const imported = await importer.importImage({ conversationId, file: image.file });
                     if (!imported.imageId)
                         throw new Error(`Image import returned no ID: ${image.file.name}`);
-                    parts.push({ type: 'image', image_id: imported.imageId });
+                    importedImages.set(image.number, imported.imageId);
                 }
+                parts = [];
+                const used = new Set();
+                const marker = /@图片(\d+)/g;
+                let cursor = 0;
+                let imageParts = 0;
+                for (const match of draft.matchAll(marker)) {
+                    const index = match.index ?? 0;
+                    const number = Number(match[1]);
+                    const imageId = importedImages.get(number);
+                    if (!imageId)
+                        continue;
+                    if (index > cursor)
+                        parts.push({ type: 'text', text: draft.slice(cursor, index) });
+                    parts.push({ type: 'image', image_id: imageId });
+                    imageParts += 1;
+                    used.add(number);
+                    cursor = index + match[0].length;
+                }
+                if (cursor < draft.length)
+                    parts.push({ type: 'text', text: draft.slice(cursor) });
+                for (const image of images) {
+                    if (!used.has(image.number)) {
+                        parts.push({ type: 'image', image_id: importedImages.get(image.number) });
+                        imageParts += 1;
+                    }
+                }
+                if (imageParts > 8)
+                    throw new Error('At most 8 image references can be sent in one message.');
+                value = parts.filter((part) => part.type === 'text')
+                    .map((part) => part.text).join('\n');
+                if (!value.trim())
+                    value = '[Image]';
             }
         }
         catch (error) {
@@ -1104,7 +1134,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         const clientMessageId = `local-user-${Date.now()}-${++this.localMessageSequence}`;
         this.dispatch({
             type: 'local-message-added',
-            message: createPendingUserMessage(clientMessageId, value || `${images.length} image${images.length === 1 ? '' : 's'}`),
+            message: createPendingUserMessage(clientMessageId, value, undefined, parts),
         });
         this.resetComposerHeight();
         this.stickToBottom = true;
@@ -1367,7 +1397,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             aria-label="Message"
             placeholder=${this.state.initialized ? 'Message the agent' : 'Waiting for conversation'}
             .value=${this.draft}
-            ?disabled=${!this.canCompose()}
+            ?disabled=${!this.canCompose() || this.imageSending}
             @input=${this.onDraftInput}
             @keydown=${this.onComposerKeydown}
             @paste=${this.onComposerPaste}
@@ -2268,15 +2298,8 @@ export class AgentRuntimeConversationElement extends LitElement {
         }
         const record = item.record;
         if (record.role === 'user') {
-            const imageIds = this.recordImageIds(record);
-            const message = displayText(record);
             return html `<article class="message user" part="user-message">
-        ${message && !(imageIds.length && message === '[Image]')
-                ? html `<div class="user-bubble">${message}</div>` : nothing}
-        ${imageIds.map((_, index) => html `<span class=${`image-reference tone-${index % 5}`}
-          aria-label=${`图片${index + 1}`}>
-          （图片${index + 1}）
-        </span>`)}
+        <div class="user-bubble">${this.renderUserRecord(record)}</div>
       </article>`;
         }
         if (record.role === 'gateway_message') {
@@ -2370,6 +2393,10 @@ export class AgentRuntimeConversationElement extends LitElement {
                     content: pending.state === 'failed'
                         ? `${pending.content}\n${pending.error ?? ''}`
                         : pending.content,
+                    metadata: pending.parts ? { extra: {
+                            parts: pending.parts,
+                            pending_error: pending.state === 'failed' ? pending.error ?? 'Message rejected.' : undefined,
+                        } } : undefined,
                 },
             });
         }
@@ -2502,6 +2529,15 @@ export class AgentRuntimeConversationElement extends LitElement {
     onDraftInput(event) {
         const textarea = event.target;
         this.draft = textarea.value;
+        const retained = this.pendingImages.filter((image) => this.draft.includes(`@图片${image.number}`));
+        for (const image of this.pendingImages) {
+            if (!retained.includes(image) && image.previewUrl)
+                URL.revokeObjectURL(image.previewUrl);
+        }
+        if (retained.length !== this.pendingImages.length) {
+            this.pendingImages = retained;
+            this.renumberPendingImages();
+        }
         textarea.style.height = '0px';
         textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
     }
@@ -2524,12 +2560,12 @@ export class AgentRuntimeConversationElement extends LitElement {
             : Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'));
         if (!files.length)
             return;
-        if (!items.some((item) => item.kind === 'string' && item.type === 'text/plain')) {
-            event.preventDefault();
-        }
-        this.addPendingImages(files);
+        event.preventDefault();
+        const text = event.clipboardData?.getData?.('text/plain') ?? '';
+        this.addPendingImages(files, text);
     }
-    addPendingImages(files) {
+    addPendingImages(files, pastedText = '') {
+        const markers = [];
         for (const file of files) {
             if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) ||
                 file.size > 20 * 1024 * 1024 || this.pendingImages.length >= 8) {
@@ -2541,13 +2577,55 @@ export class AgentRuntimeConversationElement extends LitElement {
                 continue;
             }
             const previewUrl = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '';
-            this.pendingImages = [...this.pendingImages, { file, previewUrl }];
+            const number = this.pendingImages.reduce((max, image) => Math.max(max, image.number), 0) + 1;
+            this.pendingImages = [...this.pendingImages, { file, previewUrl, number }];
+            markers.push(`@图片${number}`);
+        }
+        if (pastedText || markers.length) {
+            this.insertIntoDraft([pastedText, ...markers].filter(Boolean).join(' '));
         }
     }
-    removePendingImage(image) {
+    insertIntoDraft(value) {
+        const textarea = this.renderRoot.querySelector('textarea');
+        const start = textarea?.selectionStart ?? this.draft.length;
+        const end = textarea?.selectionEnd ?? this.draft.length;
+        const before = this.draft.slice(0, start);
+        const after = this.draft.slice(end);
+        const prefix = /@图片\d+$/.test(before) && /^\S/.test(value) ? ' ' : '';
+        const suffix = /@图片\d+$/.test(value) && /^[A-Za-z0-9]/.test(after) ? ' ' : '';
+        this.draft = `${before}${prefix}${value}${suffix}${after}`;
+        void this.updateComplete.then(() => {
+            const current = this.renderRoot.querySelector('textarea');
+            const cursor = start + prefix.length + value.length + suffix.length;
+            current?.setSelectionRange(cursor, cursor);
+        });
+    }
+    removePendingImage(image, removeMarker = true) {
         this.pendingImages = this.pendingImages.filter((item) => item !== image);
         if (image.previewUrl)
             URL.revokeObjectURL(image.previewUrl);
+        if (removeMarker) {
+            const label = `@图片${image.number}`;
+            const index = this.draft.indexOf(label);
+            if (index >= 0) {
+                let before = this.draft.slice(0, index);
+                let after = this.draft.slice(index + label.length);
+                if (before.endsWith(' ') && after.startsWith(' '))
+                    before = before.slice(0, -1);
+                else if (!before && after.startsWith(' '))
+                    after = after.slice(1);
+                this.draft = before + after;
+            }
+        }
+        this.renumberPendingImages();
+    }
+    renumberPendingImages() {
+        const numbers = new Map(this.pendingImages.map((image, index) => [image.number, index + 1]));
+        this.draft = this.draft.replace(/@图片(\d+)/g, (marker, number) => {
+            const next = numbers.get(Number(number));
+            return next ? `@图片${next}` : marker;
+        });
+        this.pendingImages = this.pendingImages.map((image, index) => ({ ...image, number: index + 1 }));
     }
     clearPendingImages() {
         for (const image of this.pendingImages) {
@@ -2556,17 +2634,53 @@ export class AgentRuntimeConversationElement extends LitElement {
         }
         this.pendingImages = [];
     }
-    recordImageIds(record) {
+    recordParts(record) {
         const parts = record.metadata?.extra?.parts;
         if (!Array.isArray(parts))
             return [];
-        return parts.flatMap((part) => {
+        const result = [];
+        for (const part of parts) {
             if (!part || typeof part !== 'object')
-                return [];
+                continue;
             const value = part;
-            return value.type === 'image' && typeof value.image_id === 'string'
-                ? [value.image_id] : [];
+            if (value.type === 'image' && typeof value.image_id === 'string') {
+                result.push({ type: 'image', image_id: value.image_id });
+            }
+            else if (value.type === 'text' && typeof value.text === 'string') {
+                result.push({ type: 'text', text: value.text });
+            }
+        }
+        return result;
+    }
+    renderReference(label, objectKey) {
+        return html `<span class="at-reference" style=${`--reference-color: ${referenceColor(objectKey)}`}
+      data-reference-key=${objectKey}>${label}</span>`;
+    }
+    renderMentionText(value) {
+        const tokens = value.split(/(@[\p{L}\p{N}_-]+)/gu);
+        let offset = 0;
+        return tokens.map((token) => {
+            const previous = value[offset - 1] ?? '';
+            offset += token.length;
+            return token.startsWith('@') && token.length > 1 && !/[A-Za-z0-9._%+-]/.test(previous)
+                ? this.renderReference(token, `mention:${token.slice(1).toLocaleLowerCase()}`)
+                : token;
         });
+    }
+    renderUserRecord(record) {
+        const parts = this.recordParts(record);
+        const message = displayText(record);
+        if (!parts.length)
+            return this.renderMentionText(message);
+        const hasText = parts.some((part) => part.type === 'text');
+        let imageNumber = 0;
+        const pendingError = record.metadata?.extra?.pending_error;
+        return html `${!hasText && message !== '[Image]' && !pendingError ? this.renderMentionText(message) : nothing}${parts.map((part) => {
+            if (part.type === 'text')
+                return this.renderMentionText(part.text);
+            imageNumber += 1;
+            return this.renderReference(`@图片${imageNumber}`, `image:${part.image_id}`);
+        })}${pendingError ? html `<br />${pendingError}` : nothing}`;
     }
     resetComposerHeight() {
         requestAnimationFrame(() => {

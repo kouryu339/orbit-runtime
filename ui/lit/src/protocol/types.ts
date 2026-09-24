@@ -128,6 +128,7 @@ export type ToolCallView = {
 export type PendingUserMessage = {
   id: string;
   content: string;
+  parts?: Array<{ type: 'text'; text: string } | { type: 'image'; image_id: string }>;
   createdAt: string;
   state: 'sending' | 'accepted' | 'failed';
   error?: string;

@@ -107,7 +107,9 @@ Runtime 自行保存导入后的媒体，不依赖宿主临时路径。导入成
 宿主的消息发送入口须将 `parts` 原样映射到 `conversation.send_message` 的
 `parts` 字段，并同时传入 `conversation_id`。只有图片时，`parts` 可以没有文字块；
 纯文本仍可沿用 `content`。自定义 Tauri `sendArgs` 或 HTTP `createSendBody` 不能丢弃
-`request.parts`。前端列表从 Ledger `metadata.extra.parts` 读取图片 ID 并显示引用；
+`request.parts`。Lit 在输入光标处插入 `@图片1` 等引用，并按文字与图片在输入中的位置
+生成 `parts`。前端列表从 Ledger `metadata.extra.parts` 读取图片 ID，将同色引用嵌入
+消息文字中；
 本地预览 URL 只用于发送前预览，不进入快照。图片文件上限、类型、哈希和模型能力由
 Runtime 再次校验。HTTP 宿主须自行提供文件上传/暂存接口，这不是默认 `/api/chat`
 提供的功能。

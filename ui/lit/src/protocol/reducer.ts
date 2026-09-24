@@ -352,6 +352,7 @@ export function createPendingUserMessage(
   id: string,
   content: string,
   createdAt = new Date().toISOString(),
+  parts?: PendingUserMessage['parts'],
 ): PendingUserMessage {
-  return { id, content, createdAt, state: 'sending' };
+  return { id, content, createdAt, state: 'sending', parts };
 }

@@ -279,7 +279,7 @@ function findPendingMatch(pending, content) {
     }
     return [];
 }
-export function createPendingUserMessage(id, content, createdAt = new Date().toISOString()) {
-    return { id, content, createdAt, state: 'sending' };
+export function createPendingUserMessage(id, content, createdAt = new Date().toISOString(), parts) {
+    return { id, content, createdAt, state: 'sending', parts };
 }
 //# sourceMappingURL=reducer.js.map

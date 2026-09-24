@@ -223,17 +223,48 @@ describe('AgentRuntimeConversationElement', () => {
       ],
     } });
     await element.updateComplete;
-    expect(Array.from(element.shadowRoot?.querySelectorAll('.image-reference') ?? [], (item) => item.textContent?.trim()))
-      .toEqual(['（图片1）', '（图片1）', '（图片2）']);
-    expect(Array.from(element.shadowRoot?.querySelectorAll('.image-reference') ?? [], (item) =>
-      Array.from(item.classList).find((name) => name.startsWith('tone-'))))
-      .toEqual(['tone-0', 'tone-0', 'tone-1']);
+    const bubbles = element.shadowRoot?.querySelectorAll('.user-bubble');
+    expect(bubbles?.[0].textContent).toBe('See image@图片1');
+    expect(bubbles?.[1].textContent).toBe('@图片1@图片2');
+    expect(Array.from(element.shadowRoot?.querySelectorAll('.at-reference') ?? [], (item) => item.textContent))
+      .toEqual(['@图片1', '@图片1', '@图片2']);
     expect(element.shadowRoot?.textContent).not.toContain('private');
     expect(element.shadowRoot?.textContent).not.toContain('bbbbbbbbbbbb');
     expect(element.shadowRoot?.textContent).not.toContain('[Image]');
   });
 
-  it('adds pasted clipboard images without changing pasted text', async () => {
+  it('renders ordered image parts inline and gives each referenced object a stable color', async () => {
+    const element = new AgentRuntimeConversationElement();
+    element.transport = new TestTransport();
+    document.body.append(element);
+    await element.connect();
+    element.state = conversationReducer(element.state, { type: 'snapshot', payload: {
+      revision: 2,
+      ledger_records: [
+        { record_id: 'first', role: 'user', content: 'before\nafter', metadata: { extra: { parts: [
+          { type: 'text', text: 'before ' },
+          { type: 'image', image_id: 'shared' },
+          { type: 'text', text: ' after @LaTeX' },
+        ] } } },
+        { record_id: 'second', role: 'user', content: '[Image]', metadata: { extra: { parts: [
+          { type: 'image', image_id: 'shared' },
+        ] } } },
+      ],
+    } });
+    await element.updateComplete;
+
+    const bubbles = element.shadowRoot!.querySelectorAll('.user-bubble');
+    expect(bubbles[0].textContent).toBe('before @图片1 after @LaTeX');
+    expect(bubbles[1].textContent).toBe('@图片1');
+    const imageReferences = element.shadowRoot!.querySelectorAll<HTMLElement>('[data-reference-key="image:shared"]');
+    expect(imageReferences).toHaveLength(2);
+    expect(imageReferences[0].style.getPropertyValue('--reference-color'))
+      .toBe(imageReferences[1].style.getPropertyValue('--reference-color'));
+    expect(element.shadowRoot!.querySelector('[data-reference-key="mention:latex"]')?.textContent)
+      .toBe('@LaTeX');
+  });
+
+  it('inserts pasted clipboard images and text at the cursor', async () => {
     const element = new AgentRuntimeConversationElement();
     const transport = new TestTransport();
     const importImage = vi.fn(async () => ({ imageId: 'c'.repeat(64) }));
@@ -259,18 +290,60 @@ describe('AgentRuntimeConversationElement', () => {
     Object.defineProperty(mixedPaste, 'clipboardData', { value: { items: [
       { kind: 'string', type: 'text/plain' },
       { kind: 'file', type: 'image/png', getAsFile: () => image },
-    ] } });
+    ], getData: () => 'caption' } });
     textarea.dispatchEvent(mixedPaste);
-    expect(mixedPaste.defaultPrevented).toBe(false);
+    expect(mixedPaste.defaultPrevented).toBe(true);
+    await element.updateComplete;
+    expect(textarea.value).toBe('@图片1 caption @图片2');
 
     expect(await element.send('')).toMatchObject({ accepted: true });
     expect(importImage).toHaveBeenCalledWith({ conversationId: 'conversation-1', file: image });
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       parts: [
         { type: 'image', image_id: 'c'.repeat(64) },
+        { type: 'text', text: ' caption ' },
         { type: 'image', image_id: 'c'.repeat(64) },
       ],
     }));
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.user-bubble')?.textContent)
+      .toBe('@图片1 caption @图片2');
+    element.state = conversationReducer(element.state, { type: 'snapshot', payload: {
+      revision: 2,
+      ledger_records: [{ record_id: 'sent-image', role: 'user', content: ' caption ', metadata: { extra: { parts: [
+        { type: 'image', image_id: 'c'.repeat(64) },
+        { type: 'text', text: ' caption ' },
+        { type: 'image', image_id: 'c'.repeat(64) },
+      ] } } }],
+    } });
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelectorAll('.user-bubble')).toHaveLength(1);
+  });
+
+  it('keeps an attached image at the cursor and removes its marker with the attachment', async () => {
+    const element = new AgentRuntimeConversationElement();
+    const transport = new TestTransport();
+    transport.imageInput = { importImage: vi.fn(async () => ({ imageId: 'image-id' })) };
+    element.transport = transport;
+    document.body.append(element);
+    await element.connect();
+    await element.updateComplete;
+
+    const textarea = element.shadowRoot!.querySelector('textarea')!;
+    textarea.value = 'look here';
+    textarea.dispatchEvent(new Event('input'));
+    await element.updateComplete;
+    textarea.setSelectionRange(5, 5);
+    const input = element.shadowRoot!.querySelector<HTMLInputElement>('.image-input')!;
+    Object.defineProperty(input, 'files', { value: [new File(['image'], 'one.png', { type: 'image/png' })] });
+    input.dispatchEvent(new Event('change'));
+    await element.updateComplete;
+    expect(textarea.value).toBe('look @图片1 here');
+
+    element.shadowRoot!.querySelector<HTMLButtonElement>('.remove-image')!.click();
+    await element.updateComplete;
+    expect(textarea.value).toBe('look here');
+    expect(element.shadowRoot!.querySelector('.image-attachment')).toBeNull();
   });
 
   it('renders a permission request and returns the decision through the transport', async () => {
