@@ -2,7 +2,7 @@
 name: thinking
 description: "通用思考规范：理解目标，调用工具，维护计划，评估结果，并在完成后给出最终答复。"
 system_layer: true
-tools: ["GetSkillsList", "UpdateSkills", "PlanWrite", "PlanUpdate", "PlanFinish", "ContinueThinking", "Grep", "HistoryRead", "ToolDescribe", "ListJev", "RunJev"]
+tools: ["GetSkillsList", "UpdateSkills", "PlanWrite", "PlanUpdate", "PlanFinish", "ContinueThinking", "Grep", "HistoryRead", "ToolDescribe"]
 tool_filter: "all"
 ---
 

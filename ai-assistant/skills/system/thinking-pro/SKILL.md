@@ -12,8 +12,6 @@ tools:
   - HistoryRead
   - ToolDescribe
   - ContinueThinking
-  - ListJev
-  - RunJev
   - executeWorkflowScript
 tool_filter: "all"
 ---
