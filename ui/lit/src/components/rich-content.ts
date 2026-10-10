@@ -224,7 +224,7 @@ export class ConversationRichContentElement extends LitElement {
       margin-top: 2px;
     }
     button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; }
-    .choice-list { display: grid; gap: 3px; min-width: 0; }
+    .choice-list { display: grid; gap: 8px; min-width: 0; }
     .choice-option {
       position: relative;
       box-sizing: border-box;
@@ -234,19 +234,26 @@ export class ConversationRichContentElement extends LitElement {
       gap: 12px;
       min-height: 42px;
       padding: 9px 12px;
-      border: 1px solid transparent;
+      border: 1px solid color-mix(in srgb, var(--conversation-text-muted) 40%, var(--conversation-border));
       border-radius: 10px;
+      background: color-mix(in srgb, var(--conversation-text) 6%, var(--conversation-surface));
+      color: var(--conversation-text-strong);
       cursor: pointer;
       font: 14px/1.55 var(--conversation-font-body);
     }
     .choice-option span { min-width: 0; overflow-wrap: anywhere; }
     .choice-option:hover:not(:has(input:disabled)) {
-      background: color-mix(in srgb, var(--conversation-text) 5%, transparent);
+      background: color-mix(in srgb, var(--conversation-text) 11%, var(--conversation-surface));
+      border-color: var(--conversation-text-muted);
     }
     .choice-option:has(input:checked) {
-      background: color-mix(in srgb, var(--conversation-accent) 18%, var(--conversation-surface));
+      background: color-mix(in srgb, var(--conversation-accent) 26%, var(--conversation-surface));
       border-color: var(--conversation-accent);
       color: var(--conversation-text-strong);
+    }
+    .choice-option:has(input:checked):hover:not(:has(input:disabled)) {
+      background: color-mix(in srgb, var(--conversation-accent) 34%, var(--conversation-surface));
+      border-color: var(--conversation-accent);
     }
     .choice-option:has(input:disabled) { cursor: default; }
     .choice-option input[type="radio"], .choice-option input[type="checkbox"] {
@@ -266,7 +273,6 @@ export class ConversationRichContentElement extends LitElement {
     }
     .other-option {
       margin-top: 7px;
-      border-color: var(--conversation-border);
       cursor: text;
       padding-block: 7px;
     }
@@ -299,6 +305,23 @@ export class ConversationRichContentElement extends LitElement {
     }
     .path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
     .path-row button { min-height: 42px; }
+    .widgets[data-inactive="false"] .widget > input,
+    .widgets[data-inactive="false"] .path-row > input,
+    .widgets[data-inactive="false"] .choice-row button,
+    .widgets[data-inactive="false"] .path-row button {
+      background: var(--conversation-surface-raised, var(--conversation-surface));
+      border-color: color-mix(in srgb, var(--conversation-text-muted) 40%, var(--conversation-border));
+    }
+    .widgets[data-inactive="false"] .choice-row button:hover,
+    .widgets[data-inactive="false"] .path-row button:hover {
+      background: color-mix(in srgb, var(--conversation-text) 11%, var(--conversation-surface));
+      border-color: var(--conversation-text-muted);
+    }
+    .widgets[data-inactive="false"] .choice-row button[aria-pressed="true"] {
+      background: var(--conversation-accent);
+      color: var(--conversation-accent-contrast, var(--conversation-surface));
+      border-color: var(--conversation-accent);
+    }
     .widgets[data-inactive="true"] {
       color: var(--conversation-text-muted);
     }
@@ -313,6 +336,9 @@ export class ConversationRichContentElement extends LitElement {
       cursor: default;
     }
     .widgets[data-inactive="true"] .choice-option {
+      background: transparent;
+      border-color: var(--conversation-border);
+      color: var(--conversation-text-muted);
       cursor: default;
     }
     .widgets[data-inactive="true"] .choice-option:has(input:checked),
