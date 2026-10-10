@@ -717,8 +717,10 @@ mod tests {
 
         mgr.inject_tools_for_state("thinking", &mut tools);
 
-        assert!(tools.contains(&"GetSkillsList".to_string()));
-        assert!(tools.contains(&"UpdateSkills".to_string()));
+        for host_tool in ["GetSkillsList", "UpdateSkills", "Grep", "GrepJson"] {
+            assert!(!tools.iter().any(|tool| tool == host_tool));
+        }
+        assert!(tools.contains(&"HistoryRead".to_string()));
         assert!(tools.contains(&"PlanWrite".to_string()));
         assert!(tools.contains(&"PlanUpdate".to_string()));
         assert!(tools.contains(&"PlanFinish".to_string()));

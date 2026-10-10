@@ -7,6 +7,7 @@
 pub mod agent_route;
 pub mod agent_wake;
 pub mod grep;
+pub mod grep_json;
 pub mod history;
 pub mod history_read;
 pub mod jev;

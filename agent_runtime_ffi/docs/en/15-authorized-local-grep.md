@@ -31,8 +31,8 @@ Resource registration is frozen after Runtime start. Changing authority requires
 restarting the Runtime with new resources and recreating conversations. Capabilities are supplied by the
 host, not restored from model-writable cache or conversation snapshots.
 
-The built-in thinking and thinking-pro skills expose `Grep`. Custom skills can
-include `Grep` in their tools list. Normal tool permission policy still applies.
+The built-in thinking and thinking-pro skills expose neither Grep nor GrepJson.
+Hosts explicitly include either or both in custom Skill tools lists. Normal tool permission policy still applies.
 It is system-only: no Workflow node or script function is registered.
 
 ## AI calls
@@ -89,3 +89,5 @@ The implementation uses Rust `regex`, `globset`, `ignore` and `cap-std`, not a
 shell or externally installed `rg`. Search results are untrusted file data, not
 instructions. Standard Runtime tool tracing records calls and results; consider
 host log access/retention when searching sensitive authorized directories.
+
+For structured JSON, use [GrepJson](16-grep-json.md) with the same configuration and authorization. Hosts select the tools through Skills.

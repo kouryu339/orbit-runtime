@@ -69,9 +69,9 @@ struct Root {
 
 #[derive(Debug)]
 pub struct GrepService {
-    config: GrepConfig,
+    pub(super) config: GrepConfig,
     roots: BTreeMap<String, Root>,
-    permits: Arc<tokio::sync::Semaphore>,
+    pub(super) permits: Arc<tokio::sync::Semaphore>,
 }
 impl GrepService {
     /// Called by the host at registration. Open directory capabilities pin authority.
@@ -131,6 +131,68 @@ impl GrepService {
             config,
             roots,
         })
+    }
+
+    pub(super) fn authorized_ids(&self) -> Vec<&str> {
+        self.roots.keys().map(String::as_str).collect()
+    }
+
+    /// Single-file reads share Grep's root capabilities and exclusion policy.
+    pub(super) fn read_authorized_file(
+        &self,
+        root_id: &str,
+        path: &str,
+    ) -> Result<Vec<u8>, String> {
+        let root = self.roots.get(root_id).ok_or("root_id is not authorized")?;
+        let relative = checked_relative(path)?;
+        if relative.as_os_str().is_empty() {
+            return Err("path must name one JSON file".into());
+        }
+        let mut ancestor = PathBuf::new();
+        let mut rules = Vec::new();
+        self.load_rules(root, Path::new(""), &mut rules)?;
+        for component in relative.components() {
+            ancestor.push(component);
+            let meta = root
+                .dir
+                .symlink_metadata(&ancestor)
+                .map_err(|e| format!("cannot inspect JSON path: {e}"))?;
+            if is_link(&meta)
+                || hidden(&ancestor)
+                || ignored(root, &ancestor, meta.is_dir(), &rules)
+            {
+                return Err(
+                    "JSON path is hidden, ignored, or contains a link/reparse point".into(),
+                );
+            }
+            if ancestor != relative && meta.is_dir() {
+                self.load_rules(root, &ancestor, &mut rules)?;
+            }
+        }
+        let mut file = root
+            .dir
+            .open(&relative)
+            .map_err(|e| format!("cannot open JSON: {e}"))?;
+        let before = file.metadata().map_err(|e| e.to_string())?;
+        if !before.is_file() {
+            return Err("JSON path is not a regular file".into());
+        }
+        if before.len() > self.config.max_file_bytes as u64 {
+            return Err("JSON exceeds host max_file_bytes".into());
+        }
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(self.config.max_file_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        let after = file.metadata().map_err(|e| e.to_string())?;
+        if bytes.len() > self.config.max_file_bytes {
+            return Err("JSON exceeds host max_file_bytes".into());
+        }
+        if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+            return Err("JSON changed during read; retry".into());
+        }
+        Ok(bytes)
     }
 
     fn search(&self, request: Request, cancel: &AtomicBool) -> Result<Value, String> {

@@ -28,7 +28,7 @@
 未配置 roots 就没有本地文件权限。授权由宿主提供，不从 AI 可写缓存或恢复快照加载。
 资源注册在 Runtime 启动后冻结；变更授权须使用新配置重启 Runtime 并重建会话。
 
-默认 thinking / thinking-pro 技能已提供 `Grep`。自定义 Skill 将其加入 tools 即可，
+默认 thinking / thinking-pro 不开放 Grep 或 GrepJson。宿主在自定义 Skill 的 tools 中显式加入所需工具，
 仍受普通工具权限规则约束。不注册 Workflow 节点，因此不允许脚本调用。
 
 ## AI 调用
@@ -79,3 +79,5 @@ skipped_links 计数。IO 失败、大文件跳过和搜索预算耗尽会让 co
 实现使用 Rust regex/globset/ignore/cap-std，不执行 Shell，也不依赖机器安装 rg。
 搜索内容是不可信数据，不能当作指令。调用走 Runtime 原有工具追踪，宿主应注意敏感
 搜索结果的日志访问权限和保留策略。
+
+结构化 JSON 可使用 [GrepJson](16-grep-json.md)，共用本页配置和授权，由宿主选择工具。

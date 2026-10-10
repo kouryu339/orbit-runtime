@@ -214,6 +214,12 @@ mod tests {
                 .and_then(|(_, entry)| entry.skill.as_ref())
                 .unwrap_or_else(|| panic!("{name} should be embedded"));
 
+            for tool in ["GetSkillsList", "UpdateSkills", "Grep", "GrepJson"] {
+                assert!(
+                    !skill.metadata.tools.iter().any(|name| name == tool),
+                    "{name} must not activate host-selected tool {tool}"
+                );
+            }
             assert!(skill.metadata.system_layer);
             assert!(!skill.metadata.is_role());
             assert!(!skill.instructions.trim_start().starts_with("你是"));

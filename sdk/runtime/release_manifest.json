@@ -1,4 +1,4 @@
-{
+﻿{
   "schema": "orbit-runtime-native-release/v2",
   "repository": "kouryu339/orbit-runtime",
   "release_tag": "v0.5.0-beta.1",
@@ -8,13 +8,13 @@
   "assets": {
     "windows-x86_64": {
       "archive": "orbit-runtime-runtime-v0.5.0-beta.1-windows-x86_64.zip",
-      "sha256": "dfb2e1ee486b7d8d359bdda9d65637ca7611702242fd597c198dfd042e35c7cd",
+      "sha256": "54a05d757573149914567cbfaeb1aaa164f35b3275904b3cc1291027ed3a6b72",
       "library": "bin/agent_runtime.dll",
       "header": "include/agent_runtime.h"
     },
     "linux-x86_64": {
       "archive": "orbit-runtime-runtime-v0.5.0-beta.1-linux-x86_64.zip",
-      "sha256": "2df61c0824b6a18f2ed115b08139778368cab9f584245352b0b1f9d3fc824e30",
+      "sha256": "0d9b318c53859b954bf6db78c3feed0afcc5f6bcd3c2eb7591711082e8f0c344",
       "library": "lib/libagent_runtime.so",
       "header": "include/agent_runtime.h"
     }
