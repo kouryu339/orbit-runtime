@@ -2419,11 +2419,14 @@ export class AgentRuntimeConversationElement extends LitElement {
     latestWidgetRecordKey(items) {
         for (let index = items.length - 1; index >= 0; index -= 1) {
             const item = items[index];
-            if (item.kind === 'record' &&
-                item.record.role === 'assistant' &&
-                /\[(?:input:|select:|confirm\b)/.test(displayText(item.record))) {
-                return item.key;
-            }
+            if (item.kind !== 'record')
+                continue;
+            if (item.record.role !== 'assistant' && item.record.role !== 'user')
+                continue;
+            return item.record.role === 'assistant'
+                && /\[(?:input:|select:|confirm\b)/.test(displayText(item.record))
+                ? item.key
+                : null;
         }
         return null;
     }

@@ -140,6 +140,35 @@ describe('AgentRuntimeConversationElement', () => {
     };
   }
 
+  it.each(['user', 'assistant'] as const)('expires old widgets after a newer %s message', async (role) => {
+    const element = new AgentRuntimeConversationElement();
+    element.transport = new TestTransport();
+    element.progressiveReveal = false;
+    document.body.append(element);
+    await element.connect();
+    const question = { record_id: 'widget-question', role: 'assistant' as const, content: '[input:text | label="备注"]' };
+    element.state = conversationReducer(element.state, {
+      type: 'snapshot',
+      payload: { revision: 2, conversation_state: 'waiting', ledger_records: [question] },
+    });
+    await element.updateComplete;
+    const rich = element.shadowRoot!.querySelector('agent-conversation-rich-content')! as HTMLElement & { updateComplete: Promise<unknown> };
+    await rich.updateComplete;
+    expect(rich.shadowRoot!.querySelector<HTMLInputElement>('input')!.disabled).toBe(false);
+    element.state = conversationReducer(element.state, {
+      type: 'snapshot',
+      payload: {
+        revision: 3, conversation_state: 'waiting',
+        ledger_records: [question, { record_id: 'next-message', role, content: '继续' }],
+      },
+    });
+    await element.updateComplete;
+    await rich.updateComplete;
+    expect(rich.shadowRoot!.querySelector<HTMLInputElement>('input')!.disabled).toBe(true);
+    expect(rich.shadowRoot!.querySelector('.widget-status')!.textContent).toContain('Expired');
+    expect(rich.shadowRoot!.querySelector('.widget-actions')).toBeNull();
+  });
+
   it('connects, renders, sends, and releases the transport', async () => {
     const element = new AgentRuntimeConversationElement();
     const transport = new TestTransport();

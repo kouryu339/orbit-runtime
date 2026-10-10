@@ -14,14 +14,14 @@ pub struct RuntimeArtifact {
 pub const WINDOWS_X86_64: RuntimeArtifact = RuntimeArtifact {
     platform_id: "windows-x86_64",
     archive: "orbit-runtime-runtime-v0.5.0-beta.1-windows-x86_64.zip",
-    sha256: "b78a11becd7f433f374d0bd7ecc104ae04bfbaeac955f7387974c3ebdc0dd68d",
+    sha256: "dfb2e1ee486b7d8d359bdda9d65637ca7611702242fd597c198dfd042e35c7cd",
     library: "bin/agent_runtime.dll",
 };
 
 pub const LINUX_X86_64: RuntimeArtifact = RuntimeArtifact {
     platform_id: "linux-x86_64",
     archive: "orbit-runtime-runtime-v0.5.0-beta.1-linux-x86_64.zip",
-    sha256: "fee22ee514f2dc3f2cf5987aecf46bbb5e002e21e8799bea3bf66290c8b05bcb",
+    sha256: "2df61c0824b6a18f2ed115b08139778368cab9f584245352b0b1f9d3fc824e30",
     library: "lib/libagent_runtime.so",
 };
 

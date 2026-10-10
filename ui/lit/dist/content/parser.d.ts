@@ -1,5 +1,5 @@
 import type { ToolCallView } from '../protocol/types.js';
-export type WidgetKind = 'input:path' | 'input:text' | 'input:date' | 'input:time' | 'select:single' | 'select:multi' | 'confirm';
+export type WidgetKind = 'input:path' | 'input:text' | 'select:single' | 'select:multi' | 'confirm';
 export type WidgetDefinition = {
     kind: WidgetKind;
     label: string;

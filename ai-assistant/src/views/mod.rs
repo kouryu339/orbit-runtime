@@ -1,13 +1,11 @@
 //! Views — AI 向用户提问时的交互载体
 //! ## 新模式（内联 widgets）
-//! AI 在 `asking` 决策的 `prompt` 字段中直接嵌入控件标签，前端解析渲染。
+//! Think 在回复正文中按需嵌入控件标签，前端解析渲染。
 //! ## Widget 标签格式
 //! `[widget_type | key=value | key=value]`，每个标签独占一行，可与自然语言混排。
 //! 支持的控件：
 //! - `[input:text | label="说明"]`                          — 纯文本输入框
 //! - `[input:path | label="说明" | accept=".mp4,.mov"]`     — 路径/文件选择
-//! - `[input:date | label="说明"]`                          — 日期选择（YYYY-MM-DD）
-//! - `[input:time | label="说明"]`                          — 时间选择（HH:MM）
 //! - `[select:single | label="说明" | options="A,B,C"]`     — 单选
 //! - `[select:multi  | label="说明" | options="A,B,C"]`     — 多选
 //! - `[confirm | label="操作说明"]`                         — 确认/取消
@@ -15,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
-// ViewPayload — ASK 决策在 `saying` 稳态里的展示载体
+// ViewPayload — 多元交互控件与描述载体
 // ============================================================================
 
 /// AI 向用户提问时携带的数据
@@ -46,17 +44,6 @@ impl ViewPayload {
     pub fn widgets(prompt: impl Into<String>) -> Self {
         Self::new(prompt)
     }
-}
-
-// ============================================================================
-// prompt 写作指导（写入 system prompt）
-// ============================================================================
-
-/// 生成"向用户提问"章节，写入 AI system prompt
-pub fn format_asking_section() -> String {
-    crate::prompt_assets::template("asking_section.md")
-        .trim()
-        .to_string()
 }
 
 // ============================================================================
@@ -92,14 +79,5 @@ mod tests {
 
         let back: ViewPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back.view, "widgets");
-    }
-
-    #[test]
-    fn test_format_asking_section() {
-        let section = format_asking_section();
-        assert!(section.contains("向用户提问"));
-        assert!(section.contains("input:path"));
-        assert!(section.contains("select:single"));
-        assert!(section.contains("confirm"));
     }
 }

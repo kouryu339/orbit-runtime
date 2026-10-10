@@ -270,10 +270,7 @@ Widget tags are still not tool calls. They must not be written inside an `EXEC` 
 
 ## 6.8 Widget Tags
 
-Widget tags are part of the `0.3.0` frontend message contract. They may appear in two frontend-visible text surfaces:
-
-- the `prompt` field of an `asking` decision;
-- standalone lines inside `assistant` display content, where they may coexist with `[tool:status | call_id="..."]` placeholders.
+Think emits widget tags on standalone lines inside `assistant` display content, where they may coexist with `[tool:status | call_id="..."]` placeholders.
 
 Widget tags are not tool calls and must not be written as `EXEC`. After submission, the frontend converts entered values into a normal user message and sends that message back to runtime.
 
@@ -302,8 +299,6 @@ Syntax rules:
 |---|---|---|---|---|
 | `[input:text | label="Name"]` | Text input. | `label` | None | `Name: user input` |
 | `[input:path | label="Video" | accept=".mp4,.mov"]` | File or path picker. | `label` | `accept` | `Video: D:/xxx.mp4` |
-| `[input:date | label="Date"]` | Date picker. Value format is `YYYY-MM-DD`. | `label` | None | `Date: 2025-01-15` |
-| `[input:time | label="Time"]` | Time picker. Value format is `HH:MM`. | `label` | None | `Time: 14:30` |
 | `[select:single | label="Format" | options="MP4,AVI,MKV"]` | Single select. | `label`, `options` | None | `Format: MP4` |
 | `[select:multi | label="Tags" | options="Funny,Life,Tech"]` | Multi select. | `label`, `options` | None | `Tags: Funny, Life` |
 | `[confirm | label="Operation details"]` | Confirm or cancel. | `label` | None | `Operation details: yes` or `Operation details: no` |
@@ -343,7 +338,7 @@ Recommended minimal UI state:
 type WidgetUiState =
   | "enabled" // Widget in the latest assistant message; user has not acted yet
   | "ready"   // user has entered, selected, or clicked enough to submit
-  | "expired"; // a newer assistant message arrived, so old Widgets are no longer active
+  | "expired"; // a newer user or assistant message arrived, so old Widgets are no longer active
 ```
 
 Lifecycle:
@@ -358,7 +353,7 @@ user enters/selects/clicks
 user submits
 -> submit only the ready Widget values from this turn, convert them to a normal user message, and send it back to runtime
 
-assistant B arrives
+a newer user or assistant message arrives
 -> all Widgets in assistant A become expired
 ```
 
@@ -367,7 +362,9 @@ No matter how many Widgets appear in the same assistant turn, the frontend shoul
 - ready Widget values are converted into a normal user message;
 - non-ready Widgets are not included in the submitted message;
 - the current WidgetPanel enters the submitted state, and non-ready Widgets become expired, read-only, or disabled;
-- when a newer assistant message arrives, all unsubmitted Widgets from the previous assistant turn also become expired.
+- when a newer user or assistant message arrives, all unsubmitted Widgets from the previous assistant turn also become expired.
+
+Keep controls at their original positions, with a single submit action at the end of the message. Submitted and expired controls retain their values and use muted colors without hover feedback; replace the submit action with a plain Submitted or Expired status.
 
 Submission example:
 
@@ -433,3 +430,5 @@ Visual rules:
 - Widget controls are part of the assistant content stream and should look like embedded forms. After submission, the frontend should convert values into ordinary user text and render that text as a right-aligned user bubble.
 
 One-line principle: the user is a bubble, the assistant is a content canvas; tools are status rows, Widgets are embedded controls; everything is placed by `record.role` and `call_id`.
+
+Lit automatically adds Other with free-text input to single and multiple choice. Models provide recommended options only. Single choice submits one recommended or custom answer; multiple choice may combine both. Selecting Other requires non-empty text before submission.

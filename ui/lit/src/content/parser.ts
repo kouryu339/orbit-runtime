@@ -3,8 +3,6 @@ import type { ToolCallView } from '../protocol/types.js';
 export type WidgetKind =
   | 'input:path'
   | 'input:text'
-  | 'input:date'
-  | 'input:time'
   | 'select:single'
   | 'select:multi'
   | 'confirm';
@@ -25,7 +23,7 @@ export type ConversationContentPart =
 
 const TOOL_LINE = /^\[tool:status\s*\|\s*call_id="([^"]+)"\]$/;
 const WIDGET_LINE =
-  /^\[(input:path|input:text|input:date|input:time|select:single|select:multi|confirm)\s*(?:\|\s*(.*))?\]$/;
+  /^\[(input:path|input:text|select:single|select:multi|confirm)\s*(?:\|\s*(.*))?\]$/;
 
 export function parseConversationContent(content: string): ConversationContentPart[] {
   const parts: ConversationContentPart[] = [];

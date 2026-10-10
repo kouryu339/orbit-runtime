@@ -19,6 +19,8 @@ export class ConversationRichContentElement extends LitElement {
         expandedTools: { state: true },
         widgetValues: { state: true },
         widgetSubmitted: { state: true },
+        otherEnabled: { state: true },
+        otherValues: { state: true },
     };
     static styles = css `
     :host {
@@ -171,48 +173,157 @@ export class ConversationRichContentElement extends LitElement {
       display: grid;
       min-width: 0;
       max-width: 100%;
-      overflow-x: hidden;
-      gap: 9px;
-      padding: 12px;
-      border: 1px solid var(--conversation-border);
-      border-radius: 12px;
-      background: var(--conversation-surface-raised);
+      gap: 18px;
+      padding: 4px;
+      box-sizing: border-box;
+      grid-template-columns: minmax(0, 1fr);
     }
-    .widget {
-      display: grid;
-      gap: 6px;
-    }
+    .widget { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
+    .widget > input, .path-row > input { width: 100%; max-width: 100%; }
     .widget-label {
-      color: var(--conversation-text-muted);
-      font: 600 11px/1.4 var(--conversation-font-body);
-      letter-spacing: 0.03em;
+      color: var(--conversation-text-strong);
+      font: 600 13px/1.5 var(--conversation-font-body);
     }
-    input, select {
+    input {
+      box-sizing: border-box;
       min-width: 0;
-      height: 34px;
-      padding: 0 9px;
+      height: 42px;
+      padding: 0 12px;
       border: 1px solid var(--conversation-border);
-      border-radius: 8px;
-      background: var(--conversation-surface);
+      border-radius: 10px;
+      background: transparent;
       color: var(--conversation-text);
-      font: 13px var(--conversation-font-body);
+      font: 14px var(--conversation-font-body);
+      caret-color: var(--conversation-text-strong);
     }
+    input::placeholder { color: var(--conversation-text-muted); opacity: 1; }
     button {
-      min-height: 34px;
-      border: 0;
-      border-radius: 8px;
-      background: var(--conversation-accent);
-      color: var(--conversation-accent-contrast);
-      font: 650 12px var(--conversation-font-body);
+      min-height: 36px;
+      padding: 7px 16px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 9px;
+      background: var(--conversation-surface);
+      color: var(--conversation-text-strong);
+      font: 600 13px/1.4 var(--conversation-font-body);
       cursor: pointer;
     }
-    button:disabled, input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
-    .choice-row { display: flex; flex-wrap: wrap; gap: 7px; }
-    .path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
-    .choice-row button {
-      border: 1px solid var(--conversation-border);
-      background: var(--conversation-surface);
-      color: var(--conversation-text);
+    .widgets > button {
+      justify-self: end;
+      min-width: 72px;
+      background: var(--conversation-text-strong);
+      color: var(--conversation-surface);
+      border-color: transparent;
+      margin-top: 2px;
+    }
+    button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; }
+    .choice-list { display: grid; gap: 3px; min-width: 0; }
+    .choice-option {
+      position: relative;
+      box-sizing: border-box;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 42px;
+      padding: 9px 12px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      cursor: pointer;
+      font: 14px/1.55 var(--conversation-font-body);
+    }
+    .choice-option span { min-width: 0; overflow-wrap: anywhere; }
+    .choice-option:hover:not(:has(input:disabled)) {
+      background: color-mix(in srgb, var(--conversation-text) 5%, transparent);
+    }
+    .choice-option:has(input:checked) {
+      background: color-mix(in srgb, var(--conversation-accent) 18%, var(--conversation-surface));
+      border-color: var(--conversation-accent);
+      color: var(--conversation-text-strong);
+    }
+    .choice-option:has(input:disabled) { cursor: default; }
+    .choice-option input[type="radio"], .choice-option input[type="checkbox"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .choice-option:has(input:focus-visible) {
+      outline: 2px solid var(--conversation-accent);
+      outline-offset: 2px;
+    }
+    .other-option {
+      margin-top: 7px;
+      border-color: var(--conversation-border);
+      cursor: text;
+      padding-block: 7px;
+    }
+    .other-option:focus-within { border-color: var(--conversation-text-muted); }
+    .other-option .other-input {
+      flex: 1;
+      width: 0;
+      min-width: 0;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      border-radius: 0;
+    }
+    input:focus-visible, button:focus-visible {
+      outline: 2px solid var(--conversation-accent);
+      outline-offset: 3px;
+    }
+    .other-option .other-input:focus-visible { outline: none; }
+    .other-option:has(.other-input:focus-visible) {
+      outline: 2px solid var(--conversation-accent);
+      outline-offset: 2px;
+    }
+    .choice-row { display: flex; justify-content: center; flex-wrap: wrap; gap: 24px; }
+    .choice-row button { min-width: 96px; }
+    .choice-row button[aria-pressed="true"] {
+      background: var(--conversation-text-strong);
+      color: var(--conversation-surface);
+      border-color: transparent;
+    }
+    .path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .path-row button { min-height: 42px; }
+    .widgets[data-inactive="true"] {
+      color: var(--conversation-text-muted);
+    }
+    .widgets[data-inactive="true"] .widget-label,
+    .widgets[data-inactive="true"] input,
+    .widgets[data-inactive="true"] button {
+      color: var(--conversation-text-muted);
+    }
+    .widgets[data-inactive="true"] input:disabled,
+    .widgets[data-inactive="true"] button:disabled {
+      opacity: 1;
+      cursor: default;
+    }
+    .widgets[data-inactive="true"] .choice-option {
+      cursor: default;
+    }
+    .widgets[data-inactive="true"] .choice-option:has(input:checked),
+    .widgets[data-inactive="true"] .choice-row button[aria-pressed="true"] {
+      color: var(--conversation-text-muted);
+      background: color-mix(in srgb, var(--conversation-text-muted) 10%, transparent);
+      border-color: var(--conversation-border);
+    }
+    .widget-status {
+      padding: 8px 4px;
+      color: var(--conversation-text-muted);
+      font: 12px/1.5 var(--conversation-font-body);
+    }
+    @media (max-width: 480px) {
+      input { font-size: 16px; }
+      .choice-option { padding-inline: 9px; }
+    }
+    @media (forced-colors: active) {
+      .choice-option:has(input:checked) { border-color: Highlight; outline: 2px solid Highlight; outline-offset: -3px; }
     }
   `;
     revealTimer = null;
@@ -233,6 +344,8 @@ export class ConversationRichContentElement extends LitElement {
         this.expandedTools = new Set();
         this.widgetValues = {};
         this.widgetSubmitted = false;
+        this.otherEnabled = new Set();
+        this.otherValues = {};
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -270,6 +383,7 @@ export class ConversationRichContentElement extends LitElement {
     }
     render() {
         const parts = parseConversationContent(this.content);
+        const widgets = parts.flatMap((part) => part.kind === 'widgets' ? part.widgets : []);
         let lastMarkdownIndex = -1;
         for (let index = parts.length - 1; index >= 0; index -= 1) {
             if (parts[index].kind === 'markdown') {
@@ -321,61 +435,86 @@ export class ConversationRichContentElement extends LitElement {
         </details>`;
             }
             return this.renderWidgets(part.widgets);
-        })}`;
+        })}
+    ${widgets.length ? this.renderWidgetSubmit(widgets) : null}`;
     }
     renderWidgets(widgets) {
         const disabled = this.widgetsExpired || this.widgetSubmitted;
-        return html `<div class="part widgets" part="widget-panel">
+        return html `<div class="part widgets" part="widget-panel" data-inactive=${disabled ? 'true' : 'false'}>
       ${widgets.map((widget) => html `<div class="widget">
         <span class="widget-label">${widget.label}</span>
         ${this.renderWidgetInput(widget, disabled)}
       </div>`)}
+    </div>`;
+    }
+    renderWidgetSubmit(widgets) {
+        if (this.widgetSubmitted || this.widgetsExpired) {
+            return html `<div class="part widget-status" role="status">
+        ${this.widgetSubmitted
+                ? this.label('已提交', 'Submitted')
+                : this.label('已过期 · 请在最新消息中回复', 'Expired · Reply in the latest message')}
+      </div>`;
+        }
+        return html `<div class="part widgets widget-actions">
       <button
         type="button"
-        ?disabled=${disabled || !this.hasWidgetValue(widgets)}
+        ?disabled=${!this.hasWidgetValue(widgets)}
         @click=${() => this.submitWidgets(widgets)}
       >
-        ${this.widgetSubmitted ? 'Submitted' : this.widgetsExpired ? 'Expired' : 'Submit'}
+        ${this.label('提交', 'Submit')}
       </button>
     </div>`;
     }
     renderWidgetInput(widget, disabled) {
         const value = this.widgetValues[widget.raw] ?? '';
-        if (widget.kind === 'select:single') {
-            return html `<select
-        ?disabled=${disabled}
-        .value=${String(value)}
-        @change=${(event) => this.setWidgetValue(widget, event.target.value)}
-      >
-        <option value="">Select</option>
-        ${widget.options.map((option) => html `<option value=${option}>${option}</option>`)}
-      </select>`;
-        }
-        if (widget.kind === 'select:multi') {
-            const selected = Array.isArray(value) ? value : [];
-            return html `<div class="choice-row">${widget.options.map((option) => html `
-        <label>
-          <input
-            type="checkbox"
-            value=${option}
-            ?checked=${selected.includes(option)}
-            ?disabled=${disabled}
-            @change=${(event) => this.toggleMulti(widget, option, event)}
-          >
-          ${option}
-        </label>
-      `)}</div>`;
+        if (widget.kind === 'select:single' || widget.kind === 'select:multi') {
+            const multiple = widget.kind === 'select:multi';
+            const other = this.otherEnabled.has(widget.raw);
+            const selected = Array.isArray(value) ? value : [value];
+            const options = [...new Set(widget.options)].filter((option) => !/^(其他|其它|other)$/i.test(option.trim()));
+            return html `<div class="choice-list" role="group" aria-label=${widget.label}>
+        ${options.map((option) => html `<label class="choice-option">
+          <input type=${multiple ? 'checkbox' : 'radio'} name=${encodeURIComponent(widget.raw)}
+            ?checked=${selected.includes(option) && (multiple || !other)} ?disabled=${disabled}
+            @change=${(event) => {
+                if (multiple)
+                    this.toggleMulti(widget, option, event);
+                else {
+                    this.setOther(widget, false);
+                    this.setWidgetValue(widget, option);
+                }
+            }}><span>${option}</span>
+        </label>`)}
+
+        <div class="choice-option other-option">
+          <input class="other-toggle" type=${multiple ? 'checkbox' : 'radio'} name=${encodeURIComponent(widget.raw)}
+            aria-label=${widget.label + ': ' + this.label('其他', 'Other')}
+            ?checked=${other} ?disabled=${disabled}
+            @change=${(event) => this.setOther(widget, event.target.checked)}>
+          <input class="other-input" type="text"
+            aria-label=${widget.label + ': ' + this.label('其他内容', 'Other answer')}
+            placeholder=${this.label('其他，请输入…', 'Other, please specify…')}
+            .value=${this.otherValues[widget.raw] ?? ''} ?disabled=${disabled}
+            @focus=${() => { if (!disabled)
+                this.setOther(widget, true); }}
+            @input=${(event) => {
+                this.setOther(widget, true);
+                this.otherValues = { ...this.otherValues, [widget.raw]: event.target.value };
+            }}>
+        </div>
+      </div>`;
         }
         if (widget.kind === 'confirm') {
             return html `<div class="choice-row">
-        <button type="button" ?disabled=${disabled} @click=${() => this.setWidgetValue(widget, 'yes')}>Confirm</button>
-        <button type="button" ?disabled=${disabled} @click=${() => this.setWidgetValue(widget, 'no')}>Cancel</button>
+        <button type="button" ?disabled=${disabled} aria-pressed=${value === 'yes'} @click=${() => this.setWidgetValue(widget, 'yes')}>${this.label('确认', 'Confirm')}</button>
+        <button type="button" ?disabled=${disabled} aria-pressed=${value === 'no'} @click=${() => this.setWidgetValue(widget, 'no')}>${this.label('取消', 'Cancel')}</button>
       </div>`;
         }
         if (widget.kind === 'input:path') {
             return html `<div class="path-row">
         <input
           type="text"
+          aria-label=${widget.label}
           .value=${String(value)}
           ?disabled=${disabled}
           @input=${(event) => this.setWidgetValue(widget, event.target.value)}
@@ -385,21 +524,39 @@ export class ConversationRichContentElement extends LitElement {
               type="button"
               ?disabled=${disabled}
               @click=${() => void this.pickPath(widget)}
-            >Browse</button>`
+            >${this.label('浏览…', 'Browse…')}</button>`
                 : null}
       </div>`;
         }
-        const type = widget.kind === 'input:date'
-            ? 'date'
-            : widget.kind === 'input:time'
-                ? 'time'
-                : 'text';
         return html `<input
-      type=${type}
+      type="text"
+      aria-label=${widget.label}
       .value=${String(value)}
       ?disabled=${disabled}
       @input=${(event) => this.setWidgetValue(widget, event.target.value)}
     >`;
+    }
+    label(zh, en) {
+        return this.locale.toLowerCase().startsWith('zh') ? zh : en;
+    }
+    setOther(widget, enabled) {
+        const next = new Set(this.otherEnabled);
+        if (enabled)
+            next.add(widget.raw);
+        else
+            next.delete(widget.raw);
+        this.otherEnabled = next;
+        if (enabled && widget.kind === 'select:single')
+            this.setWidgetValue(widget, '');
+    }
+    answer(widget) {
+        const value = this.widgetValues[widget.raw] ?? '';
+        if (!this.otherEnabled.has(widget.raw))
+            return typeof value === 'string' ? value.trim() : value;
+        const other = (this.otherValues[widget.raw] ?? '').trim();
+        return widget.kind === 'select:multi'
+            ? [...new Set([...(Array.isArray(value) ? value : []), ...(other ? [other] : [])])]
+            : other;
     }
     setWidgetValue(widget, value) {
         this.widgetValues = { ...this.widgetValues, [widget.raw]: value };
@@ -417,16 +574,19 @@ export class ConversationRichContentElement extends LitElement {
         };
     }
     hasWidgetValue(widgets) {
+        if (widgets.some((widget) => this.otherEnabled.has(widget.raw)
+            && !(this.otherValues[widget.raw] ?? '').trim()))
+            return false;
         return widgets.some((widget) => {
-            const value = this.widgetValues[widget.raw];
+            const value = this.answer(widget);
             return Array.isArray(value) ? value.length > 0 : Boolean(value);
         });
     }
     submitWidgets(widgets) {
-        if (this.widgetSubmitted || this.widgetsExpired)
+        if (this.widgetSubmitted || this.widgetsExpired || !this.hasWidgetValue(widgets))
             return;
         const content = widgets
-            .map((widget) => [widget.label, this.widgetValues[widget.raw]])
+            .map((widget) => [widget.label, this.answer(widget)])
             .filter(([, value]) => Array.isArray(value) ? value.length > 0 : Boolean(value))
             .map(([label, value]) => `${label}: ${Array.isArray(value) ? value.join(', ') : value}`)
             .join('\n');

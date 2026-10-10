@@ -277,10 +277,7 @@ Widget 标签不是工具调用，不能写在 `EXEC` 行里，也不能作为�
 
 ## 6.8 Widget 控件标签
 
-Widget 控件标签是 `0.3.0` 前端消息契约的一部分。它可以出现在两类前端可见文本中：
-
-- `asking` 决策的 `prompt` 字段；
-- `assistant` 展示内容中的独占行，可与 `[tool:status | call_id="..."]` 工具状态
+Widget 控件标签由 Think 在 `assistant` 回复正文中按需生成，必须独占一行，可与 `[tool:status | call_id="..."]` 工具状态
   占位符共存。
 
 控件标签不是工具调用，不得写成 `EXEC`。控件提交后，前端把用户填写的值转换为普通
@@ -293,8 +290,6 @@ Widget 控件标签是 `0.3.0` 前端消息契约的一部分。它可以出现�
 ```text
 [input:text | label="姓名"]
 [input:path | label="视频" | accept=".mp4,.mov"]
-[input:date | label="日期"]
-[input:time | label="时间"]
 [select:single | label="格式" | options="MP4,AVI,MKV"]
 [select:multi | label="标签" | options="搞笑,生活,科技"]
 [confirm | label="确认删除 D:/tmp/a.txt"]
@@ -315,8 +310,6 @@ Widget 控件标签是 `0.3.0` 前端消息契约的一部分。它可以出现�
 |---|---|---|---|---|
 | `[input:text | label="姓名"]` | 文本输入框。 | `label` | 无 | `姓名: 用户输入` |
 | `[input:path | label="视频" | accept=".mp4,.mov"]` | 文件或路径选择。 | `label` | `accept` | `视频: D:/xxx.mp4` |
-| `[input:date | label="日期"]` | 日期选择。值格式为 `YYYY-MM-DD`。 | `label` | 无 | `日期: 2025-01-15` |
-| `[input:time | label="时间"]` | 时间选择。值格式为 `HH:MM`。 | `label` | 无 | `时间: 14:30` |
 | `[select:single | label="格式" | options="MP4,AVI,MKV"]` | 单选。 | `label`, `options` | 无 | `格式: MP4` |
 | `[select:multi | label="标签" | options="搞笑,生活,科技"]` | 多选。 | `label`, `options` | 无 | `标签: 搞笑, 生活` |
 | `[confirm | label="操作说明"]` | 确认或取消。 | `label` | 无 | `操作说明: yes` 或 `操作说明: no` |
@@ -357,7 +350,7 @@ tool call，不使用 `call_id`，也不等待工具生命周期事件。
 type WidgetUiState =
   | "enabled" // 最新 assistant 消息里的 Widget，用户还未操作
   | "ready"   // 用户已经填写、选择或点击，具备提交值
-  | "expired"; // 新 assistant 到来后，旧 Widget 全部过期
+  | "expired"; // 新 user 或 assistant 到来后，旧 Widget 全部过期
 ```
 
 生命周期：
@@ -372,7 +365,7 @@ user enters/selects/clicks
 user submits
 -> 只提交这一轮已经就绪的 Widget 值，转换成普通 user message 发回 runtime
 
-assistant B arrives
+a newer user or assistant message arrives
 -> assistant A 中的所有 Widget 过期
 ```
 
@@ -381,7 +374,9 @@ assistant B arrives
 - 已就绪的 Widget 值被转换为普通 user message；
 - 未就绪的 Widget 不随消息提交；
 - 本轮 WidgetPanel 进入已提交状态，未就绪 Widget 变为过期、只读或不可操作；
-- 后续新的 assistant 消息到来时，上一轮所有未提交 Widget 也应过期。
+- 后续新的 user 或 assistant 消息到来时，上一轮所有未提交 Widget 也应过期。
+
+控件保持在各自正文位置，整条消息末尾只放一个提交按钮。已提交和已过期控件保留已有值，使用柔和灰色且取消悬停反馈；底部提交按钮替换为“已提交”或“已过期”的普通状态文字。
 
 提交内容示例：
 
@@ -450,3 +445,5 @@ ConversationView
 
 一句话原则：user 是气泡，assistant 是内容画布；工具是状态条，Widget 是内嵌控件；
 所有内容按 `record.role` 和 `call_id` 归位。
+
+单选和多选由 Lit 自动附加“其他”输入，模型只提供推荐项。单选提交推荐项或自填值，多选可以同时提交两者。选择“其他”后必须填写内容才能提交。

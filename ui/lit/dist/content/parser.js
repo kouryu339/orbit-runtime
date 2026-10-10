@@ -1,5 +1,5 @@
 const TOOL_LINE = /^\[tool:status\s*\|\s*call_id="([^"]+)"\]$/;
-const WIDGET_LINE = /^\[(input:path|input:text|input:date|input:time|select:single|select:multi|confirm)\s*(?:\|\s*(.*))?\]$/;
+const WIDGET_LINE = /^\[(input:path|input:text|select:single|select:multi|confirm)\s*(?:\|\s*(.*))?\]$/;
 export function parseConversationContent(content) {
     const parts = [];
     const markdown = [];

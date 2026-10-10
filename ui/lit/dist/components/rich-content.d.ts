@@ -49,6 +49,12 @@ export declare class ConversationRichContentElement extends LitElement {
         widgetSubmitted: {
             state: boolean;
         };
+        otherEnabled: {
+            state: boolean;
+        };
+        otherValues: {
+            state: boolean;
+        };
     };
     static styles: import("lit").CSSResult;
     content: string;
@@ -65,6 +71,8 @@ export declare class ConversationRichContentElement extends LitElement {
     private expandedTools;
     private widgetValues;
     private widgetSubmitted;
+    private otherEnabled;
+    private otherValues;
     private revealTimer;
     private completedContent;
     constructor();
@@ -73,7 +81,11 @@ export declare class ConversationRichContentElement extends LitElement {
     protected updated(changed: Map<PropertyKey, unknown>): void;
     protected render(): import("lit-html").TemplateResult<1>;
     private renderWidgets;
+    private renderWidgetSubmit;
     private renderWidgetInput;
+    private label;
+    private setOther;
+    private answer;
     private setWidgetValue;
     private toggleMulti;
     private hasWidgetValue;
