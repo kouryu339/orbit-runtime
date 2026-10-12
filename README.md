@@ -351,6 +351,8 @@ ai-assistant/docs/
 agent_runtime_ffi/docs/
 ```
 
+Stable version updates and host migration reports: [Release history](agent_runtime_ffi/docs/releases/README.md).
+
 ## Status
 
 Covered integration paths:

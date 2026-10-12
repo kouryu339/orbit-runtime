@@ -18,6 +18,10 @@ contracts.
 | `sdk` | Runtime Host SDK and Agent Tool SDK package usage. |
 | `ai-assistant/docs` | Internal AI system architecture and mechanisms. |
 
+## Stable Release History
+
+[Release notes and upgrade reports](releases/README.md) are organized by formal version and compared with the previous stable release. Design plans remain in plans/.
+
 ## Contracts And Guides
 
 | Type | English | 中文 |

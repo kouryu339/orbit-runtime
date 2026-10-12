@@ -1,8 +1,10 @@
-# Orbit Runtime v0.5.0-beta.1 — Image input
+# Orbit Runtime v0.5.0 — Images, View widgets, GrepJson and model reasoning
 
-This prerelease adds image input to agent conversations. It builds on v0.4.8 and keeps native ABI 1.3.
+This stable release builds on v0.4.8 and keeps native ABI 1.3. It includes image input, refreshed View widgets, structural JSON reads, host-controlled tool activation, and model-scoped reasoning settings.
 
-## Changes
+## Changes since v0.4.8
+
+Baseline: [v0.4.8](https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.8). [Compare stable releases](https://github.com/kouryu339/orbit-runtime/compare/v0.4.8...v0.5.0).
 
 - Hosts import local PNG, JPEG, WebP, or GIF files with `conversation.import_image`, then send ordered text and image parts through `conversation.send_message`.
 - Runtime owns copied conversation media, validates file type, dimensions, size, and content hash, and restores image references with the conversation ledger.
@@ -34,8 +36,17 @@ This prerelease adds image input to agent conversations. It builds on v0.4.8 and
 - GrepJson does not write files. Existing host editing tools must compare expected_revision under their shared write lock, validate business Schema and atomically persist changes.
 - Lit includes the subsequently refined control borders, backgrounds, hover states and selection colors, making active controls easier to recognize.
 
+## Model reasoning configuration
+
+- Enabled models accept an optional reasoning object, preserved through registration, provider definitions, persistence, and explicit host reload.
+- The same three API paradigms remain: Chat Completions uses reasoning_effort; Responses uses reasoning.effort and optional reasoning.summary; Anthropic Messages uses output_config.effort and optional thinking mode/budget.
+- Streaming and non-streaming requests use settings from the selected model UID. No vendor-specific parameter mappings are added; omitted settings preserve previous behavior.
+- Lit provides paradigm-specific model controls. Runtime validates field combinations, removes incompatible sampling parameters when explicit reasoning is enabled, and rejects conflicting Anthropic budgets/forced tool choice before sending.
+- Anthropic thinking blocks are retained and replayed through tool history, including the legacy line protocol.
+- Live acceptance used an existing host credential against DeepSeek's three official compatible endpoints: 38 scenarios, 41 requests, zero failures. This covers effort levels, disabled reasoning, streaming/non-streaming output and tool continuation. DeepSeek ignores fixed thinking budgets and accepts Responses summary without generating summaries; original OpenAI/Claude endpoints were not exercised.
+
 ## Scope and distribution
 
 Image input only: audio, video, and generated image output are not included. Hosts provide Lit's image importer, pass host-accessible image paths to Runtime, and forward `SendMessageRequest.parts` unchanged. Windows x86_64 and Linux x86_64 native archives are provided. No macOS archive is available from this release machine.
 
-This replaces the earlier Beta.1 archives. Replace the native library and matching SDK release metadata together, update Lit, then restart the Runtime to load the revised built-in skills. Hosts using local search or AI Skill activation must now explicitly activate the corresponding capability Skill. Refresh cached Beta.1 downloads because this replacement changes archive hashes without changing the version. Live provider compatibility still depends on the configured model and provider accepting image input. This update does not claim to fix host-side sending or event blocking.
+Upgrade from v0.4.8 to v0.5.0 with the matching native library, SDK metadata and Lit build. Replace the native library and matching SDK release metadata together, update Lit, then restart the Runtime to load the revised built-in skills. Hosts using local search or AI Skill activation must now explicitly activate the corresponding capability Skill. Download the matching v0.5.0 platform archives. Live provider compatibility still depends on the configured model and provider accepting image input. This update does not claim to fix host-side sending or event blocking.
