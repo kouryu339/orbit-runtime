@@ -57,3 +57,45 @@ delayed setup.
 Do not overwrite a valid loaded configuration with example placeholders.
 Hosts own production secrets. Failures use the result envelope and thread-local
 last-error contract.
+
+## Model reasoning by API paradigm
+
+The supported paradigms remain `openai_chat_completions`, `openai_responses`, and `anthropic_messages`. Encode reasoning by the selected paradigm only; no vendor-specific endpoint, model-name, or parameter mapping is added.
+
+Each `enabled_models[]` entry accepts an optional `reasoning` object (legacy bundles use `models[]`). Public provider definitions, persistence and explicit host configuration reload preserve it. Omitting the object, or using `{}`, leaves requests unchanged.
+
+| Configuration | Paradigm | Request field |
+|---|---|---|
+| effort | Chat Completions | reasoning_effort |
+| effort | Responses | reasoning.effort |
+| summary | Responses | reasoning.summary |
+| effort | Anthropic | output_config.effort |
+| thinking | Anthropic | thinking.type |
+| budget_tokens | Anthropic | thinking.budget_tokens |
+
+Effort values: `none/minimal/low/medium/high/xhigh/max`. Anthropic rejects `none/minimal`; use `thinking: "disabled"` to request disabled thinking. Responses summary accepts `auto/concise/detailed`. Anthropic thinking accepts `disabled/enabled/adaptive` independently of effort; omit it to leave the decision to the upstream service. Enabled thinking requires `budget_tokens >= 1024`; other modes reject a budget.
+
+Example enabled model:
+
+```json
+{
+  "uid": 1001,
+  "model_id": "host-model",
+  "max_context_tokens": 128000,
+  "reasoning": {"effort": "high", "summary": "auto"}
+}
+```
+
+Use this example with Responses. For Chat, omit summary. Anthropic may use `{"effort":"high","thinking":"adaptive"}` or `{"thinking":"enabled","budget_tokens":2048}`. This config is independent of system prompts, Runtime thinking states and thinking-round limits.
+
+- Registration validates the configuration against the selected paradigm. Wrong fields, unknown enums and conflicting mode/budget combinations fail explicitly.
+- Both streaming and non-streaming requests, tools and retries use the model UID's reasoning settings through explicit arguments, never a reverse model-name lookup.
+- Chat with explicit effort encodes the requested output limit as `max_completion_tokens`; Responses uses `max_output_tokens`, Anthropic uses `max_tokens`.
+- Explicit non-none Chat/Responses effort or enabled/adaptive Anthropic thinking omits temperature and top_p. Unconfigured or disabled settings preserve the existing sampling behavior.
+- Anthropic fixed thinking budget must be less than request max_tokens (existing default 4096). Runtime never increases it automatically. Enabled/adaptive thinking conflicts with forced tool/any choice and fails before sending rather than silently weakening tool requirements.
+- Anthropic signed thinking/redacted blocks are retained in provider_items and replayed with history and ledger data; they are not executable content or displayed answer text. Responses excludes Anthropic thinking blocks when changing paradigms.
+- Supported values still depend on the target compatible endpoint/model. Upstream rejection remains an error; Runtime does not silently omit reasoning on retries.
+
+Lit's model editor exposes paradigm-specific settings and preserves reasoning on other models when saving providers. Native ABI and command schemas are unchanged; SDKs continue to use their existing JSON registration/configuration boundary.
+
+References: [OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning), [Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort), [Claude extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).

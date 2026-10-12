@@ -422,3 +422,114 @@ async fn responses_rejects_a_stream_without_response_completed() {
 
     assert!(error.to_string().contains("response.completed"));
 }
+
+#[tokio::test]
+async fn model_reasoning_reaches_all_three_http_paradigms_in_both_modes() {
+    use llm_gateway::config::{build_index_and_resolver, LlmConfig};
+    for (index, paradigm) in [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages",
+    ]
+    .iter()
+    .enumerate()
+    {
+        for streaming in [false, true] {
+            let expected = if *paradigm == "anthropic_messages" {
+                serde_json::json!({"effort":"high","thinking":"adaptive"})
+            } else if *paradigm == "openai_responses" {
+                serde_json::json!({"effort":"high","summary":"auto"})
+            } else {
+                serde_json::json!({"effort":"high"})
+            };
+            let signed = serde_json::json!({"type":"thinking","thinking":"private analysis","signature":"original-signature"});
+            let response = match (*paradigm, streaming) {
+                ("openai_chat_completions", false) => serde_json::json!({"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}).to_string(),
+                ("openai_responses", false) => serde_json::json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}).to_string(),
+                ("anthropic_messages", false) => serde_json::json!({"content":[signed,{"type":"text","text":"OK"}],"stop_reason":"end_turn"}).to_string(),
+                ("openai_chat_completions", true) => "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into(),
+                ("openai_responses", true) => "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n".into(),
+                _ => [
+                    serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+                    serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"private analysis"}}),
+                    serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"original-signature"}}),
+                    serde_json::json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"OK"}}),
+                    serde_json::json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+                    serde_json::json!({"type":"message_stop"}),
+                ].iter().map(|event| format!("data: {event}\n\n")).collect(),
+            };
+            let (url, request, server) = serve_once(response);
+            let uid = 900_000 + index as u32;
+            let config: LlmConfig = serde_json::from_value(serde_json::json!({
+                "providers":[{"id":900,"name":"test","type":"openai-gpt","api_key":"test-key",
+                    "base_url":url,"api_paradigm":paradigm,
+                    "enabled_models":[{"uid":uid,"model_id":"same-custom-alias","reasoning":expected}]}]
+            })).unwrap();
+            build_index_and_resolver(config);
+            let messages = [ChatMessage::user("Hello")];
+            let result = if streaming {
+                llm_gateway::dispatch::call_llm_with_tools_stream_events_cancellable(
+                    uid,
+                    &messages,
+                    &[],
+                    Some(0.7),
+                    Some(0.8),
+                    Some(4096),
+                    tokio_util::sync::CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+            } else {
+                llm_gateway::call_llm(uid, &messages, Some(0.7), Some(0.8), Some(4096)).await
+            }
+            .unwrap();
+            assert_eq!(result.content, "OK");
+            let body = request.recv().unwrap();
+            server.join().unwrap();
+            assert!(body.get("temperature").is_none() && body.get("top_p").is_none());
+            match *paradigm {
+                "openai_chat_completions" => {
+                    assert_eq!(body["reasoning_effort"], "high");
+                    assert!(body.get("reasoning").is_none());
+                }
+                "openai_responses" => {
+                    assert_eq!(
+                        body["reasoning"],
+                        serde_json::json!({"effort":"high","summary":"auto"})
+                    );
+                    assert!(body.get("reasoning_effort").is_none());
+                }
+                _ => {
+                    assert_eq!(body["output_config"]["effort"], "high");
+                    assert_eq!(body["thinking"]["type"], "adaptive");
+                    assert_eq!(result.provider_items.unwrap(), vec![signed]);
+                }
+            }
+        }
+    }
+    // Same model alias, separate model UIDs: concurrent requests retain their
+    // own settings rather than reverse-resolving by name or sharing a task value.
+    let answer =
+        serde_json::json!({"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]})
+            .to_string();
+    let (url_a, request_a, server_a) = serve_once(answer.clone());
+    let (url_b, request_b, server_b) = serve_once(answer);
+    let config: LlmConfig = serde_json::from_value(serde_json::json!({"providers":[
+        {"id":901,"name":"a","type":"openai-gpt","api_key":"test","base_url":url_a,"api_paradigm":"openai_chat_completions",
+            "enabled_models":[{"uid":901001,"model_id":"shared-alias","reasoning":{"effort":"low"}}]},
+        {"id":902,"name":"b","type":"openai-gpt","api_key":"test","base_url":url_b,"api_paradigm":"openai_chat_completions",
+            "enabled_models":[{"uid":902001,"model_id":"shared-alias","reasoning":{"effort":"high"}}]}
+    ]})).unwrap();
+    build_index_and_resolver(config);
+    let messages = [ChatMessage::user("Hello")];
+    let (a, b) = tokio::join!(
+        llm_gateway::call_llm(901001, &messages, None, None, Some(4096)),
+        llm_gateway::call_llm(902001, &messages, None, None, Some(4096))
+    );
+    assert_eq!(a.unwrap().content, "OK");
+    assert_eq!(b.unwrap().content, "OK");
+    assert_eq!(request_a.recv().unwrap()["reasoning_effort"], "low");
+    assert_eq!(request_b.recv().unwrap()["reasoning_effort"], "high");
+    server_a.join().unwrap();
+    server_b.join().unwrap();
+}

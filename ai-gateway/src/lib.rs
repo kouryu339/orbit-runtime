@@ -66,6 +66,7 @@ pub mod ocr;
 pub mod openai_compat;
 pub mod openai_responses;
 pub mod providers;
+pub mod reasoning;
 pub mod request_context;
 pub mod retry;
 mod stream_control;

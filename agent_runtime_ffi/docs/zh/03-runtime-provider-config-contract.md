@@ -61,3 +61,59 @@ Provider 配置允许在首次启动时不存在，或显式为空：
 
 不要用示例/占位 provider 无条件覆盖已正确加载的配置。生产密钥由宿主管理；错误通过
 `agent-runtime-result/v1` 和同线程 `agent_runtime_last_error_json_v1` 返回。
+
+## 3.4 按 API 范式配置模型推理
+
+仍只支持 `openai_chat_completions`、`openai_responses`、`anthropic_messages` 三种兼容接口。推理参数按所选范式编码，不按厂商、URL 或模型名称增加专用适配规则。
+
+在 `enabled_models[]` 中增加可选 `reasoning` 对象；旧 providers/models 配置在 `models[]` 中使用相同对象。`runtime.get_provider_definitions` 的每个模型返回该配置，持久化和宿主显式重载保留它。省略 `reasoning` 或使用 `{}` 不新增任何请求字段，不改变已有行为。
+
+| 配置 | 可用范式 | 上游字段 |
+|---|---|---|
+| `effort` | Chat | `reasoning_effort` |
+| `effort` | Responses | `reasoning.effort` |
+| `summary` | Responses | `reasoning.summary` |
+| `effort` | Anthropic | `output_config.effort` |
+| `thinking` | Anthropic | `thinking.type` |
+| `budget_tokens` | Anthropic | `thinking.budget_tokens` |
+
+`effort` 可取 `none/minimal/low/medium/high/xhigh/max`；Anthropic 不接受 `none/minimal`，关闭思考使用 `thinking: "disabled"`。`summary` 可取 `auto/concise/detailed`。`thinking` 可取 `disabled/enabled/adaptive`，独立于 effort，不指定时由兼容服务决定。固定预算 `enabled` 必须同时提供至少 1024 的 `budget_tokens`；其他模式禁止携带预算。
+
+### Responses 示例
+
+```json
+{
+  "schema": "agent-runtime-llm-registration/v1",
+  "id": "desktop-llm",
+  "providers": [{
+    "id": 1,
+    "name": "Compatible service",
+    "type": "openai-gpt",
+    "api_key": "HOST_SUPPLIED",
+    "base_url": "https://example.invalid/v1",
+    "api_paradigm": "openai_responses",
+    "enabled_models": [{
+      "uid": 1001,
+      "model_id": "host-model",
+      "max_context_tokens": 128000,
+      "reasoning": {"effort": "high", "summary": "auto"}
+    }]
+  }]
+}
+```
+
+Chat 将模型配置改为 `"reasoning": {"effort": "high"}`。Anthropic 可配置 `{"effort": "high", "thinking": "adaptive"}`，或固定预算 `{"thinking": "enabled", "budget_tokens": 2048}`。这是请求配置，不是 system 提示词，也不是 Runtime 的 thinking 状态或思考轮数。
+
+### 请求行为与校验
+
+- 注册/加载时检查字段与范式是否匹配；非法枚举、错误字段、矛盾模式/预算明确失败。
+- 流式、非流式、普通消息、原生工具调用及重试沿用同一模型配置。按模型 UID 显式传递，两个同名模型不会互相借用配置。
+- Chat 显式配置 effort 时，调用方传入的输出上限编码为 `max_completion_tokens`；Responses 使用 `max_output_tokens`；Anthropic 使用 `max_tokens`。
+- 显式启用推理的 Chat/Responses effort（非 none）或 Anthropic enabled/adaptive 模式，不发送 `temperature/top_p`，避免兼容接口拒绝组合。未配置或显式关闭时保留原有采样行为。
+- Anthropic 固定预算必须小于本次请求的 `max_tokens`（没有指定时现有默认值为 4096）；不自动提高输出预算。启用思考与强制 tool/any 选择冲突时在发送前报配置错误，不默默取消强制执行要求。
+- Anthropic thinking/redacted_thinking 块和签名完整保存于既有 `provider_items`、历史及 ledger，并在后续 Anthropic 请求中回传；思考内容不作为可执行文本或用户回答输出。切换到 Responses 时不发送 Anthropic thinking 块。
+- 不保证每个兼容服务/模型都支持所有枚举；真实支持范围由目标端点决定。上游拒绝参数时保留错误，不自动去掉配置重试或声称已生效。
+
+Lit 模型编辑器按范式显示推理强度及附加字段；“服务端默认”省略参数。编辑或添加提供商时保留其他模型已有的 reasoning。C ABI 和命令 schema 不变；SDK 沿用 JSON 注册/配置边界，无需新增 C 函数。
+
+参考：[OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning)、[Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort)、[Claude extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)。

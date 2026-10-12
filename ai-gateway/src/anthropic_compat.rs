@@ -44,6 +44,33 @@ pub async fn call_inner(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
 ) -> crate::error::Result<LlmResponse> {
+    call_inner_with_reasoning(
+        messages,
+        tools,
+        model,
+        base_url,
+        api_key,
+        None,
+        temperature,
+        top_p,
+        max_tokens,
+        force_tool_name,
+    )
+    .await
+}
+
+pub async fn call_inner_with_reasoning(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+) -> crate::error::Result<LlmResponse> {
     crate::image_content::validate_model(model, messages)?;
     let request_started = std::time::Instant::now();
     let client = http_client().clone();
@@ -100,6 +127,9 @@ pub async fn call_inner(
         msgs.len()
     );
 
+    if let Some(config) = reasoning {
+        config.apply(crate::config::ApiParadigm::AnthropicMessages, &mut body)?;
+    }
     let body = std::sync::Arc::new(body);
     let url = std::sync::Arc::new(url);
     let key = std::sync::Arc::new(api_key.to_string());
@@ -212,7 +242,21 @@ pub async fn call_inner(
             Some(tool_calls)
         },
         reasoning_content: None,
-        provider_items: None,
+        provider_items: resp["content"]
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        matches!(
+                            block["type"].as_str(),
+                            Some("thinking" | "redacted_thinking")
+                        )
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .filter(|blocks| !blocks.is_empty()),
     })
 }
 
@@ -222,6 +266,40 @@ pub async fn call_inner_streaming<F>(
     model: &str,
     base_url: &str,
     api_key: &str,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+    require_tool_call: bool,
+    on_event: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(crate::types::LlmStreamEvent) + Send,
+{
+    call_inner_streaming_with_reasoning(
+        messages,
+        tools,
+        model,
+        base_url,
+        api_key,
+        None,
+        temperature,
+        top_p,
+        max_tokens,
+        force_tool_name,
+        require_tool_call,
+        on_event,
+    )
+    .await
+}
+
+pub async fn call_inner_streaming_with_reasoning<F>(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
     temperature: Option<f64>,
     top_p: Option<f64>,
     max_tokens: Option<u32>,
@@ -277,6 +355,9 @@ where
         body["tool_choice"] = json!({"type": "tool", "name": name});
     } else if require_tool_call {
         body["tool_choice"] = json!({"type": "any"});
+    }
+    if let Some(config) = reasoning {
+        config.apply(crate::config::ApiParadigm::AnthropicMessages, &mut body)?;
     }
     let body = std::sync::Arc::new(body);
     let url = std::sync::Arc::new(url);
@@ -336,6 +417,7 @@ where
     let mut buffer = String::new();
     let mut content = String::new();
     let mut tool_blocks = BTreeMap::<u64, ToolBlock>::new();
+    let mut thinking_blocks = BTreeMap::<u64, Value>::new();
     let mut finish_reason = None;
     let mut input_tokens = 0u32;
     let mut output_tokens = 0u32;
@@ -436,6 +518,13 @@ where
                         .unwrap_or_default() as u32;
                 }
                 "content_block_start" => {
+                    if matches!(
+                        event.pointer("/content_block/type").and_then(Value::as_str),
+                        Some("thinking" | "redacted_thinking")
+                    ) {
+                        let index = event["index"].as_u64().unwrap_or_default();
+                        thinking_blocks.insert(index, event["content_block"].clone());
+                    }
                     if event.pointer("/content_block/type").and_then(Value::as_str)
                         == Some("tool_use")
                     {
@@ -478,6 +567,19 @@ where
                                     text: delta.to_string(),
                                 });
                             }
+                        }
+                    }
+                    Some("thinking_delta") | Some("signature_delta") => {
+                        let index = event["index"].as_u64().unwrap_or_default();
+                        let field = if event["delta"]["type"] == "thinking_delta" {
+                            "thinking"
+                        } else {
+                            "signature"
+                        };
+                        if let Some(block) = thinking_blocks.get_mut(&index) {
+                            let mut text = block[field].as_str().unwrap_or_default().to_string();
+                            text.push_str(event["delta"][field].as_str().unwrap_or_default());
+                            block[field] = json!(text);
                         }
                     }
                     Some("input_json_delta") => {
@@ -611,7 +713,8 @@ where
         cached_tokens: 0,
         tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
         reasoning_content: None,
-        provider_items: None,
+        provider_items: (!thinking_blocks.is_empty())
+            .then(|| thinking_blocks.into_values().collect()),
     })
 }
 
@@ -662,6 +765,21 @@ fn build_anthropic_messages(messages: &[ChatMessage]) -> crate::Result<Vec<Value
             }
 
             let mut blocks: Vec<Value> = Vec::new();
+            if m.role == "assistant" {
+                if let Some(items) = &m.provider_items {
+                    blocks.extend(
+                        items
+                            .iter()
+                            .filter(|item| {
+                                matches!(
+                                    item["type"].as_str(),
+                                    Some("thinking" | "redacted_thinking")
+                                )
+                            })
+                            .cloned(),
+                    );
+                }
+            }
             if !m.parts.is_empty() {
                 blocks.extend(crate::image_content::anthropic_blocks(m)?);
             } else if !m.content.trim().is_empty() {
@@ -779,5 +897,21 @@ mod tests {
         assert_eq!(projected[0]["content"][0]["type"], "tool_result");
         assert_eq!(projected[0]["content"][0]["tool_use_id"], "call-1");
         assert_eq!(projected[0]["content"][0]["content"], "(empty tool result)");
+    }
+    #[test]
+    fn signed_thinking_replays_before_tools_without_cross_protocol_items() {
+        let signed = json!({"type":"thinking","thinking":"private","signature":"keep"});
+        let redacted = json!({"type":"redacted_thinking","data":"encrypted"});
+        let mut assistant = ChatMessage::assistant("answer");
+        assistant.provider_items = Some(vec![
+            signed.clone(),
+            redacted.clone(),
+            json!({"type":"reasoning","id":"responses-only"}),
+        ]);
+        let projected = build_anthropic_messages(&[assistant]).unwrap();
+        assert_eq!(
+            projected[0]["content"],
+            json!([signed, redacted, {"type":"text","text":"answer"}])
+        );
     }
 }

@@ -222,7 +222,15 @@ export type ProviderDefinition = {
   apiKeySet?: boolean;
 };
 
+export type ModelReasoningConfig = {
+  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  summary?: 'auto' | 'concise' | 'detailed';
+  thinking?: 'disabled' | 'enabled' | 'adaptive';
+  budget_tokens?: number;
+};
+
 export type ProviderModelDefinition = {
+  reasoning?: ModelReasoningConfig;
   uid: number;
   provider_uid?: number;
   providerUid?: number;

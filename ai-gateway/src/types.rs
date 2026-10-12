@@ -67,7 +67,7 @@ pub struct ChatMessage {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reasoning_content: Option<String>,
     /// Provider-native continuation items that must be replayed verbatim.
-    /// Currently used by OpenAI Responses for reasoning/function-call items.
+    /// Used by OpenAI Responses items and Anthropic signed thinking blocks.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub provider_items: Option<Vec<serde_json::Value>>,
 }

@@ -55,6 +55,8 @@ pub(crate) struct ModelConfig {
     pub(crate) model_name: String,
     #[serde(default = "default_context_window")]
     pub(crate) context_window: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning: Option<llm_gateway::reasoning::ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +138,8 @@ pub(crate) struct LlmRegistrationModel {
     model_id: String,
     #[serde(alias = "maxContextTokens")]
     max_context_tokens: Option<u32>,
+    #[serde(default)]
+    reasoning: Option<llm_gateway::reasoning::ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -146,6 +150,8 @@ struct HostEnabledModel {
     model_id: String,
     #[serde(alias = "maxContextTokens", default)]
     max_context_tokens: Option<u32>,
+    #[serde(default)]
+    reasoning: Option<llm_gateway::reasoning::ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -175,6 +181,7 @@ impl From<HostEnabledModel> for llm_gateway::EnabledModel {
             uid: model.uid,
             model_id: model.model_id,
             max_context_tokens: model.max_context_tokens,
+            reasoning: model.reasoning,
         }
     }
 }
@@ -291,6 +298,7 @@ fn llm_registration_provider_to_runtime(
                 uid: model.uid,
                 model_id: model.model_id,
                 max_context_tokens: model.max_context_tokens,
+                reasoning: model.reasoning,
             })
             .collect(),
     })
@@ -367,6 +375,27 @@ pub(crate) fn validate_llm_config(config: &llm_gateway::LlmConfig) -> Result<(),
             )));
         }
         for model in &provider.enabled_models {
+            if let Some(reasoning) = &model.reasoning {
+                let paradigm =
+                    provider
+                        .api_paradigm
+                        .unwrap_or_else(|| {
+                            match llm_gateway::providers::resolve(&model.model_id).format {
+                                llm_gateway::providers::ApiFormat::OpenAI => {
+                                    llm_gateway::ApiParadigm::OpenAiChatCompletions
+                                }
+                                llm_gateway::providers::ApiFormat::OpenAIResponses => {
+                                    llm_gateway::ApiParadigm::OpenAiResponses
+                                }
+                                llm_gateway::providers::ApiFormat::Anthropic => {
+                                    llm_gateway::ApiParadigm::AnthropicMessages
+                                }
+                            }
+                        });
+                reasoning.validate(paradigm).map_err(|error| {
+                    RuntimeError::InvalidConfig(format!("model {} reasoning: {error}", model.uid))
+                })?;
+            }
             if model.uid == 0 {
                 return Err(RuntimeError::InvalidConfig(format!(
                     "providers['{}'].enabled_models[].uid must not be 0",

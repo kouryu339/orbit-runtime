@@ -441,6 +441,8 @@ export class AgentRuntimeConversationElement extends LitElement {
       gap: 8px;
       align-items: end;
     }
+    .provider-reasoning-settings { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+    .provider-reasoning-settings > span { grid-column: 1 / -1; }
     .provider-editor-icon-button {
       width: 34px;
       min-width: 34px;
@@ -1735,6 +1737,57 @@ export class AgentRuntimeConversationElement extends LitElement {
                   ?disabled=${this.providerEditorModels.length <= 1 || this.providerOperation !== null}
                   @click=${() => this.removeProviderEditorModel(row.key)}
                 >×</button>
+                <div class="provider-reasoning-settings">
+                  <label class="provider-editor-field">
+                    <span>${zh ? '推理强度' : 'Reasoning effort'}</span>
+                    <select name=${`model-effort-${row.key}`}
+                      .value=${row.reasoning?.effort ?? ''}
+                      @change=${(event) => this.updateProviderEditorModel(row.key, {
+            reasoning: { ...row.reasoning, effort: event.target.value || undefined },
+        })}>
+                      <option value="">${zh ? '服务端默认' : 'Server default'}</option>
+                      ${(this.providerEditorApiParadigm === 'anthropic_messages'
+            ? ['low', 'medium', 'high', 'xhigh', 'max']
+            : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+            .map((effort) => html `<option value=${effort}>${effort}</option>`)}
+                    </select>
+                  </label>
+                  ${this.providerEditorApiParadigm === 'openai_responses' ? html `
+                    <label class="provider-editor-field">
+                      <span>${zh ? '思考摘要' : 'Reasoning summary'}</span>
+                      <select name=${`model-summary-${row.key}`} .value=${row.reasoning?.summary ?? ''}
+                        @change=${(event) => this.updateProviderEditorModel(row.key, {
+            reasoning: { ...row.reasoning, summary: event.target.value || undefined },
+        })}>
+                        <option value="">${zh ? '不指定' : 'Unspecified'}</option>
+                        ${['auto', 'concise', 'detailed'].map((summary) => html `<option value=${summary}>${summary}</option>`)}
+                      </select>
+                    </label>` : nothing}
+                  ${this.providerEditorApiParadigm === 'anthropic_messages' ? html `
+                    <label class="provider-editor-field">
+                      <span>${zh ? '思考模式' : 'Thinking mode'}</span>
+                      <select name=${`model-thinking-${row.key}`} .value=${row.reasoning?.thinking ?? ''}
+                        @change=${(event) => this.updateProviderEditorModel(row.key, {
+            reasoning: { ...row.reasoning, thinking: event.target.value || undefined },
+        })}>
+                        <option value="">${zh ? '不指定' : 'Unspecified'}</option>
+                        <option value="adaptive">${zh ? '自适应' : 'Adaptive'}</option>
+                        <option value="enabled">${zh ? '固定预算' : 'Fixed budget'}</option>
+                        <option value="disabled">${zh ? '关闭' : 'Disabled'}</option>
+                      </select>
+                    </label>
+                    ${row.reasoning?.thinking === 'enabled' ? html `
+                      <label class="provider-editor-field">
+                        <span>${zh ? '思考预算（tokens）' : 'Thinking budget (tokens)'}</span>
+                        <input name=${`model-budget-${row.key}`} type="number" min="1024" step="1" required
+                          .value=${row.reasoning?.budget_tokens ? String(row.reasoning.budget_tokens) : ''}
+                          @input=${(event) => this.updateProviderEditorModel(row.key, {
+            reasoning: { ...row.reasoning, budget_tokens: this.parseOptionalPositiveInt(event.target.value) ?? undefined },
+        })}/>
+                      </label>` : nothing}
+                    ` : nothing}
+                  <span class="provider-editor-models-title">${zh ? '可用档位取决于目标模型；默认不发送推理参数。' : 'Supported levels depend on the target model; defaults omit reasoning parameters.'}</span>
+                </div>
               </div>
             `)}
             <button
@@ -1800,7 +1853,7 @@ export class AgentRuntimeConversationElement extends LitElement {
         this.providerEditorApiParadigm =
             provider.api_paradigm ?? provider.apiParadigm ?? 'openai_chat_completions';
         this.providerEditorApiKey = '';
-        const rows = this.providerModelsForProvider(providerUid).map((model) => this.createProviderEditorModelRow(model.model_id ?? model.modelId ?? model.model_name ?? model.modelName ?? model.name ?? '', model.context_window ?? model.contextWindow ?? null, model.uid));
+        const rows = this.providerModelsForProvider(providerUid).map((model) => this.createProviderEditorModelRow(model.model_id ?? model.modelId ?? model.model_name ?? model.modelName ?? model.name ?? '', model.context_window ?? model.contextWindow ?? null, model.uid, model.reasoning));
         this.providerEditorModels = rows.length ? rows : [this.createProviderEditorModelRow()];
     }
     selectProviderPreset = (event) => {
@@ -1820,13 +1873,14 @@ export class AgentRuntimeConversationElement extends LitElement {
             ? selectedModels.map((model) => this.createProviderEditorModelRow(model.id, this.builtinModelContext(model)))
             : [this.createProviderEditorModelRow()];
     };
-    createProviderEditorModelRow(modelId = '', contextWindow = null, uid = null) {
+    createProviderEditorModelRow(modelId = '', contextWindow = null, uid = null, reasoning) {
         this.providerEditorModelSequence += 1;
         return {
             key: String(this.providerEditorModelSequence),
             uid,
             modelId,
             contextWindow,
+            reasoning,
         };
     }
     addProviderEditorModel() {
@@ -1953,6 +2007,19 @@ export class AgentRuntimeConversationElement extends LitElement {
             this.providerOperation = null;
         }
     }
+    providerEditorReasoning(row) {
+        const config = { effort: row.reasoning?.effort };
+        if (this.providerEditorApiParadigm === 'openai_responses')
+            config.summary = row.reasoning?.summary;
+        if (this.providerEditorApiParadigm === 'anthropic_messages') {
+            if (config.effort === 'none' || config.effort === 'minimal')
+                config.effort = undefined;
+            config.thinking = row.reasoning?.thinking;
+            if (config.thinking === 'enabled')
+                config.budget_tokens = row.reasoning?.budget_tokens;
+        }
+        return Object.values(config).some((value) => value !== undefined) ? config : undefined;
+    }
     submitProviderEditor = (event) => {
         event.preventDefault();
         const form = event.currentTarget;
@@ -1978,6 +2045,7 @@ export class AgentRuntimeConversationElement extends LitElement {
                 uid,
                 model_id: modelId,
                 max_context_tokens: this.providerEditorModelContext(row, value(`model-context-${row.key}`)),
+                reasoning: this.providerEditorReasoning(row),
             };
         })
             .filter((model) => model !== null);
@@ -2032,6 +2100,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             uid: model.uid,
             model_id: model.model_id ?? model.modelId ?? model.model_name ?? model.modelName ?? model.name ?? '',
             max_context_tokens: model.context_window ?? model.contextWindow ?? 128000,
+            reasoning: model.reasoning,
         }))
             .filter((model) => model.model_id);
         if (!models.length)

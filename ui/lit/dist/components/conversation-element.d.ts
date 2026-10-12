@@ -208,6 +208,7 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private providerEditorModelContext;
     private refreshProviderDefinitions;
     private selectProviderModel;
+    private providerEditorReasoning;
     private submitProviderEditor;
     private existingProviderRegistrationsExcept;
     private providerRegistrationFromDefinition;

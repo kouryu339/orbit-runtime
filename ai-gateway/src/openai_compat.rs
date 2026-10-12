@@ -106,6 +106,39 @@ pub async fn call_inner(
     require_tool_call: bool,
     force_json: bool,
 ) -> crate::error::Result<LlmResponse> {
+    call_inner_with_reasoning(
+        messages,
+        tools,
+        model,
+        base_url,
+        api_key,
+        None,
+        temperature,
+        top_p,
+        max_tokens,
+        force_tool_name,
+        tool_choice_style,
+        require_tool_call,
+        force_json,
+    )
+    .await
+}
+
+pub async fn call_inner_with_reasoning(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+    tool_choice_style: ToolChoiceStyle,
+    require_tool_call: bool,
+    force_json: bool,
+) -> crate::error::Result<LlmResponse> {
     crate::image_content::validate_model(model, messages)?;
     let request_started = std::time::Instant::now();
     let client = http_client().clone();
@@ -204,6 +237,9 @@ pub async fn call_inner(
         tools.len()
     );
 
+    if let Some(config) = reasoning {
+        config.apply(crate::config::ApiParadigm::OpenAiChatCompletions, &mut body)?;
+    }
     let body_arc = std::sync::Arc::new(body);
     let url_arc = std::sync::Arc::new(url);
     let key_arc = std::sync::Arc::new(api_key.to_string());
@@ -646,6 +682,46 @@ pub async fn call_inner_streaming<F>(
     require_tool_call: bool,
     force_json: bool,
     stream_argument_fields: bool,
+    on_event: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(crate::types::LlmStreamEvent) + Send,
+{
+    call_inner_streaming_with_reasoning(
+        messages,
+        tools,
+        model,
+        base_url,
+        api_key,
+        None,
+        temperature,
+        top_p,
+        max_tokens,
+        force_tool_name,
+        tool_choice_style,
+        require_tool_call,
+        force_json,
+        stream_argument_fields,
+        on_event,
+    )
+    .await
+}
+
+pub async fn call_inner_streaming_with_reasoning<F>(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+    tool_choice_style: ToolChoiceStyle,
+    require_tool_call: bool,
+    force_json: bool,
+    stream_argument_fields: bool,
     mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
@@ -727,6 +803,9 @@ where
         body["response_format"] = json!({"type": "json_object"});
     }
 
+    if let Some(config) = reasoning {
+        config.apply(crate::config::ApiParadigm::OpenAiChatCompletions, &mut body)?;
+    }
     let body_arc = std::sync::Arc::new(body);
     let url_arc = std::sync::Arc::new(url);
     let key_arc = std::sync::Arc::new(api_key.to_string());

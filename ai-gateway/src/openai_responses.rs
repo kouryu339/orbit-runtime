@@ -43,7 +43,19 @@ fn message_input(message: &ChatMessage) -> crate::Result<Vec<Value>> {
         .as_ref()
         .filter(|items| !items.is_empty())
     {
-        return Ok(items.clone());
+        let native = items
+            .iter()
+            .filter(|item| {
+                !matches!(
+                    item["type"].as_str(),
+                    Some("thinking" | "redacted_thinking")
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !native.is_empty() {
+            return Ok(native);
+        }
     }
     if message.role == "tool" {
         if let Some(call_id) = message.tool_call_id.as_deref() {
@@ -88,6 +100,7 @@ pub(crate) fn build_request_body(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
 ) -> crate::Result<Value> {
     crate::image_content::validate_model(model, messages)?;
     let input = messages
@@ -128,6 +141,9 @@ pub(crate) fn build_request_body(
     }
     if let Some(value) = max_tokens {
         body["max_output_tokens"] = json!(value);
+    }
+    if let Some(config) = reasoning {
+        config.apply(crate::config::ApiParadigm::OpenAiResponses, &mut body)?;
     }
     Ok(body)
 }
@@ -212,6 +228,33 @@ pub async fn call_inner(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
 ) -> crate::error::Result<LlmResponse> {
+    call_inner_with_reasoning(
+        messages,
+        tools,
+        model,
+        base_url,
+        api_key,
+        None,
+        temperature,
+        top_p,
+        max_tokens,
+        force_tool_name,
+    )
+    .await
+}
+
+pub async fn call_inner_with_reasoning(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+) -> crate::error::Result<LlmResponse> {
     let url = format!("{}/responses", base_url.trim_end_matches('/'));
     let body = std::sync::Arc::new(build_request_body(
         messages,
@@ -221,6 +264,7 @@ pub async fn call_inner(
         top_p,
         max_tokens,
         force_tool_name,
+        reasoning,
     )?);
     let key = std::sync::Arc::new(api_key.to_string());
     let url = std::sync::Arc::new(url);
@@ -259,6 +303,40 @@ pub async fn call_inner_streaming<F>(
     max_tokens: Option<u32>,
     force_tool_name: Option<&str>,
     require_tool_call: bool,
+    on_event: F,
+) -> crate::error::Result<LlmResponse>
+where
+    F: FnMut(crate::types::LlmStreamEvent) + Send,
+{
+    call_inner_streaming_with_reasoning(
+        messages,
+        tools,
+        model,
+        base_url,
+        api_key,
+        None,
+        temperature,
+        top_p,
+        max_tokens,
+        force_tool_name,
+        require_tool_call,
+        on_event,
+    )
+    .await
+}
+
+pub async fn call_inner_streaming_with_reasoning<F>(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    reasoning: Option<&crate::reasoning::ReasoningConfig>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    force_tool_name: Option<&str>,
+    require_tool_call: bool,
     mut on_event: F,
 ) -> crate::error::Result<LlmResponse>
 where
@@ -275,6 +353,7 @@ where
         top_p,
         max_tokens,
         force_tool_name,
+        reasoning,
     )?;
     if require_tool_call && force_tool_name.is_none() {
         body["tool_choice"] = json!("required");
@@ -583,8 +662,17 @@ mod tests {
             ChatMessage::assistant_with_tool_calls(response.tool_calls.clone().unwrap());
         assistant.provider_items = response.provider_items;
         let tool = ChatMessage::tool_with_id("ok", "call_1", "Read");
-        let body = build_request_body(&[assistant, tool], &[], "gpt-test", None, None, None, None)
-            .unwrap();
+        let body = build_request_body(
+            &[assistant, tool],
+            &[],
+            "gpt-test",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(body["input"][0]["type"], "function_call");
         assert_eq!(body["input"][1]["type"], "function_call_output");
     }
@@ -600,7 +688,8 @@ mod tests {
                 strict: Some(true),
             },
         };
-        let body = build_request_body(&[], &[tool], "gpt-test", None, None, None, None).unwrap();
+        let body =
+            build_request_body(&[], &[tool], "gpt-test", None, None, None, None, None).unwrap();
         assert_eq!(body["tools"][0]["name"], "Read");
         assert_eq!(body["tools"][0]["strict"], true);
         assert!(body["tools"][0].get("function").is_none());

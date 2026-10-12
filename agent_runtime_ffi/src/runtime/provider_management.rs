@@ -71,6 +71,32 @@ impl RuntimeFacade {
             }
         }
 
+        for model in &bundle.models {
+            if let Some(reasoning) = &model.reasoning {
+                let provider = provider_map.get(&model.provider_uid).ok_or_else(|| {
+                    RuntimeError::InvalidConfig("model provider is not configured".into())
+                })?;
+                let paradigm =
+                    provider
+                        .api_paradigm
+                        .unwrap_or_else(|| {
+                            match llm_gateway::providers::resolve(&model.model_name).format {
+                                llm_gateway::providers::ApiFormat::OpenAI => {
+                                    llm_gateway::ApiParadigm::OpenAiChatCompletions
+                                }
+                                llm_gateway::providers::ApiFormat::OpenAIResponses => {
+                                    llm_gateway::ApiParadigm::OpenAiResponses
+                                }
+                                llm_gateway::providers::ApiFormat::Anthropic => {
+                                    llm_gateway::ApiParadigm::AnthropicMessages
+                                }
+                            }
+                        });
+                reasoning
+                    .validate(paradigm)
+                    .map_err(RuntimeError::InvalidConfig)?;
+            }
+        }
         let entries = bundle.models.clone().into_iter().map(|model| {
             (
                 model.uid,
@@ -78,6 +104,7 @@ impl RuntimeFacade {
                     model_name: model.model_name,
                     provider_uid: model.provider_uid,
                     context_window: model.context_window,
+                    reasoning: model.reasoning,
                 },
             )
         });
@@ -174,6 +201,7 @@ impl RuntimeFacade {
                     uid: m.uid,
                     provider_uid: p.id,
                     model_name: m.model_id.clone(),
+                    reasoning: m.reasoning.clone(),
                     context_window: key_store::get(m.uid)
                         .map(|entry| entry.context_window)
                         .unwrap_or_else(|| llm_gateway::config::effective_context_window(m)),

@@ -5985,3 +5985,73 @@ async fn workflow_event_is_global_and_keeps_no_conversation_identity() {
     assert_eq!(envelope["event_line"], "workflow");
     assert!(envelope.get("conversation_id").is_none());
 }
+
+#[test]
+fn model_reasoning_survives_registration_configure_readback_and_restore() {
+    let _guard = runtime_start_test_guard();
+    for schema in [
+        "agent-runtime-llm-registration/v1",
+        "agent-runtime-provider-config/v1",
+        "legacy",
+    ] {
+        let root = unique_test_dir("model-reasoning-roundtrip");
+        let create = minimal_runtime_create_options(&root);
+        let mut facade = RuntimeFacade::create(&create).unwrap();
+        let reasoning = json!({"effort":"high","summary":"auto"});
+        let config = if schema == "legacy" {
+            json!({"providers":[{"uid":71,"api_key":"test","base_url":"https://example.invalid/v1","api_paradigm":"openai_responses"}],
+                "models":[{"uid":7101,"provider_uid":71,"model_name":"custom-model","context_window":128000,"reasoning":reasoning}]})
+        } else {
+            json!({"schema":schema,"id":"test-llm","providers":[{"id":71,"name":"test","type":"openai-gpt","api_key":"test",
+                "base_url":"https://example.invalid/v1","api_paradigm":"openai_responses",
+                "enabled_models":[{"uid":7101,"model_id":"custom-model","reasoning":reasoning}]}]})
+        };
+        if schema == "agent-runtime-llm-registration/v1" {
+            facade.register_llm_json(&config.to_string()).unwrap();
+        } else {
+            facade.configure_providers(&config.to_string()).unwrap();
+        }
+        let definitions: Value =
+            serde_json::from_str(&facade.provider_definitions().unwrap()).unwrap();
+        assert_eq!(definitions["models"][0]["reasoning"], reasoning);
+        assert_eq!(
+            serde_json::to_value(key_store::get(7101).unwrap().reasoning.unwrap()).unwrap(),
+            reasoning
+        );
+        drop(facade);
+        // Provider files are host-owned: reload them explicitly through the
+        // public configuration boundary when recreating a runtime.
+        let restore_options = minimal_runtime_create_options(&root.join("restored"));
+        let mut restored = RuntimeFacade::create(&restore_options).unwrap();
+        restored
+            .configure_providers(root.join("llm_config.json").to_str().unwrap())
+            .unwrap();
+        let definitions: Value =
+            serde_json::from_str(&restored.provider_definitions().unwrap()).unwrap();
+        assert_eq!(definitions["models"][0]["reasoning"], reasoning);
+        drop(restored);
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn invalid_reasoning_does_not_replace_existing_model_configuration() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("invalid-reasoning");
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+    let mut config = json!({"schema":"agent-runtime-provider-config/v1","providers":[{
+        "id":71,"name":"test","type":"openai-gpt","api_key":"test","api_paradigm":"openai_chat_completions",
+        "enabled_models":[{"uid":7101,"model_id":"custom-model","reasoning":{"effort":"low"}}]
+    }]});
+    facade.configure_providers(&config.to_string()).unwrap();
+    let before = facade.provider_definitions().unwrap();
+    config["providers"][0]["enabled_models"][0]["reasoning"] =
+        json!({"effort":"high","summary":"auto"});
+    assert!(facade.configure_providers(&config.to_string()).is_err());
+    assert_eq!(facade.provider_definitions().unwrap(), before);
+    assert_eq!(
+        key_store::get(7101).unwrap().reasoning.unwrap().effort,
+        Some(llm_gateway::reasoning::ReasoningEffort::Low)
+    );
+    let _ = fs::remove_dir_all(root);
+}

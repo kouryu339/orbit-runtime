@@ -81,12 +81,13 @@ async fn dispatch(
 
     match api_format {
         ApiFormat::OpenAI => {
-            crate::openai_compat::call_inner(
+            crate::openai_compat::call_inner_with_reasoning(
                 messages,
                 tools,
                 &entry.model_name,
                 &base_url,
                 &api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -98,12 +99,13 @@ async fn dispatch(
             .await
         }
         ApiFormat::Anthropic => {
-            crate::anthropic_compat::call_inner(
+            crate::anthropic_compat::call_inner_with_reasoning(
                 messages,
                 tools,
                 &entry.model_name,
                 &base_url,
                 &api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -112,12 +114,13 @@ async fn dispatch(
             .await
         }
         ApiFormat::OpenAIResponses => {
-            crate::openai_responses::call_inner(
+            crate::openai_responses::call_inner_with_reasoning(
                 messages,
                 tools,
                 &entry.model_name,
                 &base_url,
                 &api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -386,12 +389,13 @@ where
     let format = effective_api_format(provider.format, runtime.api_paradigm)?;
     match format {
         ApiFormat::OpenAI => {
-            crate::openai_compat::call_inner_streaming(
+            crate::openai_compat::call_inner_streaming_with_reasoning(
                 messages,
                 tools,
                 &entry.model_name,
                 &base_url,
                 &runtime.api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -405,12 +409,13 @@ where
             .await
         }
         ApiFormat::OpenAIResponses => {
-            crate::openai_responses::call_inner_streaming(
+            crate::openai_responses::call_inner_streaming_with_reasoning(
                 messages,
                 tools,
                 &entry.model_name,
                 &base_url,
                 &runtime.api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -421,12 +426,13 @@ where
             .await
         }
         ApiFormat::Anthropic => {
-            crate::anthropic_compat::call_inner_streaming(
+            crate::anthropic_compat::call_inner_streaming_with_reasoning(
                 messages,
                 tools,
                 &entry.model_name,
                 &base_url,
                 &runtime.api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -629,12 +635,13 @@ where
 
     let resp = match api_format {
         ApiFormat::OpenAI => {
-            crate::openai_compat::call_inner_streaming(
+            crate::openai_compat::call_inner_streaming_with_reasoning(
                 messages,
                 std::slice::from_ref(tool),
                 &entry.model_name,
                 &base_url,
                 &api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -653,12 +660,13 @@ where
         }
         ApiFormat::OpenAIResponses => {
             tracing::warn!("OpenAI Responses streaming is not implemented; using the same native Responses protocol without incremental chunks");
-            crate::openai_responses::call_inner(
+            crate::openai_responses::call_inner_with_reasoning(
                 messages,
                 std::slice::from_ref(tool),
                 &entry.model_name,
                 &base_url,
                 &api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,
@@ -668,12 +676,13 @@ where
         }
         ApiFormat::Anthropic => {
             tracing::warn!("Anthropic 格式不支持流式，降级为普通调用");
-            crate::anthropic_compat::call_inner(
+            crate::anthropic_compat::call_inner_with_reasoning(
                 messages,
                 std::slice::from_ref(tool),
                 &entry.model_name,
                 &base_url,
                 &api_key,
+                entry.reasoning.as_ref(),
                 temperature,
                 top_p,
                 max_tokens,

@@ -2488,6 +2488,7 @@ async fn build_thinking_payload_from_response(
                 &response.content,
                 &tool_calls,
                 reasoning_content,
+                response.provider_items.clone(),
                 turn_id,
             )
             .await;
@@ -2501,6 +2502,7 @@ async fn build_thinking_payload_from_response(
                 &response.content,
                 &tool_calls,
                 reasoning_content,
+                response.provider_items.clone(),
                 turn_id,
             )
             .await;
@@ -2601,6 +2603,7 @@ async fn build_thinking_payload_from_parsed_tool_calls(
     content: &str,
     parsed_tool_calls: &[crate::runtime::parser::ParsedToolCall],
     reasoning_content: Option<String>,
+    provider_items: Option<Vec<serde_json::Value>>,
     turn_id: u64,
 ) -> corework::error::Result<ThinkingDonePayload> {
     let reasoning = parse_line_protocol(content).reasoning;
@@ -2636,7 +2639,7 @@ async fn build_thinking_payload_from_parsed_tool_calls(
         name: None,
         tool_calls: None,
         reasoning_content,
-        provider_items: None,
+        provider_items,
     };
     AssistantContext::push_message_with_metadata_and_display_on_event_bus(
         cache,
@@ -3568,5 +3571,54 @@ mod tests {
         assert!(context.contains("Role skill\n\nAppendix\n\nA entry\n\nZ entry"));
         assert!(!context.contains("alpha"));
         assert!(!context.contains("zeta"));
+    }
+    #[tokio::test]
+    async fn signed_thinking_survives_line_protocol_tool_history() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let _ = crate::conversation::Conversation::init_global(
+            crate::AIAssistantConfig::default(),
+            Arc::new(InMemoryEventBus::new()),
+        )
+        .await;
+        let conversation = crate::conversation::Conversation::global().unwrap();
+        conversation.state().replace(Vec::new()).await;
+        let (cache, event_bus) = {
+            let agent = conversation.default_agent().lock().await;
+            (
+                agent.cache().unwrap(),
+                agent.state_machine().unwrap().unit().event_bus(),
+            )
+        };
+        let signed = serde_json::json!({"type":"thinking","thinking":"private analysis","signature":"original"});
+        let response = llm_gateway::LlmResponse {
+            content: "EXEC Read --path a.txt".into(),
+            finish_reason: None,
+            tokens: None,
+            cached_tokens: 0,
+            tool_calls: None,
+            reasoning_content: None,
+            provider_items: Some(vec![signed.clone()]),
+        };
+        let payload = build_thinking_payload_from_response(&cache, &event_bus, &response, 1)
+            .await
+            .unwrap();
+        assert_eq!(payload.decision, "executing");
+        let records = conversation
+            .state()
+            .list_recent(crate::conversation_state::LedgerReadOptions::default())
+            .await;
+        let messages = records
+            .iter()
+            .filter_map(|record| record.to_context_message())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages.last().unwrap().provider_items.as_ref().unwrap(),
+            &vec![signed]
+        );
+        assert!(!messages
+            .last()
+            .unwrap()
+            .content
+            .contains("private analysis"));
     }
 }

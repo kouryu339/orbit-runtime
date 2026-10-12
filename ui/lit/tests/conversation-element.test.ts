@@ -1086,7 +1086,7 @@ describe('AgentRuntimeConversationElement', () => {
         schema: 'agent-runtime-provider-definitions/v1',
         providers: [{ uid: 1, name: 'OpenAI compatible', api_key_set: true }],
         models: [
-          { uid: 1001, provider_uid: 1, model_name: 'gpt-5.1' },
+          { uid: 1001, provider_uid: 1, model_name: 'gpt-5.1', reasoning: { effort: 'low' as const } },
           { uid: 1002, provider_uid: 1, model_name: 'deepseek-v4-flash' },
         ],
         current_model_uid: 1001,
@@ -1204,6 +1204,10 @@ describe('AgentRuntimeConversationElement', () => {
     );
     expect(modelInputs).toHaveLength(2);
     modelInputs[1].value = 'local-model-fast';
+    const effort = editor!.querySelector<HTMLSelectElement>('[name^="model-effort-"]')!;
+    effort.value = 'high';
+    effort.dispatchEvent(new Event('change'));
+    await element.updateComplete;
     editor!.dispatchEvent(new SubmitEvent('submit'));
     await vi.waitFor(() => {
       expect(controller.configureProviders).toHaveBeenCalledOnce();
@@ -1219,7 +1223,7 @@ describe('AgentRuntimeConversationElement', () => {
           name: 'OpenAI compatible',
           type: 'openai',
           enabled_models: [
-            { uid: 1001, model_id: 'gpt-5.1' },
+            { uid: 1001, model_id: 'gpt-5.1', reasoning: { effort: 'low' } },
             { uid: 1002, model_id: 'deepseek-v4-flash' },
           ],
         },
@@ -1234,6 +1238,7 @@ describe('AgentRuntimeConversationElement', () => {
             uid: 1003,
             model_id: 'local-model',
             max_context_tokens: 128000,
+            reasoning: { effort: 'high' },
           }, {
             uid: 1004,
             model_id: 'local-model-fast',

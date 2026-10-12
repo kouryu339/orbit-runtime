@@ -29,6 +29,7 @@ pub struct ModelEntry {
     ///
     /// 取 builtin_models.json 中 contextWindow 与用户 maxContextTokens 的较小值，
     pub context_window: u32,
+    pub reasoning: Option<crate::reasoning::ReasoningConfig>,
 }
 
 /// provider_uid → runtime provider config

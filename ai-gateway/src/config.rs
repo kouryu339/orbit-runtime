@@ -195,6 +195,8 @@ pub struct EnabledModel {
     /// 典型用途：用户觉得用不到全量 context，可以设小一些节省费用。
     #[serde(alias = "maxContextTokens", alias = "max_context_tokens", default)]
     pub max_context_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<crate::reasoning::ReasoningConfig>,
 }
 
 /// 用户配置的厂商实例
@@ -310,6 +312,7 @@ pub fn build_index_and_resolver(config: LlmConfig) {
                         model_name: em.model_id.clone(),
                         provider_uid: p.id,
                         context_window: effective_cw,
+                        reasoning: em.reasoning.clone(),
                     },
                 )
             })
@@ -424,6 +427,7 @@ mod tests {
             uid: 1,
             model_id: "deepseek-flash".to_string(),
             max_context_tokens: Some(128_000),
+            reasoning: None,
         };
 
         assert!(find_model(&model.model_id).is_none());
@@ -436,6 +440,7 @@ mod tests {
             uid: 1,
             model_id: "deepseek-v4-flash".to_string(),
             max_context_tokens: Some(2_000_000),
+            reasoning: None,
         };
 
         assert_eq!(effective_context_window(&model), 1_000_000);
