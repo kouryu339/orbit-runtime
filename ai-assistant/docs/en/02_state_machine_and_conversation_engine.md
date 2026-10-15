@@ -16,7 +16,15 @@ State machines make long-running Agent behavior observable and recoverable. The
 host can see which phase is active, handle interruptions, and rebuild UI state
 from snapshots and events.
 
-## 2.3 Conversation Source of Truth
+## 2.3 Thinking Round Budget
+
+`MAX_THINKING_ROUNDS` defaults to `0`, which disables the round limit. A positive
+limit is checked at the start of thinking, before model configuration or an LLM
+request. Exceeding it produces a fallback reply without another model request.
+There is no post-response auto-continue step limit; legacy step keys in restored
+snapshots do not affect tool-call admission.
+
+## 2.4 Conversation Source of Truth
 
 The canonical transcript should come from FFI `frontend:state_snapshot` events or
 runtime snapshots, not from partial debug events.

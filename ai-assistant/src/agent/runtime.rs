@@ -387,7 +387,6 @@ impl AgentRuntime {
             cache
                 .set(keys::TASK_STATUS, &"running".to_string(), None)
                 .await?;
-            cache.set(keys::AUTO_CONTINUE_STEPS, &0u32, None).await?;
             cache.delete(keys::LAST_STOP_REASON).await?;
             cache.delete(keys::NEXT_STATE_AFTER_SAYING).await?;
             let event_bus = self.sm.unit().event_bus();

@@ -35,8 +35,10 @@ display commands 和 next-state 等短期字段。
 
 ## 2.4 Thinking 回合
 
-`MAX_THINKING_ROUNDS=0` 表示使用内部默认策略，不应解释成无限循环。每轮 thinking
-都会重新评估工具结果、plan、ledger history、动态上下文和 stop reason。
+`MAX_THINKING_ROUNDS=0` 表示不启用轮数上限，默认值仍为 0。设置为正数时，
+在 thinking 入口累计并检查轮数，超过上限就转为兜底回复，不发送该轮模型请求。
+不再使用模型响应返回后的自动继续步数限制；历史快照中的旧步数键不影响执行。
+每轮 thinking 都会重新评估工具结果、plan、ledger history、动态上下文和 stop reason。
 `ContinueThinking` 只请求额外一轮推理，不执行业务动作。
 
 ## 2.5 结束条件

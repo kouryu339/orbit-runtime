@@ -24,7 +24,6 @@ use std::sync::Arc;
 use super::{events, states};
 
 const DEFAULT_MAX_THINKING_ROUNDS: u32 = 0;
-const DEFAULT_AUTO_CONTINUE_MAX_STEPS: u32 = 20;
 
 const DEFAULT_MAX_HISTORY_MESSAGES: usize = 200;
 
@@ -2374,9 +2373,6 @@ async fn build_thinking_payload_from_native_fc(
         )
         .await;
     };
-    if !reserve_auto_continue_step(cache).await? {
-        return stop_for_max_auto_steps(cache, event_bus, turn_id).await;
-    }
     let structured_tools = tool_calls
         .iter()
         .map(|call| crate::tool_schema::validate_and_project_call(call, definitions))
@@ -2541,62 +2537,6 @@ fn parse_stop_signal(reply: &str) -> (String, Option<StopSignal>) {
     (lines.join("\n").trim().to_string(), Some(signal))
 }
 
-async fn reserve_auto_continue_step(
-    cache: &Arc<dyn corework::cache::Cache>,
-) -> corework::error::Result<bool> {
-    let steps: u32 = cache.get(keys::AUTO_CONTINUE_STEPS).await?.unwrap_or(0);
-    let max_steps: u32 = cache
-        .get(keys::AUTO_CONTINUE_MAX_STEPS)
-        .await?
-        .unwrap_or(DEFAULT_AUTO_CONTINUE_MAX_STEPS);
-    if steps >= max_steps {
-        return Ok(false);
-    }
-    cache
-        .set(keys::AUTO_CONTINUE_STEPS, &(steps + 1), None)
-        .await?;
-    Ok(true)
-}
-
-async fn stop_for_max_auto_steps(
-    cache: &Arc<dyn corework::cache::Cache>,
-    event_bus: &Arc<dyn EventBus>,
-    turn_id: u64,
-) -> corework::error::Result<ThinkingDonePayload> {
-    let max_steps: u32 = cache
-        .get(keys::AUTO_CONTINUE_MAX_STEPS)
-        .await?
-        .unwrap_or(DEFAULT_AUTO_CONTINUE_MAX_STEPS);
-    let max_steps_text = max_steps.to_string();
-    let reply =
-        crate::prompt_assets::render("max_auto_steps.md", &[("{{MAX_STEPS}}", &max_steps_text)]);
-    AssistantContext::push_assistant_message_on_event_bus(cache, event_bus, &reply).await?;
-    cache.set(keys::PENDING_RESPONSE, &reply, None).await?;
-    cache
-        .set(keys::TASK_STATUS, &"waiting".to_string(), None)
-        .await?;
-    cache
-        .set(keys::LAST_STOP_REASON, &"max_steps".to_string(), None)
-        .await?;
-    cache
-        .set(
-            keys::NEXT_STATE_AFTER_SAYING,
-            &states::SUSPENDED.to_string(),
-            None,
-        )
-        .await?;
-    cache
-        .set(keys::NEXT_STATE, &states::SAYING.to_string(), None)
-        .await?;
-
-    Ok(ThinkingDonePayload {
-        reasoning: None,
-        decision: "waiting".to_string(),
-        tools: vec![],
-        turn_id,
-    })
-}
-
 async fn build_thinking_payload_from_parsed_tool_calls(
     cache: &Arc<dyn corework::cache::Cache>,
     event_bus: &Arc<dyn EventBus>,
@@ -2607,9 +2547,6 @@ async fn build_thinking_payload_from_parsed_tool_calls(
     turn_id: u64,
 ) -> corework::error::Result<ThinkingDonePayload> {
     let reasoning = parse_line_protocol(content).reasoning;
-    if !reserve_auto_continue_step(cache).await? {
-        return stop_for_max_auto_steps(cache, event_bus, turn_id).await;
-    }
     let cli_cmds: Vec<String> = parsed_tool_calls
         .iter()
         .map(|tc| tc.to_legacy_command())
@@ -3203,19 +3140,136 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reserve_auto_continue_step_stops_at_configured_max() {
-        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
-        cache
-            .set(keys::AUTO_CONTINUE_MAX_STEPS, &2u32, None)
+    async fn thinking_round_limit_stops_before_model_configuration_or_request() {
+        let sm = crate::state_machine::build_assistant_state_machine()
+            .build()
             .await
-            .expect("set max steps");
+            .unwrap();
+        let cache = sm.unit().cache();
+        crate::agent::set_conversation_id_in_cache(&*cache, "round-limit-test")
+            .await
+            .unwrap();
+        cache
+            .set(keys::MAX_THINKING_ROUNDS, &1u32, None)
+            .await
+            .unwrap();
+        cache
+            .set(keys::THINKING_ROUND_COUNT, &1u32, None)
+            .await
+            .unwrap();
 
-        assert!(reserve_auto_continue_step(&cache).await.unwrap());
-        assert!(reserve_auto_continue_step(&cache).await.unwrap());
-        assert!(!reserve_auto_continue_step(&cache).await.unwrap());
+        // No model, provider, skills, or network is configured. The budget
+        // must stop this state entry before any of those are needed.
+        on_enter(Arc::clone(sm.unit())).await.unwrap();
 
-        let steps: Option<u32> = cache.get(keys::AUTO_CONTINUE_STEPS).await.unwrap();
-        assert_eq!(steps, Some(2));
+        assert_eq!(
+            cache
+                .get::<String>(keys::NEXT_STATE)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(states::SAYING)
+        );
+        assert!(!cache
+            .get::<String>(keys::PENDING_RESULT)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            cache.get::<u32>(keys::THINKING_ROUND_COUNT).await.unwrap(),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_responses_continue_beyond_twenty_batches_in_both_protocols() {
+        let definition = llm_gateway::ToolDefinition {
+            tool_type: "function".to_string(),
+            function: llm_gateway::FunctionDefinition {
+                name: "Read".to_string(),
+                description: "Read a value".to_string(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+                strict: None,
+            },
+        };
+        for native in [true, false] {
+            let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+            let event_bus: Arc<dyn EventBus> = Arc::new(InMemoryEventBus::new());
+            cache
+                .set(keys::MAX_THINKING_ROUNDS, &0u32, None)
+                .await
+                .unwrap();
+            // Old snapshots may retain these keys. They must not gate calls.
+            cache
+                .set("auto_continue_steps", &20u32, None)
+                .await
+                .unwrap();
+            cache
+                .set("auto_continue_max_steps", &0u32, None)
+                .await
+                .unwrap();
+            for turn_id in 1..=25 {
+                let response = llm_gateway::LlmResponse {
+                    content: if native {
+                        String::new()
+                    } else {
+                        "EXEC Read".to_string()
+                    },
+                    finish_reason: Some(if native { "tool_calls" } else { "stop" }.to_string()),
+                    tokens: None,
+                    cached_tokens: 0,
+                    tool_calls: native.then(|| {
+                        vec![llm_gateway::ToolCall::function(
+                            format!("call-{turn_id}"),
+                            "Read",
+                            "{}",
+                        )]
+                    }),
+                    reasoning_content: None,
+                    provider_items: None,
+                };
+                let payload = if native {
+                    build_thinking_payload_from_native_fc(
+                        &cache,
+                        &event_bus,
+                        &response,
+                        std::slice::from_ref(&definition),
+                        turn_id,
+                    )
+                    .await
+                } else {
+                    build_thinking_payload_from_response(&cache, &event_bus, &response, turn_id)
+                        .await
+                }
+                .unwrap();
+                assert_eq!(
+                    payload.decision, "executing",
+                    "native={native}, batch={turn_id}"
+                );
+                assert_eq!(
+                    cache
+                        .get::<String>(keys::NEXT_STATE)
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some(states::EXECUTING)
+                );
+                assert_ne!(
+                    cache
+                        .get::<String>(keys::LAST_STOP_REASON)
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some("max_steps")
+                );
+                if native {
+                    let refs: Vec<crate::context::ToolCallRef> =
+                        cache.get(keys::PENDING_TOOL_CALLS).await.unwrap().unwrap();
+                    assert_eq!(refs[0].id, format!("call-{turn_id}"));
+                }
+            }
+        }
     }
 
     #[tokio::test]

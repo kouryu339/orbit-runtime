@@ -172,13 +172,7 @@ pub mod keys {
     /// Long-running task status: running / waiting / done / paused / failed.
     pub const TASK_STATUS: &str = "task_status";
 
-    /// Auto-continue step count. Reset when a new user message arrives.
-    pub const AUTO_CONTINUE_STEPS: &str = "auto_continue_steps";
-
-    /// Max auto-continue steps for one user task. Default: 20.
-    pub const AUTO_CONTINUE_MAX_STEPS: &str = "auto_continue_max_steps";
-
-    /// Last stop reason: done / waiting / max_steps / pause / error.
+    /// Last stop reason: done / waiting / pause / error.
     pub const LAST_STOP_REASON: &str = "last_stop_reason";
 
     pub const WAITING_FOR_INPUT: &str = "waiting_for_input";
@@ -187,6 +181,7 @@ pub mod keys {
 
     pub const MODEL: &str = "model";
 
+    /// Pre-model thinking round limit. Zero disables this limit.
     pub const MAX_THINKING_ROUNDS: &str = "max_thinking_rounds";
 
     pub const THINKING_ROUND_COUNT: &str = "thinking_round_count";

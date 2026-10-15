@@ -4,6 +4,7 @@
 
 | 正式版本 | 对比基线 | 更新说明 | 更新报告 |
 |---|---|---|---|
+| [v0.5.1](https://github.com/kouryu339/orbit-runtime/releases/tag/v0.5.1) | v0.5.0 | [release-notes](v0.5.1/release-notes.md) | [版本更新报告](v0.5.1/release-report.md) |
 | [v0.5.0](https://github.com/kouryu339/orbit-runtime/releases/tag/v0.5.0) | v0.4.8 | [release-notes](v0.5.0/release-notes.md) | [版本更新报告](v0.5.0/release-report.md) |
 | [v0.4.8](https://github.com/kouryu339/orbit-runtime/releases/tag/v0.4.8) | v0.4.7 | [release-notes](v0.4.8/release-notes.md) | — |
 
