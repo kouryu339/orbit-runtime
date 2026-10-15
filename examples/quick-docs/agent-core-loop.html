@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Orbit Runtime Agent 核心循环：四状态流转、turn 与 token 预算、模型调用、工具执行、权限与 RPCtools 执行边界。">
+  <title>Orbit Runtime · Agent 核心循环</title>
+  <style>
+    :root{--ink:#172e2a;--muted:#62736e;--green:#007d65;--deep:#075c4c;--line:#d6e1db;--paper:#fff;--bg:#eef2ee;--mono:Consolas,"Cascadia Code",monospace;--sans:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.75 var(--sans);-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    a:focus-visible{outline:3px solid #d79320;outline-offset:5px}
+    .sheet{max-width:1456px;margin:28px auto;padding:0 32px}
+    .masthead{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:0 2px 15px;color:var(--deep);font:11px/1.4 var(--mono);letter-spacing:1.5px}
+    .brand{display:flex;align-items:center;gap:9px;font-weight:700}
+    .brand-mark{display:inline-block;width:15px;height:15px;border:4px solid var(--green);border-radius:50%;position:relative}
+    .brand-mark:after{content:"";position:absolute;width:5px;height:5px;background:var(--bg);right:-5px;top:-4px}
+    .hero{background:var(--deep);color:white;padding:31px 38px 29px;border-radius:9px 9px 0 0;position:relative;overflow:hidden}
+    .hero:after{content:"";position:absolute;right:45px;top:-72px;width:260px;height:260px;border:1px solid #ffffff17;border-radius:50%;box-shadow:0 0 0 37px #ffffff07,0 0 0 75px #ffffff05;pointer-events:none}
+    .eyebrow{margin:0 0 7px;font:11px/1.5 var(--mono);letter-spacing:2.5px;color:#a9d9c9}
+    h1{font-size:38px;line-height:1.35;letter-spacing:1px;margin:0;font-weight:700;position:relative;z-index:1}
+    h1 span{font-family:Georgia,serif;font-weight:400;letter-spacing:.2px;margin-left:17px;color:#cce6dc}
+    .hero p:last-child{margin:9px 0 0;color:#d0e6dd;font-size:14px;position:relative;z-index:1}
+    .summary{background:#e1ede5;border:1px solid #cfdfd4;border-top:0;border-radius:0 0 9px 9px;padding:16px 26px;display:flex;gap:22px;align-items:center;margin-bottom:23px}
+    .summary .key{font:10px/1.6 var(--mono);letter-spacing:1.3px;color:var(--green);border-right:1px solid #bacebf;padding-right:22px;flex:none}
+    .summary p{margin:0;font-size:14px;line-height:1.8}
+    .summary strong{color:var(--deep)}
+    .page-nav{display:flex;gap:8px;margin:-6px 0 19px;font-size:11px;line-height:1.6;flex-wrap:wrap}
+    .page-nav a,.page-nav span{padding:5px 11px;border:1px solid #cfddd4;border-radius:4px}
+    .page-nav a:hover{background:#e1ede5}.page-nav span{background:var(--deep);color:#fff;border-color:var(--deep)}
+    .layout{display:grid;grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr);gap:20px;align-items:start}
+    .stack{display:grid;gap:15px;min-width:0}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:7px;overflow:hidden;min-width:0}
+    .panel-head{display:flex;align-items:center;gap:10px;padding:12px 17px;border-bottom:1px solid var(--line)}
+    .panel-head h2{font-size:17px;line-height:1.5;margin:0;font-weight:700;letter-spacing:.2px}
+    .num{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;background:var(--tone,var(--green));color:white;font:13px/1 var(--mono)}
+    .panel-head .tag{margin-left:auto;font:10px/1.5 var(--mono);letter-spacing:.6px;color:var(--muted)}
+    .tinted{border-color:var(--edge,#d6e1db)}
+    .tinted .panel-head{background:var(--wash,#edf5ef);border-color:var(--edge,#d6e1db);color:var(--tone,var(--green))}
+    .blue{--tone:#376b99;--wash:#eaf2f9;--edge:#d4e0ed}
+    .mint{--tone:#287453;--wash:#eaf4ec;--edge:#d6e5d9}
+    .amber{--tone:#9e7012;--wash:#fcf3dc;--edge:#e9dec0}
+    .violet{--tone:#735e99;--wash:#f0ebf7;--edge:#e1d8ed}
+    .rose{--tone:#ad5b62;--wash:#fbebeb;--edge:#edd8d9}
+    .slate{--tone:#51626e;--wash:#edf0f2;--edge:#dbe1e5}
+    .panel-body{padding:13px 18px 15px}
+    .points{margin:0;padding-left:17px}
+    .points li{padding-left:2px;margin:4px 0;line-height:1.85}
+    .points li::marker{color:var(--tone,var(--green));font-size:11px}
+    code{font:12px/1.6 var(--mono);padding:2px 4px;background:#f0f3f0;border-radius:3px;overflow-wrap:anywhere}
+    .micro{font:10px/1.6 var(--mono);color:#728079;letter-spacing:.15px;margin:11px 0 0;border-top:1px solid #e7ece8;padding-top:8px}
+    .state-strip{display:flex;align-items:center;justify-content:space-between;gap:4px;margin:0 0 10px;font:11px/1.5 var(--mono);color:#376b99}
+    .state-strip b{background:#edf3f8;border:1px solid #d6e3ee;padding:5px 6px;border-radius:4px;font-weight:400}
+    .state-strip i{font-style:normal;color:#899b9b}
+    .policy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0 9px}
+    .policy div{padding:8px 9px;border:1px solid #dce6de;border-radius:4px;background:#f7faf7;font-size:11px}
+    .policy b{display:block;font:13px/1.5 var(--mono);color:var(--deep)}
+    .budget-metric{display:flex;align-items:baseline;gap:11px;margin:0 0 10px;color:var(--tone)}
+    .budget-metric strong{font:700 32px/1.2 var(--mono);letter-spacing:-1px}
+    .budget-metric span{font-size:12px}
+    .formula{padding:10px 11px;margin:11px 0;background:var(--wash);border-left:3px solid var(--tone);font:11px/1.9 var(--mono);overflow-wrap:anywhere}
+    .budget-example{border:1px solid #d4e0ed;border-radius:5px;overflow:hidden;margin:13px 0 10px}
+    .example-title{padding:7px 10px;background:#f0f5fa;color:#376b99;font-size:11px;font-weight:700}
+    .example-rounds{display:grid;grid-template-columns:1fr 1fr 1.2fr}
+    .example-rounds div{padding:9px 7px;text-align:center;border-right:1px solid #e0e8ef;font-size:10px;line-height:1.8}
+    .example-rounds div:last-child{border-right:0;background:#fff2ef;color:#a44b45}
+    .example-rounds b{display:block;font-size:12px;font-weight:600}
+    .example-total{margin:0;padding:6px 10px;border-top:1px solid #e0e8ef;color:#376b99;font-size:11px}
+    .budget-table{width:100%;border-collapse:collapse;font-size:11px;line-height:1.7;margin:12px 0 5px;text-align:left}
+    .budget-table th{font-weight:600;color:#287453;background:#eef5ef}
+    .budget-table th,.budget-table td{padding:7px 8px;border-bottom:1px solid #e1e9e2;vertical-align:top}
+    .budget-table td:first-child{white-space:nowrap;color:#287453;font-weight:600}
+    .budget-table code{font-size:10px;padding:0;background:transparent}
+    .flow-callout{display:flex;align-items:center;gap:14px;margin:10px 20px 13px;padding:12px 14px;border:1px solid #cdddce;border-radius:5px;background:#f1f7f1}
+    .flow-callout strong{font:700 25px/1.2 var(--mono);color:var(--green);flex:none}
+    .flow-callout p{font-size:12px;line-height:1.8;margin:0;color:#496153}
+    .flow-callout b{color:var(--deep)}
+    .small-note{font-size:11px;line-height:1.75;color:var(--muted);margin:7px 0 0}
+    .diagram-panel .panel-head{padding-top:14px;padding-bottom:11px}
+    .legend{display:flex;gap:14px;flex-wrap:wrap;padding:13px 19px 0;font-size:10px;color:var(--muted)}
+    .legend span{display:flex;gap:5px;align-items:center}
+    .legend i{width:9px;height:9px;display:inline-block;border-radius:2px;border:1px solid #9db1a6}
+    .diagram{padding:8px 12px 0;overflow-x:auto}
+    .mobile-hint{display:none}
+    .diagram svg{display:block;width:100%;height:auto}
+    svg text{font-family:var(--sans);fill:var(--ink)}
+    svg .node-title{font-size:16px;font-weight:700}
+    svg .node-desc{font-size:12px;fill:#62736e}
+    svg .node-code{font:11px var(--mono);fill:#547167;letter-spacing:.4px}
+    svg .edge-label{font-size:11px;fill:#62736e}
+    .flow-caption{margin:0 20px 16px;padding:10px 12px;background:#f3f7f3;border-left:3px solid var(--green);font-size:12px;line-height:1.8}
+    .code-panel .panel-head{border-bottom:0}
+    .code-label{display:flex;justify-content:space-between;gap:10px;padding:10px 16px;background:#213831;color:#b9cfc3;font:10px/1.5 var(--mono);letter-spacing:.5px}
+    pre{margin:0;background:#132b25;color:#e2eee7;font:12px/1.9 var(--mono);padding:17px 19px 20px;overflow:auto;tab-size:2}
+    pre code{background:none;color:inherit;font:inherit;padding:0;overflow-wrap:normal}
+    .kw{color:#edc982}.fn{color:#9bd7c0}.comment{color:#8aab9b}.str{color:#b8cf98}
+    .boundary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:15px 16px 9px}
+    .boundary article{border-top:3px solid var(--accent);background:var(--tint);padding:11px 12px;border-radius:2px}
+    .boundary .layer{font:10px/1.5 var(--mono);color:var(--muted);letter-spacing:1px}
+    .boundary h3{font-size:14px;line-height:1.5;margin:5px 0}
+    .boundary p{font-size:12px;line-height:1.85;margin:0;color:#50645b}
+    .boundary-note{margin:0;padding:0 17px 14px;font-size:11px;color:var(--muted)}
+    .tradeoffs{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:15px 17px 16px}
+    .tradeoffs h3{margin:0 0 7px;font-size:13px;color:var(--green)}
+    .tradeoffs p{margin:0;font-size:12px;line-height:1.95;color:#50645b}
+    .tradeoffs>div+div{padding-left:15px;border-left:1px solid var(--line)}
+    .tradeoffs>div+div h3{color:#947027}
+    .principle{padding:18px 24px;background:var(--deep);color:#e5f3eb;border-radius:6px;margin-top:20px;display:flex;align-items:center;gap:20px}
+    .principle span{font:10px/1.6 var(--mono);letter-spacing:1.5px;color:#a8cfc0;flex:none}
+    .principle p{font-size:15px;line-height:1.8;margin:0}
+    footer{display:flex;justify-content:space-between;gap:24px;padding:16px 2px 10px;font-size:10px;line-height:1.8;color:#738178}
+    footer .sources{max-width:960px}
+    footer b{font-weight:600;color:#536d5e}
+    .version{white-space:nowrap;font-family:var(--mono);text-align:right}
+    @media(min-width:1600px){body{font-size:15px}.points li{line-height:1.95}.panel-body{padding-top:16px;padding-bottom:18px}}
+    @media(max-width:1050px){.sheet{padding:0 20px}.layout{grid-template-columns:minmax(0,.83fr) minmax(0,1.17fr);gap:14px}.panel-head{padding:11px 13px}.panel-head h2{font-size:15px}.panel-body{padding:12px 13px}.state-strip{font-size:9px}.state-strip b{padding:4px}.boundary{gap:6px;padding:12px}.boundary article{padding:9px 8px}.panel-head .tag{font-size:9px}.hero h1{font-size:33px}}
+    @media(max-width:800px){.sheet{margin:17px auto;padding:0 15px}.masthead{font-size:9px;letter-spacing:.6px}.hero{padding:24px}.hero h1{font-size:29px}.hero h1 span{display:block;margin:4px 0 0;font-size:27px}.hero p:last-child{font-size:12px}.summary{padding:14px 17px;gap:12px}.summary .key{padding-right:12px;font-size:9px}.summary p{font-size:12px}.layout{grid-template-columns:1fr}.stack{gap:13px}.panel-head h2{font-size:17px}.panel-body{padding:14px 18px}.state-strip{font-size:12px;justify-content:flex-start;gap:8px}.state-strip b{padding:5px 8px}.points li{font-size:13px}.diagram-panel{scroll-margin-top:15px}.panel-head .tag{font-size:10px}.principle{align-items:flex-start;padding:17px;gap:13px}.principle p{font-size:13px}footer{display:block}.version{text-align:left;margin-top:8px}.boundary article{padding:10px}.boundary h3{font-size:13px}}
+    @media(max-width:420px){.panel-head .tag{display:none}.boundary{grid-template-columns:1fr}.boundary article{display:grid;grid-template-columns:64px 1fr;gap:0 9px}.boundary .layer{grid-row:1/3;padding-top:6px}.boundary h3{margin-top:0}.state-strip{font-size:10px;gap:4px}.state-strip b{padding:4px 5px}.legend{gap:9px}.summary .key{display:none}.principle span{display:none}pre{font-size:11px}}
+    @media print{@page{size:A3 portrait;margin:10mm}html{scroll-behavior:auto}body{background:white;print-color-adjust:exact;-webkit-print-color-adjust:exact;font-size:12px}.sheet{max-width:none;margin:0;padding:0}.layout{grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr);gap:14px}.hero{padding:22px 27px}.hero h1{font-size:30px}.hero h1 span{display:inline;margin-left:14px}.panel-head h2{font-size:15px}.panel-body{padding:11px 14px}.points li{font-size:12px;line-height:1.8}.stack{gap:12px}.panel{break-inside:avoid}.principle{margin-top:14px}.masthead{padding-bottom:10px}.summary{margin-bottom:17px}footer{font-size:9px;display:flex}.version{text-align:right}pre{font-size:10.5px}.state-strip{font-size:10px}.state-strip b{padding:4px}.boundary{grid-template-columns:repeat(3,minmax(0,1fr))}.boundary article{display:block}.panel-head .tag{display:block}}
+    @media screen and (max-width:800px){.diagram svg{min-width:650px}.mobile-hint{display:block;padding:7px 19px 0;margin:0;font-size:10px;color:var(--muted)}}
+  </style>
+</head>
+<body>
+<main class="sheet">
+  <div class="masthead"><a class="brand" href="#"><i class="brand-mark" aria-hidden="true"></i> ORBIT RUNTIME / ENGINEERING ATLAS</a><span>01 — EXECUTION MODEL</span></div>
+  <header class="hero">
+    <p class="eyebrow">FROM INTENT TO ACTION, AND BACK.</p>
+    <h1>Agent 核心循环 <span>The Agent Loop</span></h1>
+    <p>一次输入，驱动多轮推理与工具执行。状态机负责推进，工具结果成为下一轮的依据。</p>
+  </header>
+  <div class="summary"><div class="key">CORE<br>PRINCIPLE</div><p><strong>thinking → executing → thinking</strong> 构成工作循环；<strong>turn 预算在模型调用前限制思考轮数，token 预算限制单次输入规模</strong>。<br>Harness 管编排、预算与准入，RPCtools 承接工具侧执行边界，业务服务校验实际操作权限。</p></div>
+
+  <nav class="page-nav" aria-label="静态说明系列"><span aria-current="page">01 · Agent 核心循环</span><a href="session-pause-resume.html">02 · 会话暂停与恢复</a><a href="workflow-engine-design.html">03 · 工作流引擎抽象</a><a href="interaction-callback-sse.html">04 · 交互回传与事件推送</a><a href="external-rpc-tools.html">05 · 外部 RPC 工具</a></nav>
+  <div class="layout">
+    <aside class="stack" aria-label="核心机制说明">
+      <section class="panel tinted blue">
+        <div class="panel-head"><span class="num">1</span><h2>循环结构</h2><span class="tag">STATE MACHINE</span></div>
+        <div class="panel-body">
+          <div class="state-strip" aria-label="主状态流转"><b>suspended</b><i>→</i><b>thinking</b><i>⇄</i><b>executing</b></div>
+          <ul class="points"><li><b>四个状态，共用一套驱动器。</b>等待、思考、执行、回复各有职责。</li><li>用户输入或恢复事件唤醒 Agent；已注入任务的临时 Agent 可从 <code>thinking</code> 启动。</li><li>宿主命令先经过 conversation command gate；后台 driver 继续推进，宿主通过事件观察结果。</li></ul>
+          <p class="micro">ai-assistant/src/agent/runtime.rs · state/mod.rs</p>
+        </div>
+      </section>
+      <section class="panel tinted mint">
+        <div class="panel-head"><span class="num">2</span><h2>一轮 thinking 做什么</h2><span class="tag">THINKING</span></div>
+        <div class="panel-body"><ul class="points"><li><b>检查轮数预算</b>，通过后汇总角色、激活技能、工具定义、历史与动态上下文。</li><li>按 token 输入预算压缩历史，并对最终请求复查；满足预算后调用 LLM Gateway。</li><li>原生 <code>tool_calls</code> 与兼容 <code>EXEC</code> 路径分别解析，形成待执行工具批次。</li><li>普通回复进入 <code>saying</code>；协议无效、空响应及请求失败走相应纠正或错误处理。</li></ul><p class="small-note">thinking 是一次状态进入；内部可能包含模型请求重试，历史压缩也可能调用摘要模型。因此，思考轮数与 HTTP 请求总数是不同口径。</p><p class="micro">state/thinking.rs · systems/prompt.rs</p></div>
+      </section>
+      <section class="panel tinted blue">
+        <div class="panel-head"><span class="num">3</span><h2>Turn 预算：模型调用前检查</h2><span class="tag">PRE-REQUEST ROUND LIMIT</span></div>
+        <div class="panel-body"><div class="budget-metric"><strong>0</strong><span>默认不启用轮数上限 · 由宿主显式配置</span></div><ul class="points"><li>宿主通过 <code>max_thinking_rounds</code> 设置上限；thinking 入口先执行 <code>round++</code>，再判断正数上限是否被超过。</li><li><b>超限就本地收敛，不发起本轮 LLM 请求。</b>通过检查后，才继续组装上下文与调用模型。</li><li>默认 <code>0</code> 跳过轮数限制。一次响应里的多个工具调用不分别扣轮数；工具批次完成、再次进入 thinking 时才增加下一轮。</li></ul><div class="budget-example" aria-label="轮数上限为 2 的执行示例"><div class="example-title">例：max_thinking_rounds = 2</div><div class="example-rounds"><div><b>第 1 轮</b>检查通过 → 调模型</div><div><b>第 2 轮</b>检查通过 → 调模型</div><div><b>第 3 次进入</b>超限 → 本地停止</div></div><p class="example-total">常规无重试路径：最多 2 次主模型调用。</p></div><p class="small-note">轮数在 saying 中重置；单轮内部的重试不会额外增加轮数。</p><p class="micro">state/thinking.rs · context.rs · state/saying.rs</p></div>
+      </section>
+      <section class="panel tinted mint">
+        <div class="panel-head"><span class="num">4</span><h2>Token 预算：这次请求能装多少</h2><span class="tag">CONTEXT BUDGET</span></div>
+        <div class="panel-body"><div class="budget-metric"><strong>90%</strong><span>模型上下文窗口 → 自动输入预算</span></div><div class="formula">input_budget = floor(context_window × 90%)<br>history_budget = max(input_budget − fixed_context, 0)</div><ul class="points"><li>固定开销含系统提示、工具定义、动态上下文和 128 token 余量；余下空间留给历史。</li><li>历史估算超预算，或消息数超过上限（默认 200 条），先尝试压缩完整执行组并保留最新用户请求。</li><li>组装最终请求后再次估算；固定上下文过大，或安全压缩后仍超预算，则返回错误并保留原始 ledger，不发送该请求。</li></ul><table class="budget-table"><caption style="text-align:left;font-weight:600;color:#287453;margin-bottom:5px">三种 token 口径</caption><thead><tr><th scope="col">口径</th><th scope="col">当前行为</th></tr></thead><tbody><tr><td>单次输入</td><td>本地按 90% 上下文窗口估算、压缩并复查。</td></tr><tr><td>单次输出</td><td>thinking 当前未显式传入 <code>max_tokens</code>；实际输出约束取决于下游配置与服务端。</td></tr><tr><td>累计消耗</td><td><code>ai:llm-usage</code> 记录输入、输出与缓存用量；主循环未设置跨轮累计 token 硬限额。</td></tr></tbody></table><p class="small-note">当前 token 数为保守估算，包含协议字段，并非 provider 精确 tokenizer；usage 是模型返回的用量口径。</p><p class="micro">systems/history.rs · state/thinking.rs · LlmUsagePayload</p></div>
+      </section>
+      <section class="panel tinted amber">
+        <div class="panel-head"><span class="num">5</span><h2>工具执行与结果回灌</h2><span class="tag">EXECUTING</span></div>
+        <div class="panel-body"><ul class="points"><li><b>先授权，再执行。</b>校验 Agent 可调用性、激活工具与参数，分派到已注册的 local / RPC 工具。</li><li>本批工具由 <code>JoinSet</code> 并发调度；收齐后按原调用顺序整理结果。</li><li>原生 FC 保留 <code>assistant(tool_calls)</code> 与对应的 <code>tool_call_id</code>，结果写入 ledger。</li><li>完成批次后通常回到 <code>thinking</code>，让模型依据真实结果继续决策。</li></ul><p class="small-note">并发调度不等于业务互斥；共享数据写入与幂等由工具服务保障。</p><p class="micro">state/executing.rs · tool_runner.rs · ledger.rs</p></div>
+      </section>
+      <section class="panel tinted violet">
+        <div class="panel-head"><span class="num">6</span><h2>权限与人工审批</h2><span class="tag">POLICY GATE</span></div>
+        <div class="panel-body"><ul class="points"><li>工具按元数据分为只读、受控修改、破坏性操作。</li><li><code>Ask</code> 创建待审批请求，宿主用会话 ID 和调用 ID 返回决定；等待上限 300 秒。</li><li>拒绝、超时或取消均形成工具结果，不执行该调用。</li></ul><div class="policy"><div><b>Full</b>直接执行</div><div><b>Ask</b>等待审批</div><div><b>Deny</b>拒绝执行</div></div><p class="small-note">当前默认策略三类均为 Full；宿主应按场景显式配置。审批本身不提供操作系统隔离。</p><p class="micro">permission.rs · state/executing.rs::authorize_tool</p></div>
+      </section>
+      <section class="panel tinted rose">
+        <div class="panel-head"><span class="num">7</span><h2>暂停、压缩与恢复</h2><span class="tag">CONTROL & CONTEXT</span></div>
+        <div class="panel-body"><ul class="points"><li>每轮请求前检查历史预算；压缩采用准备、提交的分离过程。</li><li>默认 <code>wait_for_tool</code> 等当前 LLM / 压缩 / 工具收尾后暂停；<code>detach_tool</code> 停止本地等待。</li><li>工具被 detach 时，外部副作用可能仍然发生；以 <code>interrupted_unknown</code> 表示不确定结果。</li><li><b>不确定调用不能自动当作失败重试。</b>先核对外部状态与幂等条件，再决定恢复动作。<a href="session-pause-resume.html" style="color:var(--green);text-decoration:underline">查看暂停与恢复详解 →</a></li></ul><p class="micro">agent/runtime.rs · thinking.rs · executing.rs</p></div>
+      </section>
+      <section class="panel tinted slate">
+        <div class="panel-head"><span class="num">8</span><h2>停止与多 Agent 协作</h2><span class="tag">SAYING → SUSPENDED</span></div>
+        <div class="panel-body"><ul class="points"><li><code>saying</code> 发布用户可见回复；等待输入时发出 <code>TURN_DONE</code>，通常转入 <code>suspended</code>。</li><li>暂停与等待是停靠状态；下一次输入或恢复事件可重新启动循环。</li><li>委派任务的候选结果先进入 <code>reported</code>；由委托方接受、修订要求或取消。</li><li><b>回复结束、Agent 停驻、委派任务完成是不同的状态。</b></li></ul><p class="micro">state/saying.rs · agent/runtime.rs · task lifecycle</p></div>
+      </section>
+    </aside>
+
+    <div class="stack">
+      <section class="panel diagram-panel" id="loop">
+        <div class="panel-head"><span class="num">9</span><h2>Agent Loop 运行流程</h2><span class="tag">READ TOP TO BOTTOM ↓</span></div>
+        <div class="legend"><span><i style="background:#eee9f7"></i>输入 / 等待</span><span><i style="background:#e6f1f8"></i>模型</span><span><i style="background:#fcf2d9"></i>工具</span><span><i style="background:#e8f3ea"></i>结果 / 回复</span><span><i style="border-style:dashed;background:#fff8e8"></i>工具侧边界</span></div>
+        <p class="mobile-hint">左右滑动查看完整流程图 →</p>
+        <div class="diagram" tabindex="0" aria-label="主循环流程图，可横向滚动">
+          <svg viewBox="0 0 820 890" role="img" aria-labelledby="flow-title flow-desc">
+            <title id="flow-title">Orbit Runtime Agent 四状态核心循环</title>
+            <desc id="flow-desc">输入唤醒 Agent。thinking 在模型调用前检查轮数预算，再准备和复查 token 输入预算。工具响应直接交给 executing 授权校验并执行，不再检查后置步数。结果写入 ledger 后返回前置轮数检查。普通回复经 saying 回到 suspended。</desc>
+            <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7b9386"/></marker><marker id="green-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#008165"/></marker></defs>
+            <rect x="226" y="102" width="348" height="312" rx="11" fill="#f5f8f422" stroke="#c4d3c6" stroke-dasharray="3 5"/>
+            <g fill="none" stroke="#8ba194" stroke-width="1.5" marker-end="url(#arrow)">
+              <path d="M400 81 V115"/><path d="M400 177 V211"/><path d="M400 306 V340"/><path d="M400 402 V436"/>
+              <path d="M313 466 H225 V532"/><path d="M487 466 H790 V563 H760"/>
+              <path d="M225 594 V628"/><path d="M225 686 V720"/><path d="M625 594 V652"/>
+              <path d="M560 146 H610"/><path d="M560 258 H610"/>
+            </g>
+            <path d="M780 146 H790 V563 H760" fill="none" stroke="#ba8e8d" stroke-width="1.3" stroke-dasharray="4 4" marker-end="url(#arrow)"/>
+            <path d="M60 751 H25 V146 H239" fill="none" stroke="#008165" stroke-width="2" marker-end="url(#green-arrow)"/>
+            <path d="M390 563 H426 V751 H390" fill="none" stroke="#8ba194" stroke-width="1.4" marker-end="url(#arrow)"/>
+            <path d="M760 683 H803 V54 H560" fill="none" stroke="#9dabb9" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+            <rect x="240" y="21" width="320" height="60" rx="7" fill="#eee9f7" stroke="#aa9bbf"/>
+            <text x="400" y="45" text-anchor="middle" class="node-title">用户输入 / 任务 / 恢复事件</text>
+            <text x="400" y="65" text-anchor="middle" class="node-desc">命令准入 → 写入上下文 → 启动 driver</text>
+            <rect x="240" y="115" width="320" height="62" rx="7" fill="#fcf2d9" stroke="#c8b573"/>
+            <text x="400" y="139" text-anchor="middle" class="node-title">thinking · Turn 预算前置检查</text>
+            <text x="400" y="160" text-anchor="middle" class="node-desc">round++ → 检查上限；默认 0 跳过限制</text>
+            <rect x="610" y="115" width="170" height="62" rx="6" fill="#fbebeb" stroke="#cda3a4"/>
+            <text x="695" y="139" text-anchor="middle" style="font-size:13px;font-weight:700">轮数超限</text>
+            <text x="695" y="160" text-anchor="middle" class="node-desc">本地兜底，本轮不调用 LLM</text>
+            <rect x="240" y="211" width="320" height="95" rx="7" fill="#edf4ee" stroke="#9db7a2"/>
+            <text x="400" y="236" text-anchor="middle" class="node-title">Token 预算 · 上下文准备</text>
+            <text x="400" y="258" text-anchor="middle" class="node-desc">输入预算 = 上下文窗口 × 90%</text>
+            <text x="400" y="278" text-anchor="middle" class="node-desc">扣固定开销 → 历史超限先压缩 → 最终复查</text>
+            <text x="400" y="295" text-anchor="middle" class="node-code">SYSTEM + TOOLS + DYNAMIC + HISTORY</text>
+            <rect x="610" y="227" width="170" height="62" rx="6" fill="#fbebeb" stroke="#cda3a4"/>
+            <text x="695" y="251" text-anchor="middle" style="font-size:13px;font-weight:700">仍超输入预算</text>
+            <text x="695" y="272" text-anchor="middle" class="node-desc">返回错误，不发送请求</text>
+            <rect x="240" y="340" width="320" height="62" rx="7" fill="#e6f1f8" stroke="#8cabbe"/>
+            <text x="400" y="364" text-anchor="middle" class="node-title">LLM Gateway · 调用模型</text>
+            <text x="400" y="385" text-anchor="middle" class="node-desc">记录返回 usage，解析工具调用或回复</text>
+            <path d="M400 436 L487 466 L400 496 L313 466 Z" fill="#f4f7f3" stroke="#99ad9e"/>
+            <text x="400" y="471" text-anchor="middle" style="font-size:13px;font-weight:700">有工具调用？</text>
+            <text x="230" y="517" class="edge-label">是 · 工具批次</text><text x="649" y="455" class="edge-label">否 · 普通回复</text>
+            <rect x="60" y="532" width="330" height="62" rx="7" fill="#fcf2d9" stroke="#c8b573"/>
+            <text x="225" y="556" text-anchor="middle" class="node-title">executing · 授权与工具准入</text>
+            <text x="225" y="577" text-anchor="middle" class="node-desc">Full / Ask / Deny → 激活工具与参数校验</text>
+            <rect x="60" y="628" width="330" height="58" rx="7" fill="#fff8e8" stroke="#b69c5d" stroke-dasharray="5 4"/>
+            <text x="225" y="651" text-anchor="middle" class="node-title">RPCtools · 工具侧执行</text>
+            <text x="225" y="672" text-anchor="middle" class="node-desc">RPC 路径 · sandbox 由工具服务部署提供</text>
+            <text x="235" y="618" class="edge-label">RPC</text><text x="433" y="663" class="edge-label" transform="rotate(90 433 663)">local 路径</text>
+            <rect x="60" y="720" width="330" height="62" rx="7" fill="#e8f3ea" stroke="#8eaf99"/>
+            <text x="225" y="744" text-anchor="middle" class="node-title">收集结果 → 写入 ledger</text>
+            <text x="225" y="765" text-anchor="middle" class="node-desc">按调用顺序整理，保留 FC 调用与结果配对</text>
+            <rect x="490" y="532" width="270" height="62" rx="7" fill="#e8f3ea" stroke="#8eaf99"/>
+            <text x="625" y="556" text-anchor="middle" class="node-title">saying · 发布回复</text>
+            <text x="625" y="577" text-anchor="middle" class="node-desc">发布内容，重置 thinking 轮数</text>
+            <rect x="490" y="652" width="270" height="62" rx="7" fill="#eee9f7" stroke="#aa9bbf"/>
+            <text x="625" y="676" text-anchor="middle" class="node-title">suspended · 等待 / 停驻</text>
+            <text x="625" y="697" text-anchor="middle" class="node-desc">正常等待时 TURN_DONE，driver 收敛</text>
+            <text x="635" y="629" text-anchor="middle" class="edge-label">通常完成本次交互</text>
+            <rect x="490" y="751" width="270" height="64" rx="6" fill="#f7f8f6" stroke="#bdc9c0" stroke-dasharray="4 4"/>
+            <text x="507" y="775" style="font-size:12px;font-weight:700">控制侧路 · pause / error</text>
+            <text x="507" y="797" class="node-desc">按边界收敛；外部结果不确定时保留事实</text>
+            <text x="43" y="477" fill="#008165" style="font-size:12px;font-weight:700" transform="rotate(-90 43 477)">带着工具结果，重新检查轮数与上下文预算</text>
+            <text x="616" y="77" class="edge-label">输入 / 恢复后重新唤醒</text>
+            <text x="60" y="847" class="node-code">CHECK BUDGETS BEFORE CALLING THE MODEL</text><text x="60" y="869" class="node-desc">预算检查均在 thinking 内完成；通过后才发送本轮主模型请求。</text>
+          </svg>
+        </div>
+        <div class="flow-callout"><strong>先检查<br>再调用</strong><p><b>Turn 预算</b>决定这一轮是否继续。<br><b>Token 预算</b>决定本轮上下文是否能放进模型。<br>任何前置条件不满足，都不会发送本轮主模型请求。</p></div>
+        <p class="flow-caption">工具返回结果后重新进入 thinking，先检查下一轮预算；回复、等待与暂停沿各自路径收敛。图中虚线框标示 thinking 阶段与工具侧执行边界。</p>
+      </section>
+
+      <section class="panel code-panel">
+        <div class="panel-head"><span class="num">10</span><h2>核心循环伪代码</h2><span class="tag">CONCEPTUAL / SIMPLIFIED</span></div>
+        <div class="code-label"><span>STATE DRIVER</span><span>省略协议兼容、暂停与错误分支</span></div>
+        <pre><code><span class="kw">async function</span> <span class="fn">drive</span>(input) {
+  <span class="kw">await</span> <span class="fn">admitAndRecord</span>(input);
+  state = <span class="str">"thinking"</span>;
+
+  <span class="kw">while</span> (state !== <span class="str">"suspended"</span>) {
+    <span class="kw">if</span> (state === <span class="str">"thinking"</span>) {
+      round++; <span class="comment">// 一次 thinking 入口记一轮</span>
+      <span class="kw">if</span> (maxRounds &gt; 0 &amp;&amp; round &gt; maxRounds) {
+        state = <span class="fn">prepareFallbackReply</span>(); <span class="comment">// → saying</span>
+        <span class="kw">continue</span>;
+      }
+      inputBudget = <span class="fn">floor</span>(contextWindow * 0.9);
+      messages = <span class="kw">await</span> <span class="fn">prepareAndCompact</span>(inputBudget);
+      <span class="comment">// 包含系统提示、工具定义、动态上下文和历史</span>
+      <span class="kw">if</span> (<span class="fn">estimateInput</span>(messages, tools) &gt; inputBudget)
+        <span class="kw">throw</span> <span class="str">"ContextBudgetExceeded"</span>;
+
+      response = <span class="kw">await</span> <span class="fn">callModel</span>(messages, tools);
+      <span class="kw">await</span> <span class="fn">recordUsage</span>(response); <span class="comment">// 记账 ≠ 累计熔断</span>
+      <span class="kw">if</span> (<span class="fn">hasToolCalls</span>(response)) {
+        <span class="kw">await</span> <span class="fn">saveAssistantAndPendingCalls</span>(response);
+        state = <span class="str">"executing"</span>;
+      } <span class="kw">else</span> state = <span class="fn">prepareReply</span>(response);
+    } <span class="kw">else if</span> (state === <span class="str">"executing"</span>) {
+      <span class="comment">// 每个调用独立授权；拒绝也返回工具结果</span>
+      results = <span class="kw">await</span> <span class="fn">runToolBatch</span>(pendingCalls, {
+        authorize: permissionPolicy,
+        execute: registeredLocalOrRpcTool
+      });
+      <span class="kw">await</span> <span class="fn">appendOrderedResults</span>(results); <span class="comment">// FC 配对</span>
+      state = <span class="str">"thinking"</span>;
+    } <span class="kw">else if</span> (state === <span class="str">"saying"</span>) {
+      <span class="kw">await</span> <span class="fn">publishReplyAndTurnDone</span>();
+      round = 0;
+      state = <span class="str">"suspended"</span>;
+    }
+  }
+}</code></pre>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><span class="num">11</span><h2>三层边界，各自负责</h2><span class="tag">DEFENSE IN DEPTH</span></div>
+        <div class="boundary">
+          <article style="--accent:#6685a2;--tint:#eef4f8"><div class="layer">LAYER 01</div><h3>Harness</h3><p>状态推进、模型调用前的轮数与上下文预算、工具准入、审批及记账。</p></article>
+          <article style="--accent:#b7954e;--tint:#fbf5e7"><div class="layer">LAYER 02</div><h3>RPCtools</h3><p>参数校验、执行隔离；按部署限制文件、网络与进程。</p></article>
+          <article style="--accent:#4b8c70;--tint:#edf5ef"><div class="layer">LAYER 03</div><h3>业务服务</h3><p>身份、租户、数据范围、业务规则与幂等。</p></article>
+        </div>
+        <p class="boundary-note">工具侧 sandbox 为本页采用的部署前提，不代表 RPC 协议或 Runtime 自动提供隔离；local 工具路径需独立约束。</p>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><span class="num">12</span><h2>设计取舍</h2><span class="tag">WHY THIS SHAPE</span></div>
+        <div class="tradeoffs"><div><h3>清晰的职责</h3><p>前置轮数预算控制继续，上下文预算控制输入。<br>ledger 与事件保留执行事实和用量。<br>审批与工具执行隔离分层配置。</p></div><div><h3>需要守住的约束</h3><p>默认轮数 0；有限执行需由宿主显式配置。<br>并发工具的写入一致性由服务侧保障。<br>中断后先确认副作用，再决定重试。</p></div></div>
+      </section>
+    </div>
+  </div>
+  <div class="principle"><span>THE LOOP<br>IN ONE LINE</span><p><b>检查轮数与 token 预算 → 调用模型 → 在受控边界执行 → 记录结果 → 回到前置预算检查或停驻。</b></p></div>
+  <footer><div class="sources"><b>依据：</b>v0.5.1 的 ai-assistant/src/state/{thinking, executing, saying, suspended}.rs、systems/history.rs、tool_runner.rs、permission.rs、ledger.rs、agent/runtime.rs 及对应运行时文档。<br>本页为实现导读，流程与伪代码经过简化；默认轮数 0。RPCtools sandbox 为使用方提供的部署前提，其内部实现不属于本页已核对的 Runtime 范围。</div><div class="version">v0.5.1 / a8b9270<br>2026.10.15 / REVISION 04</div></footer>
+</main>
+</body>
+</html>

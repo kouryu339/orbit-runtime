@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Orbit Runtime 工作流引擎抽象设计：图、节点、引脚、编译、控制流与数据流、单次执行上下文和审计。">
+<title>Orbit Runtime · 工作流引擎的抽象设计</title>
+<style>
+    :root{--ink:#172e2a;--muted:#62736e;--green:#007d65;--deep:#075c4c;--line:#d6e1db;--paper:#fff;--bg:#eef2ee;--mono:Consolas,"Cascadia Code",monospace;--sans:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.75 var(--sans);-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    a:focus-visible{outline:3px solid #d79320;outline-offset:5px}
+    .sheet{max-width:1456px;margin:28px auto;padding:0 32px}
+    .masthead{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:0 2px 15px;color:var(--deep);font:11px/1.4 var(--mono);letter-spacing:1.5px}
+    .brand{display:flex;align-items:center;gap:9px;font-weight:700}
+    .brand-mark{display:inline-block;width:15px;height:15px;border:4px solid var(--green);border-radius:50%;position:relative}
+    .brand-mark:after{content:"";position:absolute;width:5px;height:5px;background:var(--bg);right:-5px;top:-4px}
+    .hero{background:var(--deep);color:white;padding:31px 38px 29px;border-radius:9px 9px 0 0;position:relative;overflow:hidden}
+    .hero:after{content:"";position:absolute;right:45px;top:-72px;width:260px;height:260px;border:1px solid #ffffff17;border-radius:50%;box-shadow:0 0 0 37px #ffffff07,0 0 0 75px #ffffff05;pointer-events:none}
+    .eyebrow{margin:0 0 7px;font:11px/1.5 var(--mono);letter-spacing:2.5px;color:#a9d9c9}
+    h1{font-size:38px;line-height:1.35;letter-spacing:1px;margin:0;font-weight:700;position:relative;z-index:1}
+    h1 span{font-family:Georgia,serif;font-weight:400;letter-spacing:.2px;margin-left:17px;color:#cce6dc}
+    .hero p:last-child{margin:9px 0 0;color:#d0e6dd;font-size:14px;position:relative;z-index:1}
+    .summary{background:#e1ede5;border:1px solid #cfdfd4;border-top:0;border-radius:0 0 9px 9px;padding:16px 26px;display:flex;gap:22px;align-items:center;margin-bottom:23px}
+    .summary .key{font:10px/1.6 var(--mono);letter-spacing:1.3px;color:var(--green);border-right:1px solid #bacebf;padding-right:22px;flex:none}
+    .summary p{margin:0;font-size:14px;line-height:1.8}
+    .summary strong{color:var(--deep)}
+    .page-nav{display:flex;gap:8px;margin:-6px 0 19px;font-size:11px;line-height:1.6;flex-wrap:wrap}
+    .page-nav a,.page-nav span{padding:5px 11px;border:1px solid #cfddd4;border-radius:4px}
+    .page-nav a:hover{background:#e1ede5}.page-nav span{background:var(--deep);color:#fff;border-color:var(--deep)}
+    .layout{display:grid;grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr);gap:20px;align-items:start}
+    .stack{display:grid;gap:15px;min-width:0}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:7px;overflow:hidden;min-width:0}
+    .panel-head{display:flex;align-items:center;gap:10px;padding:12px 17px;border-bottom:1px solid var(--line)}
+    .panel-head h2{font-size:17px;line-height:1.5;margin:0;font-weight:700;letter-spacing:.2px}
+    .num{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;background:var(--tone,var(--green));color:white;font:13px/1 var(--mono)}
+    .panel-head .tag{margin-left:auto;font:10px/1.5 var(--mono);letter-spacing:.6px;color:var(--muted)}
+    .tinted{border-color:var(--edge,#d6e1db)}
+    .tinted .panel-head{background:var(--wash,#edf5ef);border-color:var(--edge,#d6e1db);color:var(--tone,var(--green))}
+    .blue{--tone:#376b99;--wash:#eaf2f9;--edge:#d4e0ed}
+    .mint{--tone:#287453;--wash:#eaf4ec;--edge:#d6e5d9}
+    .amber{--tone:#9e7012;--wash:#fcf3dc;--edge:#e9dec0}
+    .violet{--tone:#735e99;--wash:#f0ebf7;--edge:#e1d8ed}
+    .rose{--tone:#ad5b62;--wash:#fbebeb;--edge:#edd8d9}
+    .slate{--tone:#51626e;--wash:#edf0f2;--edge:#dbe1e5}
+    .panel-body{padding:13px 18px 15px}
+    .points{margin:0;padding-left:17px}
+    .points li{padding-left:2px;margin:4px 0;line-height:1.85}
+    .points li::marker{color:var(--tone,var(--green));font-size:11px}
+    code{font:12px/1.6 var(--mono);padding:2px 4px;background:#f0f3f0;border-radius:3px;overflow-wrap:anywhere}
+    .micro{font:10px/1.6 var(--mono);color:#728079;letter-spacing:.15px;margin:11px 0 0;border-top:1px solid #e7ece8;padding-top:8px}
+    .state-strip{display:flex;align-items:center;justify-content:space-between;gap:4px;margin:0 0 10px;font:11px/1.5 var(--mono);color:#376b99}
+    .state-strip b{background:#edf3f8;border:1px solid #d6e3ee;padding:5px 6px;border-radius:4px;font-weight:400}
+    .state-strip i{font-style:normal;color:#899b9b}
+    .policy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0 9px}
+    .policy div{padding:8px 9px;border:1px solid #dce6de;border-radius:4px;background:#f7faf7;font-size:11px}
+    .policy b{display:block;font:13px/1.5 var(--mono);color:var(--deep)}
+    .budget-metric{display:flex;align-items:baseline;gap:11px;margin:0 0 10px;color:var(--tone)}
+    .budget-metric strong{font:700 32px/1.2 var(--mono);letter-spacing:-1px}
+    .budget-metric span{font-size:12px}
+    .formula{padding:10px 11px;margin:11px 0;background:var(--wash);border-left:3px solid var(--tone);font:11px/1.9 var(--mono);overflow-wrap:anywhere}
+    .budget-example{border:1px solid #d4e0ed;border-radius:5px;overflow:hidden;margin:13px 0 10px}
+    .example-title{padding:7px 10px;background:#f0f5fa;color:#376b99;font-size:11px;font-weight:700}
+    .example-rounds{display:grid;grid-template-columns:1fr 1fr 1.2fr}
+    .example-rounds div{padding:9px 7px;text-align:center;border-right:1px solid #e0e8ef;font-size:10px;line-height:1.8}
+    .example-rounds div:last-child{border-right:0;background:#fff2ef;color:#a44b45}
+    .example-rounds b{display:block;font-size:12px;font-weight:600}
+    .example-total{margin:0;padding:6px 10px;border-top:1px solid #e0e8ef;color:#376b99;font-size:11px}
+    .budget-table{width:100%;border-collapse:collapse;font-size:11px;line-height:1.7;margin:12px 0 5px;text-align:left}
+    .budget-table th{font-weight:600;color:#287453;background:#eef5ef}
+    .budget-table th,.budget-table td{padding:7px 8px;border-bottom:1px solid #e1e9e2;vertical-align:top}
+    .budget-table td:first-child{white-space:nowrap;color:#287453;font-weight:600}
+    .budget-table code{font-size:10px;padding:0;background:transparent}
+    .flow-callout{display:flex;align-items:center;gap:14px;margin:10px 20px 13px;padding:12px 14px;border:1px solid #cdddce;border-radius:5px;background:#f1f7f1}
+    .flow-callout strong{font:700 25px/1.2 var(--mono);color:var(--green);flex:none}
+    .flow-callout p{font-size:12px;line-height:1.8;margin:0;color:#496153}
+    .flow-callout b{color:var(--deep)}
+    .small-note{font-size:11px;line-height:1.75;color:var(--muted);margin:7px 0 0}
+    .diagram-panel .panel-head{padding-top:14px;padding-bottom:11px}
+    .legend{display:flex;gap:14px;flex-wrap:wrap;padding:13px 19px 0;font-size:10px;color:var(--muted)}
+    .legend span{display:flex;gap:5px;align-items:center}
+    .legend i{width:9px;height:9px;display:inline-block;border-radius:2px;border:1px solid #9db1a6}
+    .diagram{padding:8px 12px 0;overflow-x:auto}
+    .mobile-hint{display:none}
+    .diagram svg{display:block;width:100%;height:auto}
+    svg text{font-family:var(--sans);fill:var(--ink)}
+    svg .node-title{font-size:16px;font-weight:700}
+    svg .node-desc{font-size:12px;fill:#62736e}
+    svg .node-code{font:11px var(--mono);fill:#547167;letter-spacing:.4px}
+    svg .edge-label{font-size:11px;fill:#62736e}
+    .flow-caption{margin:0 20px 16px;padding:10px 12px;background:#f3f7f3;border-left:3px solid var(--green);font-size:12px;line-height:1.8}
+    .code-panel .panel-head{border-bottom:0}
+    .code-label{display:flex;justify-content:space-between;gap:10px;padding:10px 16px;background:#213831;color:#b9cfc3;font:10px/1.5 var(--mono);letter-spacing:.5px}
+    pre{margin:0;background:#132b25;color:#e2eee7;font:12px/1.9 var(--mono);padding:17px 19px 20px;overflow:auto;tab-size:2}
+    pre code{background:none;color:inherit;font:inherit;padding:0;overflow-wrap:normal}
+    .kw{color:#edc982}.fn{color:#9bd7c0}.comment{color:#8aab9b}.str{color:#b8cf98}
+    .boundary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:15px 16px 9px}
+    .boundary article{border-top:3px solid var(--accent);background:var(--tint);padding:11px 12px;border-radius:2px}
+    .boundary .layer{font:10px/1.5 var(--mono);color:var(--muted);letter-spacing:1px}
+    .boundary h3{font-size:14px;line-height:1.5;margin:5px 0}
+    .boundary p{font-size:12px;line-height:1.85;margin:0;color:#50645b}
+    .boundary-note{margin:0;padding:0 17px 14px;font-size:11px;color:var(--muted)}
+    .tradeoffs{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:15px 17px 16px}
+    .tradeoffs h3{margin:0 0 7px;font-size:13px;color:var(--green)}
+    .tradeoffs p{margin:0;font-size:12px;line-height:1.95;color:#50645b}
+    .tradeoffs>div+div{padding-left:15px;border-left:1px solid var(--line)}
+    .tradeoffs>div+div h3{color:#947027}
+    .principle{padding:18px 24px;background:var(--deep);color:#e5f3eb;border-radius:6px;margin-top:20px;display:flex;align-items:center;gap:20px}
+    .principle span{font:10px/1.6 var(--mono);letter-spacing:1.5px;color:#a8cfc0;flex:none}
+    .principle p{font-size:15px;line-height:1.8;margin:0}
+    footer{display:flex;justify-content:space-between;gap:24px;padding:16px 2px 10px;font-size:10px;line-height:1.8;color:#738178}
+    footer .sources{max-width:960px}
+    footer b{font-weight:600;color:#536d5e}
+    .version{white-space:nowrap;font-family:var(--mono);text-align:right}
+    @media(min-width:1600px){body{font-size:15px}.points li{line-height:1.95}.panel-body{padding-top:16px;padding-bottom:18px}}
+    @media(max-width:1050px){.sheet{padding:0 20px}.layout{grid-template-columns:minmax(0,.83fr) minmax(0,1.17fr);gap:14px}.panel-head{padding:11px 13px}.panel-head h2{font-size:15px}.panel-body{padding:12px 13px}.state-strip{font-size:9px}.state-strip b{padding:4px}.boundary{gap:6px;padding:12px}.boundary article{padding:9px 8px}.panel-head .tag{font-size:9px}.hero h1{font-size:33px}}
+    @media(max-width:800px){.sheet{margin:17px auto;padding:0 15px}.masthead{font-size:9px;letter-spacing:.6px}.hero{padding:24px}.hero h1{font-size:29px}.hero h1 span{display:block;margin:4px 0 0;font-size:27px}.hero p:last-child{font-size:12px}.summary{padding:14px 17px;gap:12px}.summary .key{padding-right:12px;font-size:9px}.summary p{font-size:12px}.layout{grid-template-columns:1fr}.stack{gap:13px}.panel-head h2{font-size:17px}.panel-body{padding:14px 18px}.state-strip{font-size:12px;justify-content:flex-start;gap:8px}.state-strip b{padding:5px 8px}.points li{font-size:13px}.diagram-panel{scroll-margin-top:15px}.panel-head .tag{font-size:10px}.principle{align-items:flex-start;padding:17px;gap:13px}.principle p{font-size:13px}footer{display:block}.version{text-align:left;margin-top:8px}.boundary article{padding:10px}.boundary h3{font-size:13px}}
+    @media(max-width:420px){.panel-head .tag{display:none}.boundary{grid-template-columns:1fr}.boundary article{display:grid;grid-template-columns:64px 1fr;gap:0 9px}.boundary .layer{grid-row:1/3;padding-top:6px}.boundary h3{margin-top:0}.state-strip{font-size:10px;gap:4px}.state-strip b{padding:4px 5px}.legend{gap:9px}.summary .key{display:none}.principle span{display:none}pre{font-size:11px}}
+    @media print{@page{size:A3 portrait;margin:10mm}html{scroll-behavior:auto}body{background:white;print-color-adjust:exact;-webkit-print-color-adjust:exact;font-size:12px}.sheet{max-width:none;margin:0;padding:0}.layout{grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr);gap:14px}.hero{padding:22px 27px}.hero h1{font-size:30px}.hero h1 span{display:inline;margin-left:14px}.panel-head h2{font-size:15px}.panel-body{padding:11px 14px}.points li{font-size:12px;line-height:1.8}.stack{gap:12px}.panel{break-inside:avoid}.principle{margin-top:14px}.masthead{padding-bottom:10px}.summary{margin-bottom:17px}footer{font-size:9px;display:flex}.version{text-align:right}pre{font-size:10.5px}.state-strip{font-size:10px}.state-strip b{padding:4px}.boundary{grid-template-columns:repeat(3,minmax(0,1fr))}.boundary article{display:block}.panel-head .tag{display:block}}
+    @media screen and (max-width:800px){.diagram svg{min-width:650px}.mobile-hint{display:block;padding:7px 19px 0;margin:0;font-size:10px;color:var(--muted)}}
+
+
+.hero{background:#195e68}.eyebrow{color:#b4d8d7}.hero h1 span{color:#c5e3df}
+.page-nav{display:flex;gap:8px;margin:-6px 0 19px;font-size:11px;line-height:1.6;flex-wrap:wrap}
+.page-nav a,.page-nav span{padding:5px 11px;border:1px solid #cfddd4;border-radius:4px}
+.page-nav a:hover{background:#e1ede5}.page-nav span{background:#195e68;color:#fff;border-color:#195e68}
+.mode-label{font:700 18px/1.6 var(--mono);color:var(--tone);margin-bottom:9px}
+.mode-label span{font:11px/1.5 var(--sans);padding:3px 7px;border:1px solid var(--edge);margin-left:8px;border-radius:3px}
+.status-track{display:flex;align-items:center;gap:8px;margin:0 0 12px;font:11px/1.7 var(--mono);flex-wrap:wrap}
+.status-track span,.status-track b{border:1px solid #dbd2e8;background:#f5f1fa;padding:4px 7px;border-radius:4px;font-weight:400}
+.status-track b{background:#735e99;color:#fff}.status-track i{font-style:normal;color:#9b8eac}
+.matrix-wrap{padding:7px 17px 13px;overflow-x:auto}
+.behavior-table{border-collapse:collapse;width:100%;font-size:12px;line-height:1.85;text-align:left}
+.behavior-table th,.behavior-table td{padding:10px 9px;border-bottom:1px solid #dfe7e1;vertical-align:top;overflow-wrap:anywhere}
+.behavior-table thead th{color:#195e68;font-size:11px;letter-spacing:.3px;background:#eef5f4}
+.behavior-table tbody th{width:24%;font-weight:600;color:#365c58}
+.behavior-table td{width:38%;color:#50645b}.behavior-table tr:last-child>*{border-bottom:0}
+.recovery-table tbody th{width:39%}.recovery-table td{width:61%}
+.recovery-steps{display:grid;gap:0;padding:2px 18px 14px}
+.recovery-steps article{display:flex;align-items:flex-start;gap:13px;padding:13px 0;border-bottom:1px solid #e3ebe5}
+.recovery-steps article:last-child{border:0}.recovery-steps article>span{font:700 23px/1.4 var(--mono);color:#a1bdb1;flex:none;margin-top:1px}
+.recovery-steps h3{font-size:14px;line-height:1.7;margin:0 0 3px;color:#195e68}
+.recovery-steps p{margin:0;font-size:12px;line-height:1.9;color:#50645b}
+@media(max-width:800px){.page-nav{margin-bottom:15px}.behavior-table{font-size:11px}.matrix-wrap{padding:6px 9px 10px}.behavior-table th,.behavior-table td{padding:8px 6px}.mode-label{font-size:17px}.status-track{gap:5px;font-size:10px}.flow-callout{gap:10px;margin-left:13px;margin-right:13px}.flow-callout strong{font-size:22px}.flow-callout p{font-size:11px}.hero h1{font-size:28px}}
+
+
+.hero{background:#51476a}.eyebrow{color:#d3c5df}.hero h1 span{color:#e1d7e7}
+.page-nav span{background:#51476a;border-color:#51476a}
+.group-label{font:11px var(--mono);fill:#63766d;letter-spacing:1px}
+.exec-line{fill:none;stroke:#738b79;stroke-width:1.7;marker-end:url(#arrow)}
+.data-line{fill:none;stroke:#2c8ca0;stroke-width:2;stroke-dasharray:6 4;marker-end:url(#data-arrow)}
+.data-label{fill:#2c8ca0;font-size:12px}
+.node-kinds{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0 8px}
+.node-kinds span{font-size:11px;background:#f0f6f1;border:1px solid #d9e5dc;border-radius:4px;padding:7px 9px}
+.node-kinds b{display:block;color:#287453;font:12px/1.6 var(--mono)}
+@media(max-width:800px){h1 span{font-size:25px!important}.hero h1{font-size:26px}.page-nav{font-size:10px}}
+</style>
+</head>
+<body>
+<main class="sheet">
+  <div class="masthead"><a class="brand" href="agent-core-loop.html"><i class="brand-mark" aria-hidden="true"></i> ORBIT RUNTIME / ENGINEERING ATLAS</a><span>03 — WORKFLOW ABSTRACTIONS</span></div>
+  <header class="hero"><p class="eyebrow">DEFINE THE GRAPH. ISOLATE THE RUN.</p><h1>工作流引擎的抽象设计 <span>Workflow Engine</span></h1><p>用图表达程序，用引脚约束连接，用执行上下文承载每一次运行。</p></header>
+  <div class="summary"><div class="key">CORE<br>PRINCIPLE</div><p><strong>定义 → 编译与校验 → 独立执行上下文 → 节点调度 → 输出与 Trace</strong>。<br><strong>Exec 传控制，Data 传值。</strong>工作流目录管理可复用定义，每次 Run 管理自己的身份、变量和执行事实。</p></div>
+  <nav class="page-nav" aria-label="静态说明系列"><a href="agent-core-loop.html">01 · Agent 核心循环</a><a href="session-pause-resume.html">02 · 会话暂停与恢复</a><span aria-current="page">03 · 工作流引擎抽象</span><a href="interaction-callback-sse.html">04 · 交互回传与事件推送</a><a href="external-rpc-tools.html">05 · 外部 RPC 工具</a></nav>
+  <div class="layout">
+    <aside class="stack" aria-label="工作流核心抽象">
+      <section class="panel tinted blue"><div class="panel-head"><span class="num">1</span><h2>定义：一张可执行的图</h2><span class="tag">DEFINITION</span></div><div class="panel-body"><ul class="points"><li><code>BlueprintJson</code> 保存节点实例、连接、变量、输入输出契约与画布布局。</li><li>Script 是便于 AI 和人审阅的语义表示；Script 与 Blueprint 可转换，执行时装配为运行图。</li><li>资源目录由 <code>WorkflowsModule</code> 管理；Draft 可编辑和测试，有效草稿才能提升为 Registered 正式执行。</li><li>临时 Script 可直接编译运行，无须注册成持久资源。</li></ul><p class="micro">blueprint_json.rs · workflows/catalog.rs · workflows/draft.rs</p></div></section>
+      <section class="panel tinted mint"><div class="panel-head"><span class="num">2</span><h2>节点：统一接口，区分语义</h2><span class="tag">NODE CONTRACT</span></div><div class="panel-body"><ul class="points"><li>新模块使用统一 <code>BlueprintNode</code> trait：描述类型名、引脚、执行类别，并实现 <code>execute_node(ctx, inputs)</code>。</li><li>注册表提供类型元数据与工厂；加载器将图里的类型实例化。<code>NodeWrapper</code> 统一包装内置和动态节点。</li><li><b>节点类型 ≠ 节点实例。</b>相同 Add 类型可以出现多次，每个图内实例都有独立身份与连线。</li></ul><div class="node-kinds"><span><b>Pure</b>无副作用求值</span><span><b>Impure</b>显式控制 / 状态 / IO</span><span><b>Event</b>事件入口语义</span><span><b>Latent</b>异步等待语义</span><span><b>Macro</b>复合节点类别</span></div><p class="small-note">NodeType 还定义 Macro；类别表达执行语义，不代表自动获得并发、事务或持久化恢复能力。</p><p class="micro">nodes/traits.rs · nodes/node_wrapper.rs · registry/node_registry.rs</p></div></section>
+      <section class="panel tinted amber"><div class="panel-head"><span class="num">3</span><h2>引脚：把顺序与数值分开</h2><span class="tag">EXEC + DATA</span></div><div class="panel-body"><ul class="points"><li><b>Exec 引脚：</b>表示“接下来走哪条路径”。分支、循环、顺序执行都通过它组织。</li><li><b>Data 引脚：</b>表示“这个输入值从哪里来”。连接、默认值与变量共同形成节点输入。</li><li><code>Pin</code> 声明方向与类型，<code>Connection</code> 连接具体节点实例的输入 / 输出引脚。</li><li>Wildcard 表达泛型约束，编译 / 装配时推导具体类型；数组和可选值也有对应容器语义。</li></ul><p class="small-note">数据依赖应保持无环；控制流允许循环。不能把含 Branch / ForLoop 的完整程序一概描述为普通 DAG。</p><p class="micro">core/pin.rs · core/connection.rs · type_inference.rs · compiler.rs</p></div></section>
+      <section class="panel tinted violet"><div class="panel-head"><span class="num">4</span><h2>编译：让错误停在运行之前</h2><span class="tag">COMPILE & LOAD</span></div><div class="panel-body"><ul class="points"><li>Script 解析为结构化步骤并生成 Blueprint；图源经过节点、引脚与连接检查。</li><li>结合注册元数据校验类型、数据引用、变量与输出字段；不允许凭空引用工具输出。</li><li>加载器装配节点、默认值、连接、稳定 node id 与 source map，形成 <code>CompiledBlueprint</code>。</li><li>诊断携带源码行列、错误类别和建议；编译通过只说明程序可建立，业务执行仍可能失败。</li></ul><p class="micro">chain_compiler_v2.rs · blueprint_loader.rs · builder/blueprint_builder.rs</p></div></section>
+      <section class="panel tinted blue"><div class="panel-head"><span class="num">5</span><h2>上下文：一份程序，多次运行</h2><span class="tag">PER-RUN CONTEXT</span></div><div class="panel-body"><ul class="points"><li><code>WorkflowsModule</code> 的执行入口为每次 Run 创建独立缓存，节点引脚与变量不写入模块共享缓存。</li><li><code>ExecutionContext</code> 扩展基础 Context，承载局部栈帧、节点状态、执行流与本次 Trace。</li><li><code>ExecutionFlow</code> 跟踪节点位置与步数，默认最大 10,000 步；它与 Agent thinking 轮数预算独立。</li><li>执行时冻结本次引用的工作流定义；运行身份通过本次上下文传给节点和 RPC。</li></ul><p class="small-note">运行缓存隔离不等于外部数据库或服务事务隔离；工具侧的锁、幂等和并发写入仍需独立保证。</p><p class="micro">workflows/executor.rs::create_run_context · execution/{execution_context,execution_flow}.rs</p></div></section>
+      <section class="panel tinted mint"><div class="panel-head"><span class="num">6</span><h2>执行器：解释图，推进路径</h2><span class="tag">EXECUTOR</span></div><div class="panel-body"><ul class="points"><li>从入口开始，先收集节点输入；缺少纯节点数据时递归求值相应依赖。</li><li>将结果写回本次执行缓存，再读取 <code>NodeOutput</code> 决定后续路径。</li><li><code>ExecPin / Multiple</code> 选择一个或多个出口；<code>Loop / Break / Complete</code> 表达循环、中断与结束。</li><li>End 汇集声明的输出；执行错误沿调用链返回。多个出口按现有路径依次推进，不等于自动并行。</li></ul><p class="micro">execution/executor.rs · core/node_output.rs · workflow.rs</p></div></section>
+      <section class="panel tinted rose"><div class="panel-head"><span class="num">7</span><h2>工具适配：能力仍在系统侧</h2><span class="tag">CAPABILITY ADAPTER</span></div><div class="panel-body"><ul class="points"><li>动态工具节点将数据引脚转为工具参数，经已注册的 local / RPC 能力执行。</li><li>工具注册 schema 决定引脚。传输层 <code>result / to_ai / error_code</code> 与图上的业务输出分开。</li><li>例如工具声明 <code>page_id</code>、<code>url</code>，图中就连接这两个输出；不存在自动生成的万能 Result 引脚。</li><li>RPCtools sandbox 与业务授权约束外部执行；工作流引擎本身不因“图执行”而拥有隔离能力。</li></ul><p class="micro">dynamic_node.rs · ToolContext · runtime workflow contract §11.2</p></div></section>
+      <section class="panel tinted slate"><div class="panel-head"><span class="num">8</span><h2>身份与审计：每次执行可定位</h2><span class="tag">TRACE & IDENTITY</span></div><div class="panel-body"><ul class="points"><li><code>workflow_id</code> 标识资源，<code>run_id</code> 标识一次运行；临时脚本可以没有资源 id。</li><li><code>node_id</code> 对应图上节点；同一节点在循环中每次调用有新的 <code>execution_id</code>。</li><li>Trace 通过 <code>sequence</code> 排序，通过 parent execution 关联分支、循环和嵌套作用域。</li><li>Workflow 使用独立公共事件线；不自动进入 Conversation ledger。宿主负责订阅、持久化及画布映射。</li></ul><p class="micro">execution/trace.rs · workflows/executor.rs · workflow event line</p></div></section>
+    </aside>
+    <div class="stack">
+      <section class="panel diagram-panel"><div class="panel-head"><span class="num">9</span><h2>整体抽象：从定义到一次 Run</h2><span class="tag">ARCHITECTURE MAP</span></div>
+        <div class="legend"><span><i style="background:#e6f1f8"></i>源表示 / 编译</span><span><i style="background:#eee9f7"></i>共享定义</span><span><i style="background:#e8f3ea"></i>单次运行</span><span><i style="background:#fcf2d9"></i>外部能力</span></div><p class="mobile-hint">左右滑动查看完整架构图 →</p>
+        <div class="diagram" tabindex="0" aria-label="工作流引擎抽象架构图，可横向滚动"><svg viewBox="0 0 820 990" role="img" aria-labelledby="wf-title wf-desc"><title id="wf-title">工作流定义、编译、执行和能力适配的职责边界</title><desc id="wf-desc">Script 或 Blueprint 图定义进入编译加载器，使用共享节点注册表和工作流目录装配可执行图。每次执行有独立上下文与执行器，Exec 控制顺序、Data 传值。动态节点调用 local 或 RPC 能力，运行产生输出与可追踪事件。</desc>
+          <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#7b9386"/></marker><marker id="data-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#2c8ca0"/></marker></defs>
+          <rect x="24" y="20" width="772" height="328" rx="10" fill="#f8f9fb" stroke="#d1d9e2" stroke-dasharray="4 5"/>
+          <text x="43" y="44" class="group-label">定义与装配 · SHARED DEFINITIONS</text>
+          <rect x="55" y="64" width="282" height="62" rx="7" fill="#e6f1f8" stroke="#8cabbe"/><text x="196" y="89" text-anchor="middle" class="node-title">Script · 紧凑语义</text><text x="196" y="111" text-anchor="middle" class="node-desc">INPUT / EXEC / IF / FOR / RETURN</text>
+          <rect x="455" y="64" width="282" height="62" rx="7" fill="#e6f1f8" stroke="#8cabbe"/><text x="596" y="89" text-anchor="middle" class="node-title">BlueprintJson · 图与布局</text><text x="596" y="111" text-anchor="middle" class="node-desc">节点实例 + 连线 + 参数 + 画布位置</text>
+          <path d="M337 95 H454" fill="none" stroke="#8ba194" stroke-width="1.4" marker-end="url(#arrow)" marker-start="url(#arrow)"/><text x="396" y="81" text-anchor="middle" class="edge-label">语义转换</text>
+          <path d="M196 126 V151 H396 V173" class="exec-line"/><path d="M596 126 V151 H396" fill="none" stroke="#8ba194" stroke-width="1.5"/>
+          <rect x="237" y="173" width="318" height="69" rx="7" fill="#e6f1f8" stroke="#8cabbe"/><text x="396" y="198" text-anchor="middle" class="node-title">Compiler + BlueprintLoader</text><text x="396" y="221" text-anchor="middle" class="node-desc">语法 / 类型 / 引脚 / 引用校验 → 实例装配</text>
+          <path d="M396 242 V276" class="exec-line"/>
+          <rect x="237" y="276" width="318" height="51" rx="7" fill="#eee9f7" stroke="#aa9bbf"/><text x="396" y="299" text-anchor="middle" class="node-title">CompiledBlueprint</text><text x="396" y="317" text-anchor="middle" class="node-desc">节点 + 连接 + 默认值 + node id / source map</text>
+          <rect x="587" y="170" width="185" height="75" rx="6" fill="#eee9f7" stroke="#aa9bbf"/><text x="679" y="194" text-anchor="middle" style="font-size:14px;font-weight:700">NodeRegistry</text><text x="679" y="215" text-anchor="middle" class="node-desc">类型契约 / 元数据 / 工厂</text><text x="679" y="234" text-anchor="middle" class="node-code">WHAT A NODE CAN DO</text>
+          <path d="M587 207 H556" class="exec-line"/>
+          <rect x="35" y="173" width="173" height="154" rx="6" fill="#eee9f7" stroke="#aa9bbf"/><text x="121" y="199" text-anchor="middle" style="font-size:14px;font-weight:700">WorkflowsModule</text><text x="121" y="223" text-anchor="middle" class="node-desc">资源目录与 revision</text><text x="121" y="246" text-anchor="middle" class="node-desc">Draft → Registered</text><text x="121" y="270" text-anchor="middle" class="node-desc">共享可复用定义</text><text x="121" y="302" text-anchor="middle" class="node-code">NOT RUN VARIABLES</text>
+          <path d="M208 207 H236" class="exec-line"/>
+          <rect x="24" y="386" width="772" height="352" rx="10" fill="#f5faf6" stroke="#b8cfbf" stroke-dasharray="4 5"/><text x="43" y="412" class="group-label">每次执行独立 · PER RUN</text>
+          <path d="M396 327 V426" fill="none" stroke="#8ba194" stroke-width="1.5"/><text x="410" y="369" class="edge-label">发起一次运行 · 绑定身份与 inputs</text>
+          <rect x="55" y="444" width="327" height="184" rx="7" fill="#e8f3ea" stroke="#8eaf99"/><text x="218" y="471" text-anchor="middle" class="node-title">ExecutionContext</text><text x="218" y="498" text-anchor="middle" class="node-desc">基础 Context · Registry / EventBus</text><text x="218" y="522" text-anchor="middle" class="node-desc">独立缓存 · 引脚值 / workflow variables</text><text x="218" y="546" text-anchor="middle" class="node-desc">StackFrame · 局部变量 / 返回位置</text><text x="218" y="570" text-anchor="middle" class="node-desc">NodeState + ExecutionFlow · 步数与位置</text><text x="218" y="598" text-anchor="middle" class="node-code">run_id / node_id / optional agent origin</text><text x="218" y="617" text-anchor="middle" class="node-desc">TraceRecorder · 本次执行事实</text>
+          <rect x="441" y="444" width="321" height="184" rx="7" fill="#e8f3ea" stroke="#8eaf99"/><text x="601" y="471" text-anchor="middle" class="node-title">BlueprintExecutor</text><text x="601" y="498" text-anchor="middle" class="node-desc">Start → 收集输入 / 求值 Pure 依赖</text><text x="601" y="522" text-anchor="middle" class="node-desc">execute_node(ctx, inputs)</text><text x="601" y="546" text-anchor="middle" class="node-desc">保存输出 → 解释 NodeOutput</text><text x="601" y="570" text-anchor="middle" class="node-desc">ExecPin / Multiple / Loop / Break</text><text x="601" y="598" text-anchor="middle" class="node-code">CONTROL FLOW + DATA DEPENDENCIES</text><text x="601" y="617" text-anchor="middle" class="node-desc">推进路径 / End 汇集结果 / 返回错误</text>
+          <path d="M396 426 H601 V443" class="exec-line"/><path d="M396 426 H218 V443" class="exec-line"/>
+          <path d="M382 535 H440" fill="none" stroke="#2c8ca0" stroke-width="1.7" marker-end="url(#data-arrow)" marker-start="url(#data-arrow)"/>
+          <rect x="55" y="665" width="707" height="52" rx="6" fill="#edf4ee" stroke="#a9c2b0"/><text x="408" y="688" text-anchor="middle" style="font-size:14px;font-weight:700">NodeWrapper → BlueprintNode → NodeOutput</text><text x="408" y="708" text-anchor="middle" class="node-desc">内置计算 / 控制节点与动态工具节点遵循统一调用契约</text><path d="M601 628 V664" class="exec-line"/>
+          <path d="M218 717 V782" class="exec-line"/><path d="M601 717 V782" class="exec-line"/>
+          <rect x="55" y="782" width="327" height="88" rx="7" fill="#e6f1f8" stroke="#8cabbe"/><text x="218" y="808" text-anchor="middle" class="node-title">结果与可观测性</text><text x="218" y="833" text-anchor="middle" class="node-desc">End 输出 + run / node Trace</text><text x="218" y="855" text-anchor="middle" class="node-desc">宿主订阅、持久化、关联画布与诊断</text>
+          <rect x="441" y="782" width="321" height="88" rx="7" fill="#fcf2d9" stroke="#c8b573"/><text x="601" y="808" text-anchor="middle" class="node-title">Local / RPC 工具能力</text><text x="601" y="833" text-anchor="middle" class="node-desc">输入 schema → 工具 → 声明输出引脚</text><text x="601" y="855" text-anchor="middle" class="node-desc">工具侧 sandbox / 业务权限 / 外部副作用</text>
+          <text x="42" y="915" class="node-code">DEFINITION IS REUSABLE. EXECUTION STATE BELONGS TO A RUN.</text><text x="42" y="941" class="node-desc">图、节点契约和目录可以复用；变量、节点状态、调用者身份按本次运行管理。</text><text x="42" y="964" class="node-desc">该图是职责抽象；蓝图装配与执行通过现有模块完成，并非独立微服务链。</text>
+        </svg></div><p class="flow-caption"><b>定义与执行态分开。</b>注册表说明节点能做什么，Blueprint 说明程序如何连接，ExecutionContext 保存这一次运行的现场，Executor 按图推进。</p>
+      </section>
+      <section class="panel diagram-panel example-panel"><div class="panel-head"><span class="num">10</span><h2>一张图里，两条流</h2><span class="tag">CONTROL VS DATA</span></div><div class="legend"><span><i style="background:#647c6d"></i>实线 · Exec 控制顺序</span><span><i style="background:#2c8ca0"></i>虚线 · Data 类型传值</span></div><p class="mobile-hint">左右滑动查看引脚连线 →</p><div class="diagram" tabindex="0" aria-label="控制流与数据流示例图，可横向滚动"><svg viewBox="0 0 820 365" role="img" aria-labelledby="pins-title"><title id="pins-title">Start 到 Branch 与 End 的控制流，输入经过 Greater 纯计算产生分支条件</title>
+        <path d="M175 87 H340" class="exec-line"/><path d="M500 76 H628" class="exec-line"/><path d="M500 103 H573 V201 H628" class="exec-line"/>
+        <path d="M125 117 V241 H244" class="data-line"/><path d="M410 241 H420 V116" class="data-line"/>
+        <path d="M175 302 H205 V257 H244" class="data-line"/>
+        <rect x="35" y="55" width="140" height="62" rx="6" fill="#eee9f7" stroke="#aa9bbf"/><text x="105" y="80" text-anchor="middle" class="node-title">Start</text><text x="105" y="103" text-anchor="middle" class="node-desc">input.amount : num</text>
+        <rect x="340" y="55" width="160" height="62" rx="6" fill="#fcf2d9" stroke="#c8b573"/><text x="420" y="80" text-anchor="middle" class="node-title">Branch</text><text x="420" y="103" text-anchor="middle" class="node-desc">condition : bool</text>
+        <rect x="628" y="46" width="157" height="61" rx="6" fill="#e8f3ea" stroke="#8eaf99"/><text x="706" y="71" text-anchor="middle" class="node-title">End A</text><text x="706" y="93" text-anchor="middle" class="node-desc">满足条件</text>
+        <rect x="628" y="171" width="157" height="61" rx="6" fill="#e8f3ea" stroke="#8eaf99"/><text x="706" y="196" text-anchor="middle" class="node-title">End B</text><text x="706" y="218" text-anchor="middle" class="node-desc">另一条路径</text>
+        <rect x="245" y="210" width="165" height="62" rx="6" fill="#e6f1f8" stroke="#8cabbe"/><text x="327" y="235" text-anchor="middle" class="node-title">Greater · Pure</text><text x="327" y="258" text-anchor="middle" class="node-desc">amount &gt; threshold</text>
+        <rect x="35" y="276" width="140" height="48" rx="5" fill="#edf4ee" stroke="#9db7a2"/><text x="105" y="296" text-anchor="middle" style="font-size:13px;font-weight:700">threshold = 100</text><text x="105" y="315" text-anchor="middle" class="node-desc">固定输入 : num</text>
+        <text x="244" y="77" class="edge-label">exec</text><text x="530" y="66" class="edge-label">true</text><text x="581" y="169" class="edge-label">false</text><text x="136" y="227" class="data-label">amount : num</text><text x="433" y="174" class="data-label">bool</text><text x="245" y="346" class="node-desc">收集 Branch 输入时求值 Greater；Pure 节点没有 Exec 连线。</text>
+        </svg></div><p class="flow-caption">控制线让程序到达 Branch；数据依赖提供 condition。分支出口由实际 bool 值选择。该示例用于解释引脚语义，省略 End 的结果参数。</p></section>
+      <section class="panel code-panel"><div class="panel-head"><span class="num">11</span><h2>执行一次节点：抽象伪代码</h2><span class="tag">CONCEPTUAL / SIMPLIFIED</span></div><div class="code-label"><span>GRAPH INTERPRETATION</span><span>省略缓存策略、嵌套循环与 Trace 细节</span></div><pre><code><span class="kw">async function</span> <span class="fn">run</span>(definition, inputs, origin) {
+  graph = <span class="fn">compileAndLoad</span>(definition, nodeRegistry);
+  ctx = <span class="fn">newRunContext</span>(inputs, origin); <span class="comment">// 独立现场</span>
+  <span class="kw">await</span> <span class="fn">visit</span>(graph.entry, ctx);
+  <span class="kw">return</span> <span class="fn">collectEndOutputs</span>(ctx);
+}
+
+<span class="kw">async function</span> <span class="fn">visit</span>(node, ctx) {
+  <span class="fn">checkExecutionStepLimit</span>(ctx);
+  values = <span class="kw">await</span> <span class="fn">collectInputs</span>(node, ctx);
+  <span class="comment">// 数据来源：连接 / 默认值 / 变量</span>
+  <span class="comment">// 纯计算依赖按输入需求求值</span>
+  <span class="fn">bindCurrentNodeIdentity</span>(node, ctx);
+  output = <span class="kw">await</span> node.<span class="fn">execute_node</span>(ctx, values);
+  <span class="fn">storeOutputsAndRecordFacts</span>(node, output, ctx);
+
+  <span class="kw">switch</span> (output.kind) {
+    <span class="kw">case</span> <span class="str">"ExecPin"</span>: <span class="kw">return await</span> <span class="fn">follow</span>(output.pin);
+    <span class="kw">case</span> <span class="str">"Multiple"</span>: <span class="kw">return await</span> <span class="fn">followInOrder</span>(output.pins);
+    <span class="kw">case</span> <span class="str">"Loop"</span>: <span class="kw">return await</span> <span class="fn">runLoopBody</span>(output, ctx);
+    <span class="kw">case</span> <span class="str">"Data"</span>: <span class="kw">return</span> output.values;
+    <span class="kw">case</span> <span class="str">"Break"</span>: <span class="kw">return</span> BREAK_CURRENT_LOOP;
+    <span class="kw">case</span> <span class="str">"Complete"</span>: <span class="kw">return</span>;
+  }
+}</code></pre></section>
+      <section class="panel"><div class="panel-head"><span class="num">12</span><h2>边界：引擎、Agent 与宿主</h2><span class="tag">RESPONSIBILITY</span></div><div class="boundary">
+        <article style="--accent:#6685a2;--tint:#eef4f8"><div class="layer">AGENT</div><h3>决定是否调用</h3><p>AI 工具入口按 destructive 策略审批；来源身份随本次调用传入。</p></article>
+        <article style="--accent:#b7954e;--tint:#fbf5e7"><div class="layer">ENGINE</div><h3>按已定义图执行</h3><p>编译、参数与引脚校验、运行隔离、控制流、输出与 Trace。</p></article>
+        <article style="--accent:#4b8c70;--tint:#edf5ef"><div class="layer">HOST / TOOLS</div><h3>管理外部事实</h3><p>鉴权、sandbox、业务幂等、事务、持久化及跨进程协调。</p></article>
+      </div><p class="boundary-note">宿主直接调用 workflow.execute 是直接执行；携带 conversation / agent 身份不自动触发 Conversation 审批。两项来源身份须成对提供。</p><div class="tradeoffs"><div><h3>清晰的设计收益</h3><p>同一节点契约服务编辑、编译与执行。<br>定义可复用，每次 Run 独立保存执行态。<br>控制与数据显式连线，故障可定位到节点。</p></div><div><h3>实际实现边界</h3><p>保留兼容模块，不能把旧 trait 当成新主接口。<br>执行步数限制不提供事务回滚或自动重试。<br>Trace 事件由宿主保存，不是耐久调度日志。</p></div></div></section>
+    </div>
+  </div>
+  <div class="principle"><span>THE ENGINE<br>IN ONE LINE</span><p><b>图定义程序，引脚约束连接，注册表提供能力，上下文隔离运行，执行器推进控制与数据，Trace 留下事实。</b></p></div>
+  <footer><div class="sources"><b>依据：</b>v0.5.1 的 corework/src/workflow/{core,nodes,registry,builder,execution,workflows}、blueprint_loader.rs、chain_compiler_v2.rs；Runtime Workflow 目录与执行契约（11）。<br>本页为基于当前代码的职责抽象，非新增架构方案；编译示意合并了校验与装配步骤，执行伪代码省略具体缓存及异常分支。</div><div class="version">v0.5.1 / a8b9270<br>2026.10.15 / PAGE 03</div></footer>
+</main>
+</body>
+</html>

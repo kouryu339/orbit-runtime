@@ -25,6 +25,13 @@ Product host
       └─ LLM gateway + optional RPC Tool/RAG sidecars
 ```
 
+## Quick Documentation
+
+Five standalone visual guides explain the Agent loop, session pause and recovery,
+workflow engine, interaction and SSE, and external RPC tools. Start with
+[Quick Documentation](examples/quick-docs/README.md). The guides are in Simplified
+Chinese and can be opened locally without a build or network connection.
+
 ## Why orbit-runtime
 
 | Capability | Product-level result |
@@ -249,6 +256,14 @@ resource registration, frontend event relay, and release packaging.
 
 Keeping the desktop app in a separate repository helps `orbit-runtime` stay
 focused on the runtime, SDK contracts, and native release artifacts.
+
+### Additional Project Example: Reidom
+
+[Reidom](https://github.com/kouryu339/reidom) is an AI-native MIDI arranging
+application combining a Tauri desktop UI, a JUCE project/audio engine, an Agent
+Tool service, and Orbit Runtime configuration and Skills. It provides another
+product example of connecting a host, domain tools, and the runtime. Follow that
+repository's setup and version requirements when building it.
 
 ## Build The Runtime
 

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Orbit Runtime 交互回传、命令检查、工具审批、Widget、事件队列与宿主 SSE 推送。"><title>Orbit Runtime · 交互回传与事件推送</title><style>
+    :root{--ink:#172e2a;--muted:#62736e;--green:#007d65;--deep:#075c4c;--line:#d6e1db;--paper:#fff;--bg:#eef2ee;--mono:Consolas,"Cascadia Code",monospace;--sans:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.75 var(--sans);-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    a:focus-visible{outline:3px solid #d79320;outline-offset:5px}
+    .sheet{max-width:1456px;margin:28px auto;padding:0 32px}
+    .masthead{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:0 2px 15px;color:var(--deep);font:11px/1.4 var(--mono);letter-spacing:1.5px}
+    .brand{display:flex;align-items:center;gap:9px;font-weight:700}
+    .brand-mark{display:inline-block;width:15px;height:15px;border:4px solid var(--green);border-radius:50%;position:relative}
+    .brand-mark:after{content:"";position:absolute;width:5px;height:5px;background:var(--bg);right:-5px;top:-4px}
+    .hero{background:var(--deep);color:white;padding:31px 38px 29px;border-radius:9px 9px 0 0;position:relative;overflow:hidden}
+    .hero:after{content:"";position:absolute;right:45px;top:-72px;width:260px;height:260px;border:1px solid #ffffff17;border-radius:50%;box-shadow:0 0 0 37px #ffffff07,0 0 0 75px #ffffff05;pointer-events:none}
+    .eyebrow{margin:0 0 7px;font:11px/1.5 var(--mono);letter-spacing:2.5px;color:#a9d9c9}
+    h1{font-size:38px;line-height:1.35;letter-spacing:1px;margin:0;font-weight:700;position:relative;z-index:1}
+    h1 span{font-family:Georgia,serif;font-weight:400;letter-spacing:.2px;margin-left:17px;color:#cce6dc}
+    .hero p:last-child{margin:9px 0 0;color:#d0e6dd;font-size:14px;position:relative;z-index:1}
+    .summary{background:#e1ede5;border:1px solid #cfdfd4;border-top:0;border-radius:0 0 9px 9px;padding:16px 26px;display:flex;gap:22px;align-items:center;margin-bottom:23px}
+    .summary .key{font:10px/1.6 var(--mono);letter-spacing:1.3px;color:var(--green);border-right:1px solid #bacebf;padding-right:22px;flex:none}
+    .summary p{margin:0;font-size:14px;line-height:1.8}
+    .summary strong{color:var(--deep)}
+    .page-nav{display:flex;gap:8px;margin:-6px 0 19px;font-size:11px;line-height:1.6;flex-wrap:wrap}
+    .page-nav a,.page-nav span{padding:5px 11px;border:1px solid #cfddd4;border-radius:4px}
+    .page-nav a:hover{background:#e1ede5}.page-nav span{background:var(--deep);color:#fff;border-color:var(--deep)}
+    .layout{display:grid;grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr);gap:20px;align-items:start}
+    .stack{display:grid;gap:15px;min-width:0}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:7px;overflow:hidden;min-width:0}
+    .panel-head{display:flex;align-items:center;gap:10px;padding:12px 17px;border-bottom:1px solid var(--line)}
+    .panel-head h2{font-size:17px;line-height:1.5;margin:0;font-weight:700;letter-spacing:.2px}
+    .num{width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;background:var(--tone,var(--green));color:white;font:13px/1 var(--mono)}
+    .panel-head .tag{margin-left:auto;font:10px/1.5 var(--mono);letter-spacing:.6px;color:var(--muted)}
+    .tinted{border-color:var(--edge,#d6e1db)}
+    .tinted .panel-head{background:var(--wash,#edf5ef);border-color:var(--edge,#d6e1db);color:var(--tone,var(--green))}
+    .blue{--tone:#376b99;--wash:#eaf2f9;--edge:#d4e0ed}
+    .mint{--tone:#287453;--wash:#eaf4ec;--edge:#d6e5d9}
+    .amber{--tone:#9e7012;--wash:#fcf3dc;--edge:#e9dec0}
+    .violet{--tone:#735e99;--wash:#f0ebf7;--edge:#e1d8ed}
+    .rose{--tone:#ad5b62;--wash:#fbebeb;--edge:#edd8d9}
+    .slate{--tone:#51626e;--wash:#edf0f2;--edge:#dbe1e5}
+    .panel-body{padding:13px 18px 15px}
+    .points{margin:0;padding-left:17px}
+    .points li{padding-left:2px;margin:4px 0;line-height:1.85}
+    .points li::marker{color:var(--tone,var(--green));font-size:11px}
+    code{font:12px/1.6 var(--mono);padding:2px 4px;background:#f0f3f0;border-radius:3px;overflow-wrap:anywhere}
+    .micro{font:10px/1.6 var(--mono);color:#728079;letter-spacing:.15px;margin:11px 0 0;border-top:1px solid #e7ece8;padding-top:8px}
+    .state-strip{display:flex;align-items:center;justify-content:space-between;gap:4px;margin:0 0 10px;font:11px/1.5 var(--mono);color:#376b99}
+    .state-strip b{background:#edf3f8;border:1px solid #d6e3ee;padding:5px 6px;border-radius:4px;font-weight:400}
+    .state-strip i{font-style:normal;color:#899b9b}
+    .policy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0 9px}
+    .policy div{padding:8px 9px;border:1px solid #dce6de;border-radius:4px;background:#f7faf7;font-size:11px}
+    .policy b{display:block;font:13px/1.5 var(--mono);color:var(--deep)}
+    .budget-metric{display:flex;align-items:baseline;gap:11px;margin:0 0 10px;color:var(--tone)}
+    .budget-metric strong{font:700 32px/1.2 var(--mono);letter-spacing:-1px}
+    .budget-metric span{font-size:12px}
+    .formula{padding:10px 11px;margin:11px 0;background:var(--wash);border-left:3px solid var(--tone);font:11px/1.9 var(--mono);overflow-wrap:anywhere}
+    .budget-example{border:1px solid #d4e0ed;border-radius:5px;overflow:hidden;margin:13px 0 10px}
+    .example-title{padding:7px 10px;background:#f0f5fa;color:#376b99;font-size:11px;font-weight:700}
+    .example-rounds{display:grid;grid-template-columns:1fr 1fr 1.2fr}
+    .example-rounds div{padding:9px 7px;text-align:center;border-right:1px solid #e0e8ef;font-size:10px;line-height:1.8}
+    .example-rounds div:last-child{border-right:0;background:#fff2ef;color:#a44b45}
+    .example-rounds b{display:block;font-size:12px;font-weight:600}
+    .example-total{margin:0;padding:6px 10px;border-top:1px solid #e0e8ef;color:#376b99;font-size:11px}
+    .budget-table{width:100%;border-collapse:collapse;font-size:11px;line-height:1.7;margin:12px 0 5px;text-align:left}
+    .budget-table th{font-weight:600;color:#287453;background:#eef5ef}
+    .budget-table th,.budget-table td{padding:7px 8px;border-bottom:1px solid #e1e9e2;vertical-align:top}
+    .budget-table td:first-child{white-space:nowrap;color:#287453;font-weight:600}
+    .budget-table code{font-size:10px;padding:0;background:transparent}
+    .flow-callout{display:flex;align-items:center;gap:14px;margin:10px 20px 13px;padding:12px 14px;border:1px solid #cdddce;border-radius:5px;background:#f1f7f1}
+    .flow-callout strong{font:700 25px/1.2 var(--mono);color:var(--green);flex:none}
+    .flow-callout p{font-size:12px;line-height:1.8;margin:0;color:#496153}
+    .flow-callout b{color:var(--deep)}
+    .small-note{font-size:11px;line-height:1.75;color:var(--muted);margin:7px 0 0}
+    .diagram-panel .panel-head{padding-top:14px;padding-bottom:11px}
+    .legend{display:flex;gap:14px;flex-wrap:wrap;padding:13px 19px 0;font-size:10px;color:var(--muted)}
+    .legend span{display:flex;gap:5px;align-items:center}
+    .legend i{width:9px;height:9px;display:inline-block;border-radius:2px;border:1px solid #9db1a6}
+    .diagram{padding:8px 12px 0;overflow-x:auto}
+    .mobile-hint{display:none}
+    .diagram svg{display:block;width:100%;height:auto}
+    svg text{font-family:var(--sans);fill:var(--ink)}
+    svg .node-title{font-size:16px;font-weight:700}
+    svg .node-desc{font-size:12px;fill:#62736e}
+    svg .node-code{font:11px var(--mono);fill:#547167;letter-spacing:.4px}
+    svg .edge-label{font-size:11px;fill:#62736e}
+    .flow-caption{margin:0 20px 16px;padding:10px 12px;background:#f3f7f3;border-left:3px solid var(--green);font-size:12px;line-height:1.8}
+    .code-panel .panel-head{border-bottom:0}
+    .code-label{display:flex;justify-content:space-between;gap:10px;padding:10px 16px;background:#213831;color:#b9cfc3;font:10px/1.5 var(--mono);letter-spacing:.5px}
+    pre{margin:0;background:#132b25;color:#e2eee7;font:12px/1.9 var(--mono);padding:17px 19px 20px;overflow:auto;tab-size:2}
+    pre code{background:none;color:inherit;font:inherit;padding:0;overflow-wrap:normal}
+    .kw{color:#edc982}.fn{color:#9bd7c0}.comment{color:#8aab9b}.str{color:#b8cf98}
+    .boundary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:15px 16px 9px}
+    .boundary article{border-top:3px solid var(--accent);background:var(--tint);padding:11px 12px;border-radius:2px}
+    .boundary .layer{font:10px/1.5 var(--mono);color:var(--muted);letter-spacing:1px}
+    .boundary h3{font-size:14px;line-height:1.5;margin:5px 0}
+    .boundary p{font-size:12px;line-height:1.85;margin:0;color:#50645b}
+    .boundary-note{margin:0;padding:0 17px 14px;font-size:11px;color:var(--muted)}
+    .tradeoffs{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:15px 17px 16px}
+    .tradeoffs h3{margin:0 0 7px;font-size:13px;color:var(--green)}
+    .tradeoffs p{margin:0;font-size:12px;line-height:1.95;color:#50645b}
+    .tradeoffs>div+div{padding-left:15px;border-left:1px solid var(--line)}
+    .tradeoffs>div+div h3{color:#947027}
+    .principle{padding:18px 24px;background:var(--deep);color:#e5f3eb;border-radius:6px;margin-top:20px;display:flex;align-items:center;gap:20px}
+    .principle span{font:10px/1.6 var(--mono);letter-spacing:1.5px;color:#a8cfc0;flex:none}
+    .principle p{font-size:15px;line-height:1.8;margin:0}
+    footer{display:flex;justify-content:space-between;gap:24px;padding:16px 2px 10px;font-size:10px;line-height:1.8;color:#738178}
+    footer .sources{max-width:960px}
+    footer b{font-weight:600;color:#536d5e}
+    .version{white-space:nowrap;font-family:var(--mono);text-align:right}
+    @media(min-width:1600px){body{font-size:15px}.points li{line-height:1.95}.panel-body{padding-top:16px;padding-bottom:18px}}
+    @media(max-width:1050px){.sheet{padding:0 20px}.layout{grid-template-columns:minmax(0,.83fr) minmax(0,1.17fr);gap:14px}.panel-head{padding:11px 13px}.panel-head h2{font-size:15px}.panel-body{padding:12px 13px}.state-strip{font-size:9px}.state-strip b{padding:4px}.boundary{gap:6px;padding:12px}.boundary article{padding:9px 8px}.panel-head .tag{font-size:9px}.hero h1{font-size:33px}}
+    @media(max-width:800px){.sheet{margin:17px auto;padding:0 15px}.masthead{font-size:9px;letter-spacing:.6px}.hero{padding:24px}.hero h1{font-size:29px}.hero h1 span{display:block;margin:4px 0 0;font-size:27px}.hero p:last-child{font-size:12px}.summary{padding:14px 17px;gap:12px}.summary .key{padding-right:12px;font-size:9px}.summary p{font-size:12px}.layout{grid-template-columns:1fr}.stack{gap:13px}.panel-head h2{font-size:17px}.panel-body{padding:14px 18px}.state-strip{font-size:12px;justify-content:flex-start;gap:8px}.state-strip b{padding:5px 8px}.points li{font-size:13px}.diagram-panel{scroll-margin-top:15px}.panel-head .tag{font-size:10px}.principle{align-items:flex-start;padding:17px;gap:13px}.principle p{font-size:13px}footer{display:block}.version{text-align:left;margin-top:8px}.boundary article{padding:10px}.boundary h3{font-size:13px}}
+    @media(max-width:420px){.panel-head .tag{display:none}.boundary{grid-template-columns:1fr}.boundary article{display:grid;grid-template-columns:64px 1fr;gap:0 9px}.boundary .layer{grid-row:1/3;padding-top:6px}.boundary h3{margin-top:0}.state-strip{font-size:10px;gap:4px}.state-strip b{padding:4px 5px}.legend{gap:9px}.summary .key{display:none}.principle span{display:none}pre{font-size:11px}}
+    @media print{@page{size:A3 portrait;margin:10mm}html{scroll-behavior:auto}body{background:white;print-color-adjust:exact;-webkit-print-color-adjust:exact;font-size:12px}.sheet{max-width:none;margin:0;padding:0}.layout{grid-template-columns:minmax(0,.77fr) minmax(0,1.23fr);gap:14px}.hero{padding:22px 27px}.hero h1{font-size:30px}.hero h1 span{display:inline;margin-left:14px}.panel-head h2{font-size:15px}.panel-body{padding:11px 14px}.points li{font-size:12px;line-height:1.8}.stack{gap:12px}.panel{break-inside:avoid}.principle{margin-top:14px}.masthead{padding-bottom:10px}.summary{margin-bottom:17px}footer{font-size:9px;display:flex}.version{text-align:right}pre{font-size:10.5px}.state-strip{font-size:10px}.state-strip b{padding:4px}.boundary{grid-template-columns:repeat(3,minmax(0,1fr))}.boundary article{display:block}.panel-head .tag{display:block}}
+    @media screen and (max-width:800px){.diagram svg{min-width:650px}.mobile-hint{display:block;padding:7px 19px 0;margin:0;font-size:10px;color:var(--muted)}}
+
+
+.hero{background:#195e68}.eyebrow{color:#b4d8d7}.hero h1 span{color:#c5e3df}
+.page-nav{display:flex;gap:8px;margin:-6px 0 19px;font-size:11px;line-height:1.6;flex-wrap:wrap}
+.page-nav a,.page-nav span{padding:5px 11px;border:1px solid #cfddd4;border-radius:4px}
+.page-nav a:hover{background:#e1ede5}.page-nav span{background:#195e68;color:#fff;border-color:#195e68}
+.mode-label{font:700 18px/1.6 var(--mono);color:var(--tone);margin-bottom:9px}
+.mode-label span{font:11px/1.5 var(--sans);padding:3px 7px;border:1px solid var(--edge);margin-left:8px;border-radius:3px}
+.status-track{display:flex;align-items:center;gap:8px;margin:0 0 12px;font:11px/1.7 var(--mono);flex-wrap:wrap}
+.status-track span,.status-track b{border:1px solid #dbd2e8;background:#f5f1fa;padding:4px 7px;border-radius:4px;font-weight:400}
+.status-track b{background:#735e99;color:#fff}.status-track i{font-style:normal;color:#9b8eac}
+.matrix-wrap{padding:7px 17px 13px;overflow-x:auto}
+.behavior-table{border-collapse:collapse;width:100%;font-size:12px;line-height:1.85;text-align:left}
+.behavior-table th,.behavior-table td{padding:10px 9px;border-bottom:1px solid #dfe7e1;vertical-align:top;overflow-wrap:anywhere}
+.behavior-table thead th{color:#195e68;font-size:11px;letter-spacing:.3px;background:#eef5f4}
+.behavior-table tbody th{width:24%;font-weight:600;color:#365c58}
+.behavior-table td{width:38%;color:#50645b}.behavior-table tr:last-child>*{border-bottom:0}
+.recovery-table tbody th{width:39%}.recovery-table td{width:61%}
+.recovery-steps{display:grid;gap:0;padding:2px 18px 14px}
+.recovery-steps article{display:flex;align-items:flex-start;gap:13px;padding:13px 0;border-bottom:1px solid #e3ebe5}
+.recovery-steps article:last-child{border:0}.recovery-steps article>span{font:700 23px/1.4 var(--mono);color:#a1bdb1;flex:none;margin-top:1px}
+.recovery-steps h3{font-size:14px;line-height:1.7;margin:0 0 3px;color:#195e68}
+.recovery-steps p{margin:0;font-size:12px;line-height:1.9;color:#50645b}
+@media(max-width:800px){.page-nav{margin-bottom:15px}.behavior-table{font-size:11px}.matrix-wrap{padding:6px 9px 10px}.behavior-table th,.behavior-table td{padding:8px 6px}.mode-label{font-size:17px}.status-track{gap:5px;font-size:10px}.flow-callout{gap:10px;margin-left:13px;margin-right:13px}.flow-callout strong{font-size:22px}.flow-callout p{font-size:11px}.hero h1{font-size:28px}}
+
+
+.hero{background:#755039}.eyebrow{color:#ebccb3}.hero h1 span{color:#f0dbc5}.page-nav span{background:#755039;border-color:#755039}
+.command-line{fill:none;stroke:#ac7447;stroke-width:1.8;marker-end:url(#cmd-arrow)}
+.event-line{fill:none;stroke:#388d98;stroke-width:1.8;stroke-dasharray:6 4;marker-end:url(#evt-arrow)}
+.seq-label{font-size:13px;fill:#30473e}.seq-sub{font-size:11px;fill:#65786e}.phase-label{font:11px var(--mono);letter-spacing:.9px;fill:#946541}
+.sse-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:17px 21px}.sse-grid h3{font-size:14px;margin:0 0 10px;color:#79502d}.sse-grid p{font-size:12px;line-height:1.8;color:#52665b;margin:7px 0}.sse-grid pre{white-space:pre-wrap;font:11px/1.8 var(--mono);padding:10px;background:#f4f5ef;border:1px solid #e1e4d9;color:#42564b;border-radius:4px}
+@media(max-width:800px){.hero h1{font-size:27px}.hero h1 span{font-size:25px}.sse-grid{grid-template-columns:1fr;padding:15px 18px}.page-nav{font-size:10px}}
+</style></head><body><main class="sheet">
+<div class="masthead"><a class="brand" href="agent-core-loop.html"><i class="brand-mark" aria-hidden="true"></i> ORBIT RUNTIME / ENGINEERING ATLAS</a><span>04 — INTERACTION & EVENT DELIVERY</span></div>
+<header class="hero"><p class="eyebrow">A COMMAND GOES UP. A FACT COMES DOWN.</p><h1>交互回传与事件推送 <span>Callback / SSE</span></h1><p>从用户点击到运行时检查，再从执行事实回到界面：一条完整的交互闭环。</p></header>
+<div class="summary"><div class="key">CORE<br>PRINCIPLE</div><p><strong>操作回传 → 宿主鉴权 → Runtime 检查与执行 → 事件拉取 → SSE 推送 → UI 对账。</strong><br>命令回复说明是否受理；事件说明实际发生了什么。Callback 在前端 / 宿主，SSE 承载下行事件。</p></div>
+<nav class="page-nav" aria-label="静态说明系列"><a href="agent-core-loop.html">01 · Agent 核心循环</a><a href="session-pause-resume.html">02 · 会话暂停与恢复</a><a href="workflow-engine-design.html">03 · 工作流引擎抽象</a><span aria-current="page">04 · 交互回传与事件推送</span><a href="external-rpc-tools.html">05 · 外部 RPC 工具</a></nav><div class="layout"><aside class="stack" aria-label="交互与事件机制"><section class="panel tinted blue"><div class="panel-head"><span class="num">1</span><h2>先界定 Callback 的位置</h2><span class="tag">BOUNDARY</span></div><div class="panel-body"><ul class="points"><li>本页的 callback 指<b>前端操作处理器与宿主回传逻辑</b>：点击、提交、允许 / 拒绝，再映射成 Runtime command。</li><li>ABI 1 的 Runtime 事件出口采用 <code>next_event_v1</code> 拉取；C ABI 的能力声明为 <code>callbacks:false</code>。</li><li>浏览器 <code>EventSource.onmessage</code> 属于客户端接收回调；SDK EventSink / 订阅属于宿主分发层。</li><li>内部状态机和模型流式回调另有用途，与宿主公共事件传输分层。</li></ul><p class="micro">agent_runtime_ffi/src/lib.rs · docs/zh/05 · ui/lit/src/transport/http-sse.ts</p></div></section><section class="panel tinted amber"><div class="panel-head"><span class="num">2</span><h2>回传检查：三道门</h2><span class="tag">CHECK BEFORE ACTION</span></div><div class="panel-body"><ul class="points"><li><b>前端：</b>会话已初始化、输入有效、操作没有正在提交；按最新会话状态控制按钮。</li><li><b>宿主：</b>检查登录、租户 / 用户与 conversation 访问范围，验证字段并路由到正确 Runtime。</li><li><b>Runtime：</b>检查生命周期、命令 admission 与当前待审批项；以收到命令时的状态为准。</li><li>UI 状态可能落后于运行时。按钮可点只代表本地判断，最终要处理服务端拒绝或过期响应。</li></ul><p class="small-note">宿主鉴权由集成应用承担。前端检查改善交互，服务端检查保证实际边界。</p><p class="micro">ai-assistant/src/gateway.rs::admit_with_command_id · examples/guides/zh/05</p></div></section><section class="panel tinted mint"><div class="panel-head"><span class="num">3</span><h2>交互状态：消费会话投影</h2><span class="tag">STATE FOR UI</span></div><div class="panel-body"><ul class="points"><li>会话 UI 使用 <code>frontend:state_snapshot</code>；消息增量取 <code>payload.ledger_delta</code>。</li><li>主要依据 <code>payload.conversation_state</code> 判断交互：waiting、thinking、executing、compacting、stopping。</li><li>当前 Lit 普通发送在 waiting 时开放；运行中显示暂停，压缩和停止阶段保持对应等待状态。</li><li><code>agents[].status</code> 用于展示各 Agent 的内部状态，不能代替整个会话的交互状态。</li></ul><p class="small-note">Runtime 的 send_message 支持 thinking / executing 时插入输入；当前 Lit 常规输入框采用更严格的 waiting 交互策略。宿主按产品需求接入。</p><p class="micro">ai-assistant/src/snapshot.rs · admission.rs · ui/lit/src/components/conversation-element.ts</p></div></section><section class="panel tinted rose"><div class="panel-head"><span class="num">4</span><h2>工具审批：按 Call 关联</h2><span class="tag">PERMISSION ROUND TRIP</span></div><div class="panel-body"><ul class="points"><li>工具策略按 effect 选择 <code>full / ask / deny</code>。Ask 在实际执行前登记待审批项并等待。</li><li><code>pending_permissions</code> 驱动输入框上方审批区；工具气泡维持 waiting_permission 状态。</li><li>用户操作回传 <code>conversation_id + tool_call_id + decision</code>，决定为 allow 或 deny。</li><li>Broker 在互斥锁内取走待审批项；同一 Call 的重复或过期决定返回 <code>resolved:false</code>。</li><li>当前审批等待上限为 300 秒；拒绝、超时或取消进入对应工具结果，只有获准后才继续该工具调用。</li></ul><p class="micro">ai-assistant/src/permission.rs · conversation.resolve_tool_permission</p></div></section><section class="panel tinted violet"><div class="panel-head"><span class="num">5</span><h2>Widget：用户输入的回传</h2><span class="tag">USER INPUT</span></div><div class="panel-body"><ul class="points"><li>Assistant 独占行中的 input / select / confirm 标签由前端解析成控件。</li><li>本轮控件共用一个提交按钮，仅提交已就绪的值，转换为普通用户消息，例如 <code>格式: PDF</code>。</li><li>提交走 <code>conversation.send_message</code>；控件标签本身不作为工具调用或参数执行。</li><li>新的 user / assistant 消息到来后，旧控件过期；已提交 / 过期控件保留值并停止操作。</li></ul><p class="small-note">Widget confirm 收集用户表达；工具权限审批解除某一次 tool_call 的执行等待。两者使用不同入口与身份。</p><p class="micro">docs/zh/06-runtime-frontend-message-contract.md §6.8 · rich-content.ts</p></div></section><section class="panel tinted blue"><div class="panel-head"><span class="num">6</span><h2>事件：展示、状态与持久化</h2><span class="tag">EVENT SEMANTICS</span></div><div class="panel-body"><ul class="points"><li><code>frontend:state_snapshot</code> 提供 UI 投影，含会话状态、待审批、消息增量与临时 assistant_stream。</li><li><code>conversation.state_delta</code> 传递计划、焦点、Agent 等状态增量；<code>conversation.ledger_delta</code> 承载持久事实。</li><li>正式工具记录以 <code>call_id</code> 合并申请、开始、完成与失败；临时流按 turn / attempt / sequence 替换。</li><li>临时流不进入持久历史；最终记录到达后替换占位。LLM usage / error 是 ledger 事实子类型。</li></ul><p class="micro">docs/zh/05、06、07 · ui/lit/src/protocol/reducer.ts</p></div></section><section class="panel tinted amber"><div class="panel-head"><span class="num">7</span><h2>SSE：宿主提供的下行通道</h2><span class="tag">HOST TRANSPORT</span></div><div class="panel-body"><ul class="points"><li>Runtime 事件先进入消费式队列，宿主取出完整 <code>agent-runtime-event/v1</code> envelope，再编码为 SSE。</li><li>每个 Runtime handle 宜由一个消费入口拉取，之后 fan-out 给 UI、存储和其他订阅者；多个直接 pull 会竞争取走事件。</li><li>SSE 的 id、Last-Event-ID、heartbeat、鉴权、补读与慢客户端处理由宿主实现。</li><li>Runtime 内的 event_seq / conversation_event_seq 辅助实例内排序；跨进程持久 cursor 由宿主另行管理。</li></ul><p class="micro">docs/zh/05-runtime-event-format.md · sdk/runtime/rust/src/events.rs</p></div></section><section class="panel tinted slate"><div class="panel-head"><span class="num">8</span><h2>断线与竞态：按事实收敛</h2><span class="tag">RECONCILIATION</span></div><div class="panel-body"><ul class="points"><li>SSE 断开只说明连接变化；客户端进入 reconnecting，不能据此判断 Agent 停止或工具失败。</li><li>宿主需要用事件补读或最新快照对账，覆盖首次快照读取与建立订阅之间的窗口。</li><li>按当前实例和会话范围处理事件序号；跨重启重新建立基线，不沿用旧实例的排序假设。</li><li>命令响应丢失时先核对状态，尤其是审批与外部副作用；可重连不代表业务动作可以重复执行。</li></ul><p class="micro">docs/zh/04、05 · ui/lit/src/protocol/reducer.ts</p></div></section></aside><div class="stack">
+<section class="panel diagram-panel"><div class="panel-head"><span class="num">9</span><h2>交互闭环：命令上行，事实下行</h2><span class="tag">SEQUENCE MAP</span></div>
+<div class="legend"><span><i style="background:#ac7447"></i>实线 · command / 执行</span><span><i style="background:#388d98"></i>虚线 · response / event</span></div><p class="mobile-hint">左右滑动查看四方时序 →</p>
+<div class="diagram" tabindex="0" aria-label="前端、宿主、Runtime 和工具的交互时序，可横向滚动"><svg viewBox="0 0 820 1040" role="img" aria-labelledby="interaction-title"><title id="interaction-title">前端命令经宿主检查进入 Runtime，执行后事件经宿主转为 SSE 更新前端</title>
+<defs><marker id="cmd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#ac7447"/></marker><marker id="evt-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#388d98"/></marker></defs>
+<rect x="28" y="22" width="764" height="947" rx="8" fill="#fbfcfa" stroke="#e0e6dc"/>
+<path d="M115 95 V900 M315 95 V900 M515 95 V900 M705 95 V900" stroke="#d5ded6" stroke-dasharray="5 6"/>
+<rect x="45" y="42" width="140" height="55" rx="6" fill="#e6f1f8" stroke="#8cabbe"/><text x="115" y="66" text-anchor="middle" class="node-title">前端 UI</text><text x="115" y="85" text-anchor="middle" class="node-desc">事件处理器 / reducer</text>
+<rect x="245" y="42" width="140" height="55" rx="6" fill="#fcf2d9" stroke="#c8b573"/><text x="315" y="66" text-anchor="middle" class="node-title">宿主 Gateway</text><text x="315" y="85" text-anchor="middle" class="node-desc">HTTP / SDK / 鉴权</text>
+<rect x="445" y="42" width="140" height="55" rx="6" fill="#e8f3ea" stroke="#8eaf99"/><text x="515" y="66" text-anchor="middle" class="node-title">Runtime</text><text x="515" y="85" text-anchor="middle" class="node-desc">命令门 / Agent / 事件</text>
+<rect x="635" y="42" width="140" height="55" rx="6" fill="#eee9f7" stroke="#aa9bbf"/><text x="705" y="66" text-anchor="middle" class="node-title">Local / RPC</text><text x="705" y="85" text-anchor="middle" class="node-desc">业务工具 / sandbox</text>
+<text x="43" y="130" class="phase-label">01 / USER ACTION</text><text x="123" y="157" class="seq-label">点击 / 控件提交 / 审批决定</text><path d="M115 171 H315" class="command-line"/>
+<text x="323" y="205" class="seq-label">鉴权 + conversation 路由</text><text x="323" y="224" class="seq-sub">验证字段 → invoke(command)</text><path d="M315 237 H515" class="command-line"/>
+<rect x="435" y="251" width="160" height="49" rx="5" fill="#e8f3ea" stroke="#8eaf99"/><text x="515" y="272" text-anchor="middle" class="seq-label">实时状态 / admission</text><text x="515" y="290" text-anchor="middle" class="seq-sub">或检查待审批 Call</text>
+<path d="M515 323 H315" class="event-line"/><path d="M315 323 H115" class="event-line"/><text x="143" y="314" class="seq-label">accepted / rejected · 审批返回 resolved</text>
+<rect x="53" y="345" width="715" height="43" rx="5" fill="#fbf4e7" stroke="#e4d6b8"/><text x="410" y="363" text-anchor="middle" class="seq-label">受理回复之后，界面等待后续运行事实</text><text x="410" y="380" text-anchor="middle" class="seq-sub">审批 allow 只解除当前 Call 的等待；工具仍可能执行失败</text>
+<text x="43" y="415" class="phase-label">02 / EXECUTION</text><text x="524" y="446" class="seq-label">策略获准后执行工具</text><path d="M515 460 H705" class="command-line"/>
+<path d="M705 516 H515" class="event-line"/><text x="529" y="504" class="seq-label">输出 / 失败 / 诊断摘要</text>
+<rect x="420" y="539" width="190" height="49" rx="5" fill="#e8f3ea" stroke="#8eaf99"/><text x="515" y="560" text-anchor="middle" class="seq-label">Ledger / State → UI 投影</text><text x="515" y="579" text-anchor="middle" class="seq-sub">导出完整 event envelope</text>
+<text x="43" y="617" class="phase-label">03 / EVENT DELIVERY</text><text x="325" y="646" class="seq-label">宿主循环 next_event_v1</text><path d="M315 659 H515" class="command-line"/>
+<path d="M515 716 H315" class="event-line"/><text x="330" y="704" class="seq-label">JSON event / TIMEOUT</text>
+<rect x="235" y="735" width="160" height="48" rx="5" fill="#fcf2d9" stroke="#c8b573"/><text x="315" y="756" text-anchor="middle" class="seq-label">分发 / 存储 / 编码 SSE</text><text x="315" y="774" text-anchor="middle" class="seq-sub">按用户与会话过滤</text>
+<text x="130" y="815" class="seq-label">SSE data: 完整 envelope</text><path d="M315 830 H115" class="event-line"/>
+<rect x="38" y="850" width="154" height="50" rx="5" fill="#e6f1f8" stroke="#8cabbe"/><text x="115" y="872" text-anchor="middle" class="seq-label">onmessage → reducer</text><text x="115" y="891" text-anchor="middle" class="seq-sub">更新正文 / 工具 / 按钮</text>
+<text x="220" y="875" class="seq-label">下一次用户操作，从最新投影出发。</text><text x="220" y="896" class="seq-sub">事件泵与命令处理并行；下方 pull 示意不表示执行完才开始消费。</text>
+<text x="47" y="937" class="seq-sub">本图合并普通输入与审批回传；各自 Runtime 检查和执行分支保持独立。</text>
+<text x="40" y="1005" class="node-code">UPSTREAM COMMANDS. DOWNSTREAM FACTS. ONE CANONICAL ENVELOPE.</text>
+</svg></div><p class="flow-caption"><b>同一交互，两个方向。</b>前端通过 HTTP / SDK 发命令；宿主持续拉取事件并通过 SSE 下发。业务命令与事件泵各自运行，审批等待期间也需要保持事件消费。</p></section>
+<section class="panel"><div class="panel-head"><span class="num">10</span><h2>回传入口与检查点</h2><span class="tag">ACTION CONTRACT</span></div><div class="matrix-wrap"><table class="behavior-table"><thead><tr><th>交互</th><th>回传 / 检查</th><th>收敛依据</th></tr></thead><tbody>
+<tr><td>发送 / Widget 提交</td><td>send_message<br>输入、会话、admission</td><td>受理响应 + 后续快照与正文</td></tr>
+<tr><td>暂停</td><td>pause<br>模式与实时状态</td><td>stopping 是受理中；等待停驻</td></tr>
+<tr><td>允许 / 拒绝工具</td><td>resolve_tool_permission<br>conversation + 待审批 call_id</td><td>resolved 与后续工具事实</td></tr>
+<tr><td>压缩历史</td><td>compact_history<br>全会话 waiting / 压缩互斥</td><td>状态与摘要结果更新</td></tr>
+</tbody></table></div><p class="flow-caption">HTTP 路径由宿主配置。Lit 默认示例：POST /api/chat、/api/pause、/api/tool-permission；这些路径属于 HTTP 适配层。</p></section>
+<section class="panel diagram-panel"><div class="panel-head"><span class="num">11</span><h2>Ask 审批：先登记，再等待</h2><span class="tag">CHECK → WAIT → RESOLVE</span></div><p class="mobile-hint">左右滑动查看审批闭环 →</p><div class="diagram" tabindex="0" aria-label="工具审批流程图，可横向滚动"><svg viewBox="0 0 820 370" role="img" aria-labelledby="permission-title"><title id="permission-title">Ask 策略登记待审批，前端发回 Call 决定，Broker 取走待审批项并唤醒工具</title>
+<path d="M202 82 H296" class="command-line"/><path d="M530 82 H618" class="event-line"/><path d="M705 113 V179 H530" class="command-line"/><path d="M296 205 H202" class="command-line"/><path d="M115 236 V290 H296" class="command-line"/>
+<rect x="28" y="51" width="174" height="62" rx="6" fill="#fcf2d9" stroke="#c8b573"/><text x="115" y="77" text-anchor="middle" class="node-title">工具策略 = Ask</text><text x="115" y="100" text-anchor="middle" class="node-desc">实际执行之前检查</text>
+<rect x="296" y="51" width="234" height="62" rx="6" fill="#e8f3ea" stroke="#8eaf99"/><text x="413" y="77" text-anchor="middle" class="node-title">登记 pending + oneshot</text><text x="413" y="100" text-anchor="middle" class="node-desc">用 tool_call_id 关联这一次请求</text>
+<rect x="618" y="51" width="174" height="62" rx="6" fill="#e6f1f8" stroke="#8cabbe"/><text x="705" y="77" text-anchor="middle" class="node-title">快照 → 审批区</text><text x="705" y="100" text-anchor="middle" class="node-desc">用户允许 / 拒绝</text>
+<rect x="296" y="167" width="234" height="69" rx="6" fill="#e6f1f8" stroke="#8cabbe"/><text x="413" y="191" text-anchor="middle" class="node-title">反向 Command</text><text x="413" y="214" text-anchor="middle" class="node-desc">conversation_id + tool_call_id</text><text x="413" y="231" text-anchor="middle" class="node-desc">decision: allow / deny</text>
+<rect x="28" y="167" width="174" height="69" rx="6" fill="#e8f3ea" stroke="#8eaf99"/><text x="115" y="192" text-anchor="middle" class="node-title">Broker 原子取走</text><text x="115" y="214" text-anchor="middle" class="node-desc">检查是否仍有待审批项</text><text x="115" y="231" text-anchor="middle" class="node-desc">先唤醒，再通知观察者</text>
+<rect x="296" y="265" width="496" height="61" rx="6" fill="#fbf4e7" stroke="#d7bf98"/><text x="544" y="289" text-anchor="middle" class="node-title">Allow → 执行；Deny / Timeout / Cancel → 相应结果</text><text x="544" y="313" text-anchor="middle" class="node-desc">重复 / 过期回传：resolved:false，刷新待审批状态</text>
+<text x="45" y="355" class="node-desc">审批对象是具体工具调用；工具气泡与审批区用同一 Call 身份关联。</text>
+</svg></div></section>
+<section class="panel code-panel"><div class="panel-head"><span class="num">12</span><h2>宿主如何接线</h2><span class="tag">CONCEPTUAL / SIMPLIFIED</span></div><div class="code-label"><span>COMMAND HANDLER + EVENT PUMP</span><span>示意，省略框架与错误分支</span></div><pre><code><span class="comment">// 上行：用户操作由宿主转成命令</span>
+<span class="kw">async function</span> <span class="fn">onPermissionDecision</span>(user, body) {
+  <span class="fn">authorizeConversation</span>(user, body.conversation_id);
+  <span class="fn">validateDecisionFields</span>(body);
+  <span class="kw">return await</span> runtime.<span class="fn">invoke</span>(
+    <span class="str">"conversation.resolve_tool_permission"</span>, body);
+  <span class="comment">// resolved:false 表示已没有对应待审批项</span>
+}
+
+<span class="comment">// 下行：一个消费入口，分发给多个订阅者</span>
+<span class="kw">while</span> (hostRunning) {
+  next = runtime.<span class="fn">next_event</span>(pollTimeout);
+  <span class="kw">if</span> (next.kind === <span class="str">"TIMEOUT"</span>) <span class="kw">continue</span>;
+  <span class="kw">if</span> (next.kind === <span class="str">"CLOSED"</span>) <span class="kw">break</span>;
+  envelope = <span class="fn">decodeAndValidate</span>(next.json);
+  <span class="fn">routeToPersistenceAndSubscribers</span>(envelope);
+}
+
+<span class="comment">// SSE 适配：cursor / 补读策略由宿主定义</span>
+<span class="fn">writeSse</span>({
+  id: <span class="fn">hostCursorFor</span>(envelope),
+  data: JSON.<span class="fn">stringify</span>(envelope)
+});
+<span class="comment">// 浏览器 onmessage → 解析 envelope → reducer → UI</span></code></pre></section>
+<section class="panel"><div class="panel-head"><span class="num">13</span><h2>SSE 接入边界与现有示例</h2><span class="tag">TRANSPORT DETAILS</span></div><div class="sse-grid"><article><h3>帧保持完整</h3><pre>id: &lt;host-cursor&gt;
+data: {完整 Runtime envelope}
+
+</pre><p>保留 schema、type、实例 / 会话身份、序号与 payload。SSE 帧名不承担消息角色语义。</p></article><article><h3>连通与对账分开</h3><p>心跳维持连接可见性。Last-Event-ID 搭配宿主保留记录实现补读；缺口超出保留范围时，以快照重新建立基线。</p><p>副作用命令的去重与恢复，由业务协议另外保证。</p></article></div><div class="flow-caption"><b>已有 Studio 示例：</b>支持 since / Last-Event-ID、完整 JSON data 与 15 秒心跳。使用其进程内事件日志和 event_seq 补读，范围限当前实例的保留记录；跨进程持久重放需要宿主扩展。</div><div class="tradeoffs"><div><h3>集成收益</h3><p>公共 envelope 可供 UI、审计和存储复用。<br>审批等待与事件消费解耦。<br>每次 Call、命令受理与执行事实可以关联。</p></div><div><h3>宿主需要落实</h3><p>访问范围过滤、游标与补读保留。<br>首次订阅窗口与断线重连对账。<br>慢客户端隔离、队列监控与有限诊断载荷。</p></div></div></section>
+</div></div><div class="principle"><span>THE INTERACTION<br>IN ONE LINE</span><p><b>操作由命令回传，检查在执行前完成，事实经事件下发，界面按最新会话投影收敛。</b></p></div>
+<footer><div class="sources"><b>依据：</b>当前 v0.5.1 源码：ai-assistant/{gateway,admission,permission,snapshot}；Runtime 事件 / 前端消息契约（05、06）；Host 前端接入指南（05）；ui/lit/src/transport/http-sse.ts；workflow_studio.rs。<br>时序与伪代码为职责抽象；宿主生产级 SSE 的持久游标、补读、鉴权和限流需要按应用实现。</div><div class="version">v0.5.1 / a8b9270<br>2026.10.15 / PAGE 04</div></footer></main></body></html>

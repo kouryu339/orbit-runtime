@@ -17,6 +17,10 @@ frontend chat window or by one SDK call. Build it in this five-step order:
 
 ## What Goes Where
 
+For a visual overview of the runtime mechanisms, see the five standalone HTML
+pages in [Quick Documentation](../quick-docs/README.md) (Simplified Chinese).
+Open them locally after cloning or downloading the repository; no build is needed.
+
 | Documentation area | Purpose | Do not use it for |
 |---|---|---|
 | `examples/guides` | Product integration flow and recommended order. | Low-level ABI ownership details. |
