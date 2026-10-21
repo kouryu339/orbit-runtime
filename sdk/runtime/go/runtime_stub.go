@@ -153,46 +153,70 @@ func (*Runtime) RegisterResourcesFile(context.Context, string) (json.RawMessage,
 	return nil, errors.New("runtimehost requires linux and cgo")
 }
 
+func (*Runtime) RegisterWorkflow(context.Context, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+func (*Runtime) ValidateWorkflow(context.Context, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+func (*Runtime) PromoteWorkflow(context.Context, string, uint64) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+func (*Runtime) RemoveWorkflow(context.Context, string, uint64) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) CreateWorkflowDraft(context.Context, json.RawMessage) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) ReadWorkflow(context.Context, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) RegisterWorkflowDraft(context.Context, string, *uint64, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) UpdateWorkflow(context.Context, json.RawMessage, *uint64) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) ReviseWorkflow(context.Context, string, uint64, json.RawMessage, *string, *string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) ValidateWorkflowRevision(context.Context, string, uint64, json.RawMessage, *string, *string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) CompileWorkflowDraft(context.Context, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) WorkflowScriptToBlueprint(context.Context, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) WorkflowBlueprintToScript(context.Context, json.RawMessage) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) DeleteWorkflow(context.Context, string, *uint64) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// ListWorkflows returns resource summaries, optionally filtered by kind.
 func (*Runtime) ListWorkflows(context.Context, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
@@ -205,18 +229,22 @@ func (*Runtime) ExecuteWorkflowInContext(context.Context, string, map[string]any
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) TestWorkflowDraft(context.Context, string, map[string]any, bool) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) TestWorkflowDraftInContext(context.Context, string, map[string]any, bool, string, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) ExecuteWorkflowScript(context.Context, string, map[string]any, bool) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (*Runtime) ExecuteWorkflowScriptInContext(context.Context, string, map[string]any, bool, string, string) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }

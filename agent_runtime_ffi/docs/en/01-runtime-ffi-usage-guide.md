@@ -1,5 +1,9 @@
 # 1 Agent Runtime ABI 1 Host Contract
 
+> Workflow resources now expose list, register, remove, validate, promote and execute. Legacy API descriptions below are historical. See [the current contract](12-workflow-resource-api.md).
+
+
+
 This is the host contract implemented by `sdk/runtime/c/include/agent_runtime.h`
 and `agent_runtime_ffi/src/lib.rs`. ABI 1 exports lifecycle and transport only;
 features are versioned JSON commands.

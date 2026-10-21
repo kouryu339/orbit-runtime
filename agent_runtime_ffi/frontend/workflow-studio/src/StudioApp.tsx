@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Blocks, FileCode2, LayoutDashboard, MessageSquare, RotateCcw, RotateCw, ScrollText, SlidersHorizontal } from 'lucide-react';
+import { Blocks, MessageSquare, RotateCcw, RotateCw, ScrollText, SlidersHorizontal } from 'lucide-react';
 import { NodeInspector } from './NodeInspector';
 import { WorkflowEditor } from './react-flow/WorkflowEditor';
 import { StudioConversation } from './StudioConversation';
@@ -497,11 +497,9 @@ export function StudioApp() {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [workflowsDir, setWorkflowsDir] = useState('');
   const [draftOrigin, setDraftOriginState] = useState<DraftOrigin>(() => createScratchOrigin());
-  const [script, setScript] = useState('workflow demo\nstart -> end');
   const [, setOutput] = useState('Ready.');
   const [sseTrace, setSseTrace] = useState<SseTraceEntry[]>([]);
   const [catalogQuery, setCatalogQuery] = useState('');
-  const [centerView, setCenterView] = useState<'blueprint' | 'script'>('blueprint');
   const [rightView, setRightView] = useState<'chat' | 'events' | 'inspector'>('chat');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -557,7 +555,7 @@ export function StudioApp() {
     setWorkflowsDir(nextWorkflowsDir);
   }, []);
 
-  const decompileDraft = useCallback(async (next: BlueprintJson, reason: string, persist = false) => {
+  const syncDraft = useCallback(async (next: BlueprintJson, reason: string, persist = false) => {
     const workflowSnapshot = buildWorkflowSnapshot(
       workflowsRef.current,
       workflowsDirRef.current,
@@ -567,12 +565,11 @@ export function StudioApp() {
     const key = JSON.stringify({ blueprint: next, workflowSnapshot });
     if (!persist) {
       if (key === lastSnapshot.current) return;
-      const result = await api<{ script: string }>('/api/decompile', {
+      await api('/api/studio-state', {
         method: 'POST',
-        body: { blueprint: next, reason, workflow_snapshot: workflowSnapshot },
+        body: { workflow_snapshot: workflowSnapshot },
       });
       lastSnapshot.current = key;
-      setScript(result.script);
       return;
     }
     const blueprintKey = JSON.stringify(next);
@@ -592,7 +589,6 @@ export function StudioApp() {
     lastSnapshot.current = key;
     lastPersistedBlueprint.current = blueprintKey;
     dirtyRef.current = false;
-    setScript(result.resource.script ?? '');
     setDraftOrigin({
       kind: 'workflow_resource',
       workflow_id: result.resource.id,
@@ -622,9 +618,9 @@ export function StudioApp() {
   const enqueueAutosave = useCallback((next: BlueprintJson, reason: string) => {
     autosaveChain.current = autosaveChain.current
       .catch(() => undefined)
-      .then(() => decompileDraft(next, reason, true));
+      .then(() => syncDraft(next, reason, true));
     return autosaveChain.current;
-  }, [decompileDraft]);
+  }, [syncDraft]);
 
   const scheduleSnapshot = useCallback((next: BlueprintJson, reason: string, persist = true) => {
     if (snapshotTimer.current != null) window.clearTimeout(snapshotTimer.current);
@@ -632,10 +628,10 @@ export function StudioApp() {
       snapshotTimer.current = null;
       const operation = persist
         ? enqueueAutosave(next, reason)
-        : decompileDraft(next, reason, false);
+        : syncDraft(next, reason, false);
       operation.catch((error) => setOutput(`Workflow sync failed: ${error.message}`));
     }, 350);
-  }, [decompileDraft, enqueueAutosave]);
+  }, [syncDraft, enqueueAutosave]);
 
   const commitBlueprint = useCallback((next: BlueprintJson, reason: string, recordHistory = true) => {
     const current = blueprintRef.current;
@@ -734,7 +730,6 @@ export function StudioApp() {
       body: { blueprint: candidate, temporary_ids: temporaryIds },
     });
     commitBlueprint(result.blueprint, 'normalize', true);
-    setScript(result.script);
     lastSnapshot.current = JSON.stringify(result.blueprint);
     if (temporaryIds.length) {
       setStagingNodes((nodes) => nodes.filter((node) => !temporaryIds.includes(node.id)));
@@ -860,7 +855,6 @@ export function StudioApp() {
     setSelectedNodeIds([]);
     setEditorRevision((revision) => revision + 1);
     if (result.origin) setDraftOrigin(result.origin);
-    setScript(result.script);
     const reason = result.replace_draft ? 'agent_open_draft' : 'agent_draft';
     if (result.replace_draft) {
       resetBlueprint(result.blueprint, reason);
@@ -869,9 +863,8 @@ export function StudioApp() {
     } else {
       resetBlueprint(result.blueprint, reason);
     }
-    decompileDraft(result.blueprint, reason).catch((error) => setOutput(`Decompile failed: ${error.message}`));
-    setCenterView('blueprint');
-  }, [commitBlueprint, decompileDraft, resetBlueprint, setDraftOrigin]);
+    syncDraft(result.blueprint, reason).catch((error) => setOutput(`Workflow sync failed: ${error.message}`));
+  }, [commitBlueprint, syncDraft, resetBlueprint, setDraftOrigin]);
 
   useEffect(() => {
     Promise.all([
@@ -997,16 +990,6 @@ export function StudioApp() {
           </span>
         </div>
         <div className="studio-actions">
-          <div className="studio-switcher">
-            <button className={centerView === 'blueprint' ? 'active' : ''} title="Blueprint view" onClick={() => setCenterView('blueprint')}>
-              <LayoutDashboard size={15} />
-              Blueprint
-            </button>
-            <button className={centerView === 'script' ? 'active' : ''} title="Script view" onClick={() => setCenterView('script')}>
-              <FileCode2 size={15} />
-              Script
-            </button>
-          </div>
           <button className="icon-button" title="Undo" onClick={undo} disabled={!canUndo}>
             <RotateCcw size={15} />
           </button>
@@ -1067,22 +1050,12 @@ export function StudioApp() {
               </div>
         </aside>
         <section className="studio-canvas">
-          {centerView === 'blueprint' ? (
-            <WorkflowEditor
-              key={`blueprint-${editorRevision}`}
-              mode="professional"
-              blueprintData={displayBlueprint ?? undefined}
-              onEvent={onEvent}
-            />
-          ) : (
-            <textarea
-              className="studio-script-editor"
-              value={script}
-              readOnly
-              spellCheck={false}
-              title="Read-only script view generated from the current BlueprintJson draft. Ask the editor agent to rewrite script drafts."
-            />
-          )}
+          <WorkflowEditor
+            key={`blueprint-${editorRevision}`}
+            mode="professional"
+            blueprintData={displayBlueprint ?? undefined}
+            onEvent={onEvent}
+          />
         </section>
         <aside className="studio-agent">
           <div className="panel-tabs">

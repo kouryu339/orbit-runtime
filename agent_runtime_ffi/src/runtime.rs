@@ -775,6 +775,21 @@ impl RuntimeFacade {
                 &retrieval_configs,
                 &retrieval_endpoints,
             )?);
+            let restored = workflow_module
+                .restore_local_sources(&runtime_tools)
+                .await
+                .map_err(|error| {
+                    RuntimeError::InvalidConfig(format!("restore workflow sources failed: {error}"))
+                })?;
+            framework
+                .world()
+                .set_resource(
+                    PARENT_WORKFLOW_REGISTRY,
+                    &compiled_parent_workflow_registry(&workflow_module)?,
+                    None,
+                )
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            tracing::info!(restored, "workflow source restoration completed");
             let manager = Arc::new(
                 ConversationManager::new(framework)
                     .await
@@ -813,6 +828,7 @@ impl RuntimeFacade {
         self.sequence_backend = sequence_backend;
         self.coordination_backend = coordination_backend;
         self.started = true;
+        self.sync_parent_workflow_registry()?;
         Ok(())
     }
 
@@ -1231,16 +1247,11 @@ impl RuntimeFacade {
             .map(str::to_string)
             .collect();
         let editor_tools = json!([
-            "listWorkflows",
-            "readWorkflow",
-            "createWorkflowDraft",
-            "updateWorkflow",
-            "compileWorkflow",
-            "testWorkflow",
             "registerWorkflow",
-            "deleteWorkflow",
+            "validateWorkflow",
+            "promoteWorkflow",
+            "removeWorkflow",
             "executeWorkflow",
-            "executeWorkflowScript",
             "searchSkillRefs"
         ]);
         let studio_context = json!({

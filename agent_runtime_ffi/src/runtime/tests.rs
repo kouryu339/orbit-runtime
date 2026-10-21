@@ -1095,17 +1095,9 @@ fn resource_registration_file_resolves_paths_from_resource_file_dir() {
         resources.workflow_registry_id.as_deref(),
         Some("default-workflows")
     );
-    assert_eq!(resources.workflow_registry.len(), 1);
-    assert_eq!(resources.workflow_registry[0].id, "hello-workflow");
-    assert_eq!(resources.workflow_registry[0].name, "Hello Workflow");
-    assert_eq!(
-        resources.workflow_registry[0].file_name,
-        "hello.workflow.json"
-    );
-    assert_eq!(
-        resources.workflow_registry[0].file_path,
-        workflows_dir.join("hello.workflow.json")
-    );
+    // Resource registration only records paths; startup builds the accepted
+    // JSON source catalog. This legacy graph is never imported.
+    assert!(resources.workflow_registry.is_empty());
     assert_eq!(
         resources.data_dir.as_deref(),
         Some(resources_dir.join("data/runtime").as_path())
@@ -1487,11 +1479,12 @@ fn display_name_placeholders(display_name: &str) -> BTreeSet<&str> {
 
 #[test]
 fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
+    // Exercise retained internal compatibility, not the disabled public script API.
     fn invoke(facade: &mut RuntimeFacade, command: &str, payload: Value) -> Value {
         // Keep the older assertions below focused on Trace contents while the
         // production API uses start -> subscribe -> run and keeps no Run journal.
         if command == "workflow.run.start" {
-            let started = crate::invoke_command(
+            let started = crate::invoke_command_inner(
                 facade,
                 "workflow.start",
                 json!({}).as_object().unwrap(),
@@ -1501,7 +1494,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
             let workflow_run_id = started["workflow_run_id"].as_str().unwrap();
             let mut run_payload = payload;
             run_payload["workflow_run_id"] = Value::String(workflow_run_id.to_string());
-            crate::invoke_command(
+            crate::invoke_command_inner(
                 facade,
                 "workflow.run",
                 run_payload.as_object().unwrap(),
@@ -1577,7 +1570,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
             }
             return status;
         }
-        crate::invoke_command(
+        crate::invoke_command_inner(
             facade,
             command,
             payload.as_object().unwrap(),
@@ -1680,7 +1673,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     let tools = definitions["tools"].as_array().unwrap();
     let local = tools
         .iter()
-        .find(|tool| tool["name"] == "createWorkflowDraft")
+        .find(|tool| tool["name"] == "registerWorkflow")
         .expect("local tool definition");
     assert_eq!(local["tool_kind"], "local");
     assert!(local["description"]
@@ -1885,16 +1878,6 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     )
     .is_err());
 
-    assert!(crate::invoke_command(
-        &mut facade,
-        "workflow.execute",
-        json!({"id": "echo-workflow", "inputs": {}})
-            .as_object()
-            .unwrap(),
-        "workflow-sdk-test"
-    )
-    .is_err());
-
     let draft_test = invoke(
         &mut facade,
         "workflow.execute",
@@ -2085,7 +2068,7 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         }),
     );
     assert_eq!(staged_run["status"], "running", "{staged_run}");
-    let duplicate = crate::invoke_command(
+    let duplicate = crate::invoke_command_inner(
         &mut facade,
         "workflow.run",
         json!({
@@ -2661,6 +2644,117 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert!(
         failed_completion["payload"]["sequence"].as_u64().unwrap()
             > failed_node_event["payload"]["sequence"].as_u64().unwrap()
+    );
+
+    // The public API exposes listing plus the five document lifecycle operations.
+    let source = r#"{"schema":"orbit.workflow.resource/v1","id":"public-logic-flow","metadata":{"name":"Public Logic","description":"Echo","extensions":{"host":{"asset":"sheet-1"}}},"state":"draft","revision":1,"logic":{"schema":"orbit.workflow.logic/v1","inputs":{"name":{"type":"String"}},"variables":{},"steps":[],"returns":{"result":{"value":input.name}}}}"#;
+    let public = |facade: &mut RuntimeFacade, command: &str, payload: Value| {
+        crate::invoke_command(
+            facade,
+            command,
+            payload.as_object().unwrap(),
+            "resource-public-test",
+        )
+        .unwrap()
+    };
+    let validation = public(&mut facade, "workflow.validate", json!({"source":source}));
+    assert_eq!(validation["valid"], true);
+    assert_eq!(validation["committed"], false);
+    assert!(facade
+        .workflow_module()
+        .unwrap()
+        .read_workflow_resource("public-logic-flow")
+        .is_err());
+    let draft = public(&mut facade, "workflow.register", json!({"source":source}));
+    assert_eq!(draft["state"], "draft");
+    assert_eq!(draft["revision"], 1);
+    let revised = public(&mut facade, "workflow.register", json!({"source":source}));
+    assert_eq!(revised["revision"], 2);
+    assert!(crate::invoke_command(
+        &mut facade,
+        "workflow.register",
+        json!({"source":source}).as_object().unwrap(),
+        "stale"
+    )
+    .is_err());
+    let output = public(
+        &mut facade,
+        "workflow.execute",
+        json!({"id":"public-logic-flow","inputs":{"name":"Logic"}}),
+    );
+    assert_eq!(output["result"]["outputs"]["result"], "Logic", "{output}");
+    for command in crate::DEPRECATED_WORKFLOW_COMMANDS {
+        let error = crate::invoke_command(
+            &mut facade,
+            command,
+            &serde_json::Map::new(),
+            "closed-legacy-test",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "deprecated_api");
+    }
+    let promoted = public(
+        &mut facade,
+        "workflow.promote",
+        json!({"id":"public-logic-flow","expected_revision":2}),
+    );
+    assert_eq!(promoted["revision"], 3);
+    let stored = facade
+        .workflow_module()
+        .unwrap()
+        .read_workflow_resource("public-logic-flow")
+        .unwrap();
+    assert_eq!(
+        stored.blueprint.unwrap().metadata.extensions["host"]["asset"],
+        "sheet-1"
+    );
+    let output = public(
+        &mut facade,
+        "workflow.execute",
+        json!({"id":"public-logic-flow","inputs":{"name":"Production"}}),
+    );
+    assert_eq!(output["result"]["outputs"]["result"], "Production");
+    assert!(crate::invoke_command(
+        &mut facade,
+        "workflow.remove",
+        json!({"id":"public-logic-flow","expected_revision":2})
+            .as_object()
+            .unwrap(),
+        "stale-remove"
+    )
+    .is_err());
+    public(
+        &mut facade,
+        "workflow.remove",
+        json!({"id":"public-logic-flow","expected_revision":3}),
+    );
+    assert!(facade
+        .workflow_module()
+        .unwrap()
+        .read_workflow_resource("public-logic-flow")
+        .is_err());
+
+    // A new resource may explicitly register an existing formal document.
+    let formal_source = source
+        .replace("public-logic-flow", "imported-logic-flow")
+        .replace(r#""state":"draft""#, r#""state":"registered""#);
+    let imported = public(
+        &mut facade,
+        "workflow.register",
+        json!({"source":formal_source}),
+    );
+    assert_eq!(imported["state"], "registered");
+    assert_eq!(imported["revision"], 1);
+    let result = public(
+        &mut facade,
+        "workflow.execute",
+        json!({"id":"imported-logic-flow","inputs":{"name":"Imported"}}),
+    );
+    assert_eq!(result["result"]["outputs"]["result"], "Imported");
+    public(
+        &mut facade,
+        "workflow.remove",
+        json!({"id":"imported-logic-flow","expected_revision":1}),
     );
 
     facade.shutdown().unwrap();
@@ -3493,6 +3587,220 @@ fn dropping_started_runtime_releases_workflow_resource_ownership() {
 
     let _ = fs::remove_dir_all(first_root);
     let _ = fs::remove_dir_all(second_root);
+}
+
+#[test]
+fn workflow_sources_restore_drafts_and_references_without_rewriting_files() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("workflow-source-restart");
+    let dir = root.join("workflows");
+    fs::create_dir_all(&dir).unwrap();
+    let child = r#"{"schema":"orbit.workflow.resource/v1","id":"z-child","metadata":{"name":"Child","description":"echo","extensions":{"host":{"asset":"中文"}}},"state":"registered","revision":7,"logic":{"schema":"orbit.workflow.logic/v1","inputs":{"text":{"type":"String"}},"steps":[],"returns":{"text":{"value":input.text}}}}"#;
+    let parent = r#"{"schema":"orbit.workflow.resource/v1","id":"a-parent","metadata":{"name":"Parent","description":"reference","extensions":{}},"state":"draft","revision":4,"logic":{"schema":"orbit.workflow.logic/v1","inputs":{"text":{"type":"String"}},"steps":[{"id":6,"call":"WorkflowRef_z-child","args":{"text":input.text}}],"returns":{"text":{"value":6.text}}}}"#;
+    fs::write(dir.join("child.workflow.json"), child).unwrap();
+    fs::write(dir.join("parent.workflow.json"), parent).unwrap();
+    fs::write(
+        dir.join("legacy.workflow"),
+        "input text:String\nreturn text=input.text",
+    )
+    .unwrap();
+    let open = || {
+        let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(&root)).unwrap();
+        facade.config.runtime.skills_dir = Some(root.join("skills"));
+        facade.config.workflow.auto_load_dir = Some(dir.clone());
+        facade.start().unwrap();
+        facade
+    };
+    let public = |facade: &mut RuntimeFacade, cmd: &str, payload: Value| {
+        crate::invoke_command(facade, cmd, payload.as_object().unwrap(), "restart-test").unwrap()
+    };
+    {
+        let mut facade = open();
+        assert_eq!(
+            fs::read_to_string(dir.join("child.workflow.json")).unwrap(),
+            child
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("parent.workflow.json")).unwrap(),
+            parent
+        );
+        let catalog = public(&mut facade, "workflow.list", json!({}));
+        assert_eq!(catalog["workflows"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            public(&mut facade, "workflow.list", json!({"kind":"all"})),
+            catalog
+        );
+        assert_eq!(
+            public(&mut facade, "workflow.list", json!({"kind":null})),
+            catalog
+        );
+        let drafts = public(&mut facade, "workflow.list", json!({"kind":"draft"}));
+        assert_eq!(drafts["workflows"][0]["id"], "a-parent");
+        assert_eq!(drafts["workflows"][0]["revision"], 4);
+        let formal = public(&mut facade, "workflow.list", json!({"kind":"registered"}));
+        assert_eq!(formal["workflows"][0]["id"], "z-child");
+        for payload in [
+            json!({"kind":"invalid"}),
+            json!({"kind":3}),
+            json!({"script":"return"}),
+            json!({"unsupported":true}),
+        ] {
+            assert!(crate::invoke_command(
+                &mut facade,
+                "workflow.list",
+                payload.as_object().unwrap(),
+                "invalid-list"
+            )
+            .is_err());
+        }
+        assert!(facade
+            .workflow_module()
+            .unwrap()
+            .read_workflow_resource("legacy")
+            .is_err());
+        let draft = child
+            .replace("z-child", "saved-draft")
+            .replace("Child", "Saved Draft")
+            .replace("\"registered\"", "\"draft\"")
+            .replace("\"revision\":7", "\"revision\":1");
+        public(&mut facade, "workflow.register", json!({"source":draft}));
+        assert_eq!(
+            public(&mut facade, "workflow.register", json!({"source":draft}))["revision"],
+            2
+        );
+        let saved = fs::read(dir.join("saved-draft.workflow.json")).unwrap();
+        let invalid_draft = String::from_utf8(saved.clone())
+            .unwrap()
+            .replace("input.text", "999.missing");
+        assert!(crate::invoke_command(
+            &mut facade,
+            "workflow.register",
+            json!({"source":invalid_draft}).as_object().unwrap(),
+            "invalid-reference"
+        )
+        .is_err());
+        assert_eq!(
+            fs::read(dir.join("saved-draft.workflow.json")).unwrap(),
+            saved
+        );
+        let output = public(
+            &mut facade,
+            "workflow.execute",
+            json!({"id":"a-parent","inputs":{"text":"restored"}}),
+        );
+        assert_eq!(output["result"]["outputs"]["text"], "restored");
+        let invalid = child.replace(
+            "\"text\":{\"value\":input.text}",
+            "\"renamed\":{\"value\":input.text}",
+        );
+        // Draft callers are allowed to become invalid until their next edit/run.
+        // Promote the caller first so formal interface safety is enforced.
+        public(
+            &mut facade,
+            "workflow.promote",
+            json!({"id":"a-parent","expected_revision":4}),
+        );
+        assert!(crate::invoke_command(
+            &mut facade,
+            "workflow.register",
+            json!({"source":invalid}).as_object().unwrap(),
+            "bad-interface"
+        )
+        .is_err());
+        assert_eq!(
+            fs::read_to_string(dir.join("child.workflow.json")).unwrap(),
+            child
+        );
+        let stale = parent.replace("\"revision\":4", "\"revision\":1");
+        assert!(crate::invoke_command(
+            &mut facade,
+            "workflow.register",
+            json!({"source":stale}).as_object().unwrap(),
+            "stale"
+        )
+        .is_err());
+        for command in crate::DEPRECATED_STUDIO_COMMANDS {
+            assert_eq!(
+                crate::invoke_command(
+                    &mut facade,
+                    command,
+                    &serde_json::Map::new(),
+                    "deprecated-page"
+                )
+                .unwrap_err()
+                .kind,
+                "deprecated_api"
+            );
+        }
+        facade.shutdown().unwrap();
+    }
+    {
+        let mut facade = open();
+        let draft = facade
+            .workflow_module()
+            .unwrap()
+            .read_workflow_resource("saved-draft")
+            .unwrap();
+        assert_eq!(draft.summary.revision, 2);
+        assert_eq!(
+            draft.summary.kind,
+            corework::workflow::workflows::WorkflowResourceKind::Draft
+        );
+        let output = public(
+            &mut facade,
+            "workflow.execute",
+            json!({"id":"saved-draft","inputs":{"text":"draft restart"}}),
+        );
+        assert_eq!(output["result"]["outputs"]["text"], "draft restart");
+        public(
+            &mut facade,
+            "workflow.remove",
+            json!({"id":"saved-draft","expected_revision":2}),
+        );
+        assert!(!dir.join("saved-draft.workflow.json").exists());
+        let view = facade
+            .workflow_module()
+            .unwrap()
+            .read_workflow_resource("a-parent")
+            .unwrap();
+        assert_eq!(
+            view.summary.kind,
+            corework::workflow::workflows::WorkflowResourceKind::Registered
+        );
+        assert_eq!(view.summary.revision, 5);
+        let named = facade
+            .rt
+            .block_on(facade.workflow_module().unwrap().execute_by_name(
+                "Child",
+                HashMap::from([("text".into(), json!("named source"))]),
+            ))
+            .unwrap();
+        assert_eq!(named["text"], "named source");
+        let output = public(
+            &mut facade,
+            "workflow.execute",
+            json!({"id":"a-parent","inputs":{"text":"after restart"}}),
+        );
+        assert_eq!(output["result"]["outputs"]["text"], "after restart");
+        public(
+            &mut facade,
+            "workflow.remove",
+            json!({"id":"a-parent","expected_revision":5}),
+        );
+        public(
+            &mut facade,
+            "workflow.remove",
+            json!({"id":"z-child","expected_revision":7}),
+        );
+        assert!(!dir.join("parent.workflow.json").exists());
+        assert!(!dir.join("child.workflow.json").exists());
+        assert_eq!(
+            public(&mut facade, "workflow.list", json!({}))["workflows"],
+            json!([])
+        );
+        facade.shutdown().unwrap();
+    }
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -5370,6 +5678,34 @@ fn workflow_studio_opens_for_cluster_focus_agent_and_invalid_id_preserves_sessio
     assert!(opened["url"]
         .as_str()
         .is_some_and(|url| url.starts_with("http://127.0.0.1:")));
+    // Exercise authenticated HTTP routes, not just route helper functions.
+    let studio_url = opened["url"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("http://")
+        .unwrap();
+    let (authority, path) = studio_url.split_once('/').unwrap();
+    let query = path.strip_prefix('?').unwrap();
+    for (route, body) in [
+        ("/api/compile", r#"{"script":"return"}"#),
+        ("/api/decompile", "{}"),
+        ("/api/save", r#"{"script":"return"}"#),
+        ("/api/run", r#"{"script":"return"}"#),
+    ] {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(authority).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write!(stream, "POST {route}?{query} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 410 Gone"),
+            "{route}: {response}"
+        );
+        assert!(response.contains("deprecated_api"));
+    }
     let conversation_id = opened["editor_conversation_id"].as_str().unwrap();
     let manager = facade.manager().unwrap();
     facade.rt.block_on(async {

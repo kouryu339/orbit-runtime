@@ -734,13 +734,22 @@ mod tests {
     }
 
     #[test]
-    fn only_script_capable_thinking_skill_declares_workflow_script_tool() {
+    fn thinking_skills_do_not_grant_legacy_script_tools() {
         let mgr = SkillManager::new_with_embedded_system("/tmp/skills");
-
-        assert!(!mgr.system_skill_declares_tool("thinking", "executeWorkflowScript"));
-        assert!(!mgr.system_skill_declares_tool("thinking-fc", "executeWorkflowScript"));
-        assert!(mgr.system_skill_declares_tool("thinking-pro", "executeWorkflowScript"));
-        assert!(mgr.system_skill_declares_tool("thinking-pro-fc", "executeWorkflowScript"));
+        for skill in ["thinking", "thinking-fc", "thinking-pro", "thinking-pro-fc"] {
+            for tool in [
+                "executeWorkflowScript",
+                "createWorkflowDraft",
+                "compileWorkflow",
+                "updateWorkflow",
+                "testWorkflow",
+            ] {
+                assert!(
+                    !mgr.system_skill_declares_tool(skill, tool),
+                    "{skill}: {tool}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

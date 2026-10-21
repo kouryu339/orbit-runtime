@@ -1,5 +1,9 @@
 # 11 Runtime Workflow 目录与执行契约
 
+> 当前 Workflow 对外接口保留列表、注册、移除、验证、转正、执行。本文其余旧接口和示例为历史资料。参见 [当前六接口契约](12-workflow-resource-api.md)。
+
+
+
 ABI revision 1.2 通过 `agent_runtime_invoke_v1` 提供动态 workflow 目录。
 Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resource 是明确允许
 动态增删改的独立目录。
@@ -11,20 +15,18 @@ Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resourc
 | `workflow.create` | `resource` | 创建不可信的 Draft。 |
 | `workflow.read` | `id` | 读取 Draft 或 Registered。 |
 | `workflow.register` | `id`, `expected_revision?`, `name?` | 将有效 Draft 提升为 Registered。 |
-| `workflow.update` | `resource`, `expected_revision?` | 更新已有资源。 |
+| `workflow.revise` | `id`, `expected_revision`, `change` | 保存并编译 logic_source / logic。 |
+| `workflow.validate_revision` | `id`, `expected_revision`, `change` | 只验证，不提交新版本。 |
 | `workflow.compile` | `id` | 返回 Draft 校验结果与 blueprint。 |
 | `workflow.delete` | `id`, `expected_revision?` | 删除任一种资源。 |
 | `workflow.list` | `kind?` | 返回全部资源，或按 `draft`/`registered` 过滤。 |
-| `workflow.convert.script_to_blueprint` | `script` | 编译为 Blueprint JSON，不修改目录。 |
-| `workflow.convert.blueprint_to_script` | `blueprint` | 校验并反编译，不修改目录。 |
 | `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 执行 Registered；Draft 仅允许 `mode=test`。 |
-| `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 不注册，直接编译并执行临时脚本文本。 |
-| `workflow.describe_inputs` | `id` 或 `script` | 返回宿主生成输入表单所需的结构化参数元数据。 |
+| `workflow.describe_inputs` | `id` | 返回宿主生成输入表单所需的结构化参数元数据。 |
 | `workflow.start` | 无 | 创建一次执行通道并返回 `workflow_run_id`，但不执行工作流。 |
-| `workflow.run` | `workflow_run_id`, `id` 或 `script`, `mode?`, `inputs?`, `conversation_id?`, `agent_id?`, `turn_id?` | 在已经创建且已监听的执行通道上启动工作流；同一 ID 只能调用一次。 |
+| `workflow.run` | `workflow_run_id`, `id`, `mode?`, `inputs?`, `conversation_id?`, `agent_id?`, `turn_id?` | 在已经创建且已监听的执行通道上启动工作流；同一 ID 只能调用一次。 |
 
-目录命令要求 Runtime 已经 `start`。只有 Draft 可以创建；无效脚本可以作为草稿保存，
-但编译成功前不能提升为 Registered。提升时保持稳定 id。Draft 与 Registered 的 name
+目录命令要求 Runtime 已经 `start`。只有 Draft 可以创建；公开创建接口接受 blueprint，逻辑修改通过 revision 提交；
+验证通过后才能提升为 Registered。提升时保持稳定 id。Draft 与 Registered 的 name
 全局唯一。Resource 使用 `agent-runtime-workflow-resource/v1`：
 
 ```json

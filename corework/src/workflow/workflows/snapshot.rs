@@ -340,6 +340,7 @@ mod tests {
     fn var_with_default_renders_equals() {
         let mut d = empty_draft();
         d.blueprint.variables.push(BlueprintVariable {
+            display_name: None,
             name: "counter".into(),
             data_type: "int".into(),
             default_value: Some(json!(0)),
@@ -354,6 +355,7 @@ mod tests {
     fn string_default_is_quoted() {
         let mut d = empty_draft();
         d.blueprint.variables.push(BlueprintVariable {
+            display_name: None,
             name: "msg".into(),
             data_type: "string".into(),
             default_value: Some(json!("hello")),
@@ -431,6 +433,7 @@ mod tests {
             ..PinMetadata::default()
         });
         d.blueprint.variables.push(BlueprintVariable {
+            display_name: None,
             name: "counter".into(),
             data_type: "int".into(),
             default_value: Some(json!(0)),

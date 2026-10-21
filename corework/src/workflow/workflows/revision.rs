@@ -19,12 +19,22 @@ pub const VALIDATOR_VERSION: &str = "2";
     deny_unknown_fields
 )]
 pub enum WorkflowChange {
+    LogicSource(String),
+    Logic(crate::workflow::logic::LogicDocument),
     Script(String),
     Blueprint(BlueprintJson),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreparedRevision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logic_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logic: Option<crate::workflow::logic::LogicDocument>,
     pub script: String,
     pub blueprint: BlueprintJson,
     pub source: String,
@@ -54,6 +64,11 @@ impl super::WorkflowsModule {
         let result = {
             let _guard = self.reference_lock.lock();
             let current = self.read_workflow_resource(&request.id)?;
+            if current.resource_source.is_some() {
+                return Err(invalid(
+                    "Resource source edits must use register_logic_resource",
+                ));
+            }
             if current.summary.revision != request.expected_revision {
                 return Err(invalid(format!(
                     "Workflow revision conflict: expected {}, current {}",
@@ -68,6 +83,10 @@ impl super::WorkflowsModule {
                     .clone()
                     .zip(current.script.clone())
                     .map(|(blueprint, script)| PreparedRevision {
+                        resource_source: current.resource_source.clone(),
+                        resource_path: current.resource_path.clone(),
+                        logic_source: current.logic_source.clone(),
+                        logic: current.logic.clone(),
                         blueprint,
                         script,
                         source: current.source.clone().unwrap_or_else(|| "script".into()),
@@ -116,6 +135,8 @@ impl super::WorkflowsModule {
                             .find(|d| d.id == request.id)
                             .ok_or_else(|| invalid("Draft disappeared"))?;
                         draft.script = Some(prepared.script.clone());
+                        draft.logic = prepared.logic.clone();
+                        draft.logic_source = prepared.logic_source.clone();
                         draft.blueprint = Some(prepared.blueprint.clone());
                         draft.revision = revision;
                         draft.validation = super::WorkflowValidation::valid();
@@ -133,6 +154,8 @@ impl super::WorkflowsModule {
                 "validator_version":prepared.validator_version,
                 "name":prepared.blueprint.metadata.name,"description":prepared.blueprint.metadata.description,
                 "script":prepared.script,"blueprint":prepared.blueprint,"source":prepared.source,
+                "logic":prepared.logic,
+                "logic_source":prepared.logic_source,
                 "validation":{"valid":true,"validator_version":prepared.validator_version},"committed":commit,
                 "reference_script":if current.summary.kind==super::WorkflowResourceKind::Registered {Some(super::reference::reference_script(&prepared.blueprint)?)} else {None}})
         };
@@ -331,12 +354,47 @@ pub fn prepare(
     previous: Option<&PreparedRevision>,
     tools: &[RuntimeToolMetadata],
 ) -> Result<PreparedRevision> {
+    if let WorkflowChange::LogicSource(source) = change {
+        let document = crate::workflow::logic::parse_source(&source)
+            .map_err(|e| invalid(serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())))?;
+        let mut prepared = prepare(WorkflowChange::Logic(document), previous, tools)?;
+        prepared.logic_source = Some(source);
+        return Ok(prepared);
+    }
     let compile = |script: &str| {
         compile_chain_v2_with_runtime_tools(script, tools)
             .map_err(|e| invalid(format!("Script line {}: {}", e.line, e.message)))
     };
+    if previous.and_then(|p| p.logic.as_ref()).is_some()
+        && !matches!(&change, WorkflowChange::Logic(_))
+    {
+        return Err(invalid("Logic-owned workflows must be edited through logic; legacy script/graph writes are disabled"));
+    }
+    if let WorkflowChange::Logic(logic) = change {
+        let mut blueprint = crate::workflow::logic::compile(&logic, tools)
+            .map_err(|e| invalid(serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())))?;
+        blueprint.normalize_node_sizes();
+        blueprint.validate().map_err(invalid)?;
+        if let Some(old) = previous {
+            super::preserve_workflow_blueprint_layout(&old.blueprint, &mut blueprint);
+        }
+        // This text is a derived compatibility view, never the editable source.
+        let script = decompile_chain(&blueprint).map_err(|e| invalid(e.to_string()))?;
+        return Ok(PreparedRevision {
+            resource_source: None,
+            resource_path: None,
+            logic_source: None,
+            logic: Some(logic),
+            script,
+            blueprint,
+            source: "logic".into(),
+            validator_version: VALIDATOR_VERSION.into(),
+        });
+    }
     let authored_change = matches!(&change, WorkflowChange::Script(_));
     let (script, mut blueprint, source) = match change {
+        WorkflowChange::LogicSource(_) => unreachable!("handled above"),
+        WorkflowChange::Logic(_) => unreachable!("handled above"),
         WorkflowChange::Script(script) => {
             let blueprint = compile(&script)?;
             (script, blueprint, "script".to_string())
@@ -369,6 +427,10 @@ pub fn prepare(
         }
     }
     Ok(PreparedRevision {
+        resource_source: None,
+        resource_path: None,
+        logic_source: None,
+        logic: None,
         script,
         blueprint,
         source,
@@ -381,6 +443,116 @@ mod tests {
     use super::*;
 
     const SCRIPT: &str = "# authored comment\ninput value:String\nreturn result=input.value\n";
+
+    #[tokio::test]
+    async fn logic_revision_persists_registers_and_blocks_legacy_writes() {
+        let _guard = super::super::WORKFLOW_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let directory =
+            std::env::temp_dir().join(format!("logic-revision-{}", uuid::Uuid::new_v4()));
+        let module = super::super::WorkflowsModule::new_with_event_bus(
+            directory.clone(),
+            std::sync::Arc::new(crate::event::InMemoryEventBus::new()),
+        )
+        .unwrap();
+        module
+            .create_draft_resource(
+                Some("logic-test"),
+                "Logic test",
+                "",
+                Some(SCRIPT.into()),
+                None,
+                super::super::WorkflowValidation::valid(),
+            )
+            .await
+            .unwrap();
+        let source = r#"{
+          "schema":"orbit.workflow.logic/v1",
+          "inputs":{"value":{"type":"String"}},
+          "steps":[{"id":40,"call":"StringAppendNode","args":{"A":input.value,"B":""}}],
+          "returns":{"result":{"value":{"text":40.Joined,"parts":split(40.Joined, [","]),"literal":"40.Joined"}}}
+        }"#;
+        let request = |revision, change| RevisionRequest {
+            id: "logic-test".into(),
+            expected_revision: revision,
+            change,
+            name: None,
+            description: None,
+        };
+        module
+            .revise_workflow(
+                request(1, WorkflowChange::LogicSource(source.into())),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            module
+                .read_workflow_resource("logic-test")
+                .unwrap()
+                .summary
+                .revision,
+            1
+        );
+        module
+            .revise_workflow(
+                request(1, WorkflowChange::LogicSource(source.into())),
+                &[],
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(module
+            .read_workflow_resource("logic-test")
+            .unwrap()
+            .logic
+            .is_some());
+        let draft = module.read_workflow_resource("logic-test").unwrap();
+        assert_eq!(draft.logic_source.as_deref(), Some(source));
+        let original = serde_json::to_value(draft).unwrap();
+        let invalid_source =
+            source.replace("split(40.Joined, [\",\"])", "split(999.Joined, [\",\"])");
+        assert!(module
+            .revise_workflow(
+                request(2, WorkflowChange::LogicSource(invalid_source)),
+                &[],
+                true
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(module.read_workflow_resource("logic-test").unwrap()).unwrap(),
+            original
+        );
+        assert!(module
+            .revise_workflow(request(1, WorkflowChange::Script(SCRIPT.into())), &[], true)
+            .await
+            .is_err());
+        assert!(module
+            .revise_workflow(request(2, WorkflowChange::Script(SCRIPT.into())), &[], true)
+            .await
+            .is_err());
+        module
+            .register_draft_resource("logic-test", Some(2), None)
+            .await
+            .unwrap();
+        let read = module.read_workflow_resource("logic-test").unwrap();
+        assert!(read.logic.is_some());
+        assert_eq!(read.logic_source.as_deref(), Some(source));
+        assert_eq!(read.source.as_deref(), Some("logic"));
+        assert!(module
+            .revise_workflow(
+                request(3, WorkflowChange::Blueprint(read.blueprint.unwrap())),
+                &[],
+                true
+            )
+            .await
+            .is_err());
+        module.delete_resource("logic-test").unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn preserves_authored_script_and_renumbered_graph() {

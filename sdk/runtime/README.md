@@ -1,5 +1,9 @@
 # Corework Runtime Host SDK
 
+> Workflow resources now expose list, register, remove, validate, promote and execute. Legacy API descriptions below are historical. See [the current contract](../../agent_runtime_ffi/docs/en/12-workflow-resource-api.md).
+
+
+
 The Runtime Host SDK is for applications that embed the native Agent Runtime:
 desktop apps, servers, service hosts, and test harnesses. It wraps the stable C
 ABI and exposes lifecycle, command invocation, and event polling.

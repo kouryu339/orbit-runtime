@@ -1038,6 +1038,15 @@ fn parse_setvar_args(text: &str, lineno: usize) -> ChainResult<Vec<(String, Valu
 
 /// 解析单个值 chunk
 pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
+    parse_value_with_mode(s, lineno, false)
+}
+
+/// Logic JSON shares Pure grammar while using `var.name` references.
+pub(crate) fn parse_logic_expression(s: &str) -> ChainResult<Value> {
+    parse_value_with_mode(s, 1, true)
+}
+
+fn parse_value_with_mode(s: &str, lineno: usize, dotted_vars: bool) -> ChainResult<Value> {
     let s = s.trim();
     if s.is_empty() {
         return Err(ChainError::of_kind(
@@ -1047,8 +1056,14 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
         ));
     }
 
+    if dotted_vars && s.starts_with('"') {
+        let value = serde_json::from_str::<String>(s)
+            .map_err(|e| ChainError::of_kind(lineno, ChainErrorKind::Syntax, e.to_string()))?;
+        return Ok(Value::Literal(JsonValue::String(value)));
+    }
+
     if s.starts_with('[') {
-        return parse_array_expression(s, lineno);
+        return parse_array_expression(s, lineno, dotted_vars);
     }
 
     // Pure 函数：add(a, b)、gt(a, b)、text_concat(a, b)
@@ -1058,7 +1073,7 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
             .map(|c| c.is_ascii_alphabetic())
             .unwrap_or(false)
     {
-        return parse_pure_function(s, lineno);
+        return parse_pure_function(s, lineno, dotted_vars);
     }
 
     // 字符串字面量
@@ -1109,7 +1124,7 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
                     && pin
                         .chars()
                         .next()
-                        .map(|c| c.is_ascii_alphabetic())
+                        .map(|c| c.is_ascii_alphabetic() || (dotted_vars && c == '_'))
                         .unwrap_or(false)
                 {
                     return Ok(Value::StepRef {
@@ -1117,6 +1132,14 @@ pub(crate) fn parse_value(s: &str, lineno: usize) -> ChainResult<Value> {
                         pin_name: pin.to_string(),
                     });
                 }
+            }
+        }
+    }
+
+    if dotted_vars {
+        if let Some(name) = s.strip_prefix("var.") {
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return Ok(Value::VarRef(name.into()));
             }
         }
     }
@@ -1167,7 +1190,7 @@ fn unescape_workflow_string(inner: &str) -> String {
     output
 }
 
-fn parse_array_expression(s: &str, lineno: usize) -> ChainResult<Value> {
+fn parse_array_expression(s: &str, lineno: usize, dotted_vars: bool) -> ChainResult<Value> {
     if !s.ends_with(']') {
         return Err(ChainError::of_kind(
             lineno,
@@ -1190,7 +1213,7 @@ fn parse_array_expression(s: &str, lineno: usize) -> ChainResult<Value> {
                         format!("数组表达式存在空项：`{s}`"),
                     ));
                 }
-                parse_value(item, lineno)
+                parse_value_with_mode(item, lineno, dotted_vars)
             })
             .collect::<ChainResult<Vec<_>>>()?
     };
@@ -1236,7 +1259,7 @@ fn make_array_inline(values: &[Value]) -> Value {
     }))
 }
 
-fn parse_pure_function(text: &str, lineno: usize) -> ChainResult<Value> {
+fn parse_pure_function(text: &str, lineno: usize, dotted_vars: bool) -> ChainResult<Value> {
     let open = text
         .find('(')
         .ok_or_else(|| ChainError::of_kind(lineno, ChainErrorKind::Syntax, "pure 函数缺少 `(`"))?;
@@ -1256,10 +1279,18 @@ fn parse_pure_function(text: &str, lineno: usize) -> ChainResult<Value> {
             format!("未知 pure 函数：`{}`", name),
         )
     })?;
-    let args = split_top_level(&text[open + 1..close], ',')
+    let parts = split_top_level(&text[open + 1..close], ',');
+    if dotted_vars && parts.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(ChainError::of_kind(
+            lineno,
+            ChainErrorKind::Syntax,
+            "Pure 函数参数不能为空",
+        ));
+    }
+    let args = parts
         .into_iter()
         .filter(|arg| !arg.trim().is_empty())
-        .map(|arg| parse_value(arg.trim(), lineno))
+        .map(|arg| parse_value_with_mode(arg.trim(), lineno, dotted_vars))
         .collect::<ChainResult<Vec<_>>>()?;
     if args.len() != spec.input_pins.len() {
         return Err(ChainError::of_kind(

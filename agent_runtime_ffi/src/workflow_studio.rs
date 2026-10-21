@@ -622,16 +622,40 @@ fn handle_workflow_studio_request(
     if !studio_request_authorized(state, &request) {
         return StudioResponse::Json(401, json!({"error": "invalid workflow studio token"}));
     }
+    if request.method == "POST"
+        && matches!(
+            request.path.as_str(),
+            "/api/save" | "/api/run" | "/api/normalize"
+        )
+        && serde_json::from_slice::<Value>(&request.body)
+            .ok()
+            .is_some_and(|body| {
+                body.as_object()
+                    .is_some_and(|body| body.contains_key("script"))
+            })
+    {
+        return StudioResponse::Json(
+            410,
+            json!({
+                "error": "legacy Workflow script payloads are deprecated and disabled",
+                "code": "deprecated_api"
+            }),
+        );
+    }
 
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/context") => StudioResponse::Json(200, studio_context_json(state)),
         ("GET", "/api/tools") => StudioResponse::Json(200, studio_tools_json(state)),
         ("GET", "/api/skills") => StudioResponse::Json(200, studio_skills_json(state)),
         ("GET", "/api/workflows") => StudioResponse::Json(200, studio_workflows_json(state)),
-        ("POST", "/api/compile") => {
-            StudioResponse::Json(200, studio_compile_json(state, &request.body))
-        }
-        ("POST", "/api/decompile") => studio_decompile_response(state, &request.body),
+        // Deprecated script authoring routes are closed, including direct HTTP calls.
+        ("POST", "/api/compile" | "/api/decompile") => StudioResponse::Json(
+            410,
+            json!({
+                "error": "legacy Workflow script APIs are deprecated and disabled",
+                "code": "deprecated_api"
+            }),
+        ),
         ("POST", "/api/nodes/instantiate") => {
             StudioResponse::Json(200, studio_instantiate_node_json(&state, &request.body))
         }
@@ -1085,79 +1109,6 @@ fn studio_workflow_detail_json(state: &WorkflowStudioState, id: &str) -> Value {
     }
 }
 
-fn studio_compile_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
-    let tools = match studio_compiler_tools(state) {
-        Ok(tools) => tools,
-        Err(error) => return json!({"error":error.to_string()}),
-    };
-    let input: Value = match serde_json::from_slice(body) {
-        Ok(value) => value,
-        Err(e) => return json!({"error": format!("invalid JSON body: {e}")}),
-    };
-    let script = input.get("script").and_then(Value::as_str).unwrap_or("");
-    if script.trim().is_empty() {
-        return json!({"error": "script must not be empty"});
-    }
-    match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(script, &tools)
-    {
-        Ok(blueprint) => match state.workflows.validate_workflow_references(&blueprint) {
-            Ok(()) => {
-                json!({"schema": "workflow-studio-compile-result/v1", "blueprint": blueprint})
-            }
-            Err(error) => json!({"error":error.to_string()}),
-        },
-        Err(e) => json!({
-            "error": "script compile failed",
-            "line": e.line,
-            "message": e.message
-        }),
-    }
-}
-
-fn studio_decompile_response(_state: &WorkflowStudioState, body: &[u8]) -> StudioResponse {
-    let input: Value = match serde_json::from_slice(body) {
-        Ok(value) => value,
-        Err(e) => {
-            return StudioResponse::Json(400, json!({"error": format!("invalid JSON body: {e}")}));
-        }
-    };
-    let blueprint_value = match input.get("blueprint").cloned() {
-        Some(value) => value,
-        None => return StudioResponse::Json(400, json!({"error": "blueprint is required"})),
-    };
-    let blueprint =
-        match corework::workflow::blueprint_json::BlueprintJson::from_json_value(blueprint_value) {
-            Ok(value) => value,
-            Err(e) => {
-                return StudioResponse::Json(
-                    400,
-                    json!({"error": format!("invalid BlueprintJson: {e}")}),
-                );
-            }
-        };
-    let script = match corework::workflow::chain_decompiler::decompile_chain(&blueprint) {
-        Ok(value) => value,
-        Err(e) => {
-            return StudioResponse::Json(
-                400,
-                json!({"error": "blueprint decompile failed", "message": e.message}),
-            );
-        }
-    };
-    if script.len() > 64 * 1024 {
-        return StudioResponse::Json(400, json!({"error": "decompiled script is too large"}));
-    }
-
-    StudioResponse::Json(
-        200,
-        json!({
-            "schema": "workflow-studio-decompile-result/v1",
-            "bytes": script.len(),
-            "script": script
-        }),
-    )
-}
-
 fn studio_instantiate_node_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
     use corework::workflow::blueprint_json::{BlueprintNodeJson, NodePin, NodePosition, NodeSize};
     use corework::workflow::registry::PinKind;
@@ -1338,7 +1289,6 @@ fn studio_normalize_json(state: &WorkflowStudioState, body: &[u8]) -> Value {
     }
     json!({
         "schema": "workflow-studio-normalize-result/v1",
-        "script": script,
         "blueprint": normalized,
         "id_remap": id_remap,
         "temporary_id_remap": temporary_id_remap
@@ -2513,6 +2463,7 @@ fn write_http_bytes_response(
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        410 => "Gone",
         501 => "Not Implemented",
         _ => "OK",
     };
@@ -2682,25 +2633,23 @@ pub(crate) fn workflow_studio_html() -> String {
     <section class="workbench">
       <div class="pane-head">
         <div class="tabs"><button class="tab active" data-mode="professional">Professional</button><button class="tab" data-mode="normal">Normal</button></div>
-        <div class="toolbar"><button class="button" id="traceToggle">Trace</button><button class="button" id="layout">Auto layout</button><button class="button" id="compile">Compile</button><button class="button" id="save">Save</button><button class="button primary" id="run">Run workflow</button></div>
+        <div class="toolbar"><button class="button" id="traceToggle">Trace</button><button class="button" id="layout">Auto layout</button><button class="button" id="save">Save</button><button class="button primary" id="run">Run workflow</button></div>
       </div>
       <div class="canvas-wrap">
         <svg id="graph" role="img" aria-label="Workflow graph preview"></svg>
-        <div class="empty-canvas" id="emptyCanvas"><div><b>No blueprint loaded</b>Compile a script or open a persisted workflow.</div></div>
+        <div class="empty-canvas" id="emptyCanvas"><div><b>No blueprint loaded</b>Open a persisted workflow.</div></div>
         <div class="trace" id="trace"></div>
       </div>
       <div class="bottom">
-        <div class="bottom-head"><div class="tabs"><button class="tab active" data-bottom="script">Script</button><button class="tab" data-bottom="output">Output</button></div><span class="pill" id="blueprintStatus">draft empty</span></div>
+        <div class="bottom-head"><div class="tabs"><button class="tab active" data-bottom="output">Output</button></div><span class="pill" id="blueprintStatus">draft empty</span></div>
         <div class="bottom-body">
-          <textarea class="code" id="script" spellcheck="false">workflow demo
-start -> end</textarea>
           <pre class="output" id="output"></pre>
         </div>
       </div>
     </section>
     <aside class="assistant">
       <div class="assistant-head"><div><h2>Editor agent</h2><p class="eyebrow">workflow-studio-editor</p></div><span class="pill ok" id="agentState">ready</span></div>
-      <div class="message-list" id="messages"><div class="message system">Ask the independent editor agent to inspect workflows, compile scripts, or explain graph nodes. Conversation updates and tool activity appear here as Runtime events arrive.</div></div>
+      <div class="message-list" id="messages"><div class="message system">Ask the independent editor agent to inspect workflows or explain graph nodes. Conversation updates and tool activity appear here as Runtime events arrive.</div></div>
       <form class="composer" id="composer"><textarea id="chat" placeholder="Ask the editor agent…" aria-label="Message editor agent"></textarea><button class="button primary" id="send" type="submit">Send</button></form>
       <div class="context" id="context">Loading editor context…</div>
     </aside>
@@ -2722,20 +2671,18 @@ start -> end</textarea>
     function draftSnapshotKey() {
       return state.blueprint ? JSON.stringify(state.blueprint) : '';
     }
-    async function decompileCurrentDraft(reason = 'draft_changed') {
-      if (!state.blueprint?.nodes?.length) return null;
+    async function syncCurrentDraft() {
       const key = draftSnapshotKey();
       if (key === state.lastSnapshotKey) return null;
-      const out = await api('/api/decompile', { method: 'POST', body: JSON.stringify({ blueprint: state.blueprint, reason }) });
+      const out = await api('/api/studio-state', { method: 'POST', body: '{}' });
       state.lastSnapshotKey = key;
-      if (typeof out.script === 'string') $('script').value = out.script;
       return out;
     }
     function scheduleStudioSnapshot(reason = 'draft_changed') {
       if (state.snapshotTimer) clearTimeout(state.snapshotTimer);
       state.snapshotTimer = setTimeout(() => {
         state.snapshotTimer = null;
-        decompileCurrentDraft(reason).catch(error => console.warn('Workflow draft decompile failed', error));
+        syncCurrentDraft(reason).catch(error => console.warn('Workflow snapshot failed', error));
       }, 350);
     }
     async function flushStudioSnapshot(reason = 'before_chat') {
@@ -2743,8 +2690,8 @@ start -> end</textarea>
         clearTimeout(state.snapshotTimer);
         state.snapshotTimer = null;
       }
-      try { return await decompileCurrentDraft(reason); }
-      catch (error) { console.warn('Workflow draft decompile failed', error); return null; }
+      try { return await syncCurrentDraft(reason); }
+      catch (error) { console.warn('Workflow snapshot failed', error); return null; }
     }
     async function refresh() {
       const context = await api('/api/context');
@@ -3006,11 +2953,8 @@ start -> end</textarea>
     function setOutput(value) { $('output').textContent = JSON.stringify(value, null, 2); showBottom('output'); }
     function showBottom(name) {
       document.querySelectorAll('[data-bottom]').forEach(b => b.classList.toggle('active', b.dataset.bottom === name));
-      $('script').style.display = name === 'script' ? 'block' : 'none'; $('output').style.display = name === 'output' ? 'block' : 'none';
+      $('output').style.display = 'block';
     }
-    $('compile').onclick = async () => {
-      try { const out=await api('/api/compile',{method:'POST',body:JSON.stringify({script:$('script').value})}); setBlueprint(out.blueprint); setOutput(out); } catch(error) { setOutput({error:error.message}); }
-    };
     $('layout').onclick = async () => {
       try { if(!state.blueprint) return; const out=await api('/api/layout',{method:'POST',body:JSON.stringify({blueprint:state.blueprint,mode:'all'})}); setBlueprint(out.blueprint); setOutput({schema:out.schema,algorithm:out.algorithm,mode:out.mode}); } catch(error) { setOutput({error:error.message}); }
     };

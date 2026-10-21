@@ -156,7 +156,7 @@ fn definition(
 pub fn definitions_for_active_tools(
     names: &[String],
     strict: bool,
-    workflow_script_enabled: bool,
+    workflow_authoring_enabled: bool,
 ) -> Result<Vec<llm_gateway::ToolDefinition>, String> {
     let factories = inventory::iter::<AISystemFactory>
         .into_iter()
@@ -184,7 +184,7 @@ pub fn definitions_for_active_tools(
             let description = resident_tool_description(
                 factory.metadata.description,
                 !factory.metadata.workflow_enabled,
-                workflow_script_enabled,
+                workflow_authoring_enabled,
             );
             definitions.push(definition(
                 factory.metadata.name,
@@ -216,7 +216,7 @@ pub fn definitions_for_active_tools(
             let description = resident_tool_description(
                 &metadata.description,
                 !metadata.workflow_enabled,
-                workflow_script_enabled,
+                workflow_authoring_enabled,
             );
             definitions.push(definition(
                 &metadata.name,
@@ -238,7 +238,7 @@ pub fn definitions_for_active_tools(
 fn resident_tool_description(
     description: &str,
     ai_only: bool,
-    workflow_script_enabled: bool,
+    workflow_authoring_enabled: bool,
 ) -> String {
     let mut sections = vec![if ai_only {
         description.trim().to_string()
@@ -246,7 +246,7 @@ fn resident_tool_description(
         compact_summary(description)
     }];
     if ai_only {
-        if workflow_script_enabled {
+        if workflow_authoring_enabled {
             sections.push(
                 crate::prompt_assets::template("tool_ai_only_description.md")
                     .trim()
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn fc_keeps_output_contract_out_of_resident_tool_definitions() {
-        let names = vec!["executeWorkflowScript".to_string()];
+        let names = vec!["executeWorkflow".to_string()];
         let regular = definitions_for_active_tools(&names, false, false).unwrap();
         let script_capable = definitions_for_active_tools(&names, false, true).unwrap();
 
@@ -660,11 +660,11 @@ mod tests {
     #[test]
     fn rejects_unknown_arguments_and_projects_workflow_inputs() {
         let definition = definition(
-            "executeWorkflowScript",
+            "executeWorkflow",
             "execute",
             vec![
                 ParameterSpec {
-                    name: "script".into(),
+                    name: "workflow_id".into(),
                     param_type: "String".into(),
                     required: true,
                     default_value: None,
@@ -682,15 +682,15 @@ mod tests {
         );
         let call = llm_gateway::ToolCall::function(
             "call-1",
-            "executeWorkflowScript",
-            r#"{"script":"input\nreturn","inputs":[{"name":"count","value":"2"}]}"#,
+            "executeWorkflow",
+            r#"{"workflow_id":"flow-1","inputs":[{"name":"count","value":"2"}]}"#,
         );
         let parsed = validate_and_project_call(&call, std::slice::from_ref(&definition)).unwrap();
         assert!(parsed.params.contains(&("input.count".into(), "2".into())));
         let bad = llm_gateway::ToolCall::function(
             "call-2",
-            "executeWorkflowScript",
-            r#"{"script":"x","unknown":true}"#,
+            "executeWorkflow",
+            r#"{"workflow_id":"flow-1","unknown":true}"#,
         );
         assert!(validate_and_project_call(&bad, &[definition]).is_err());
     }

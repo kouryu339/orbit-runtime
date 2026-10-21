@@ -17,7 +17,10 @@ pub(crate) struct ParentWorkflowEntry {
 }
 
 impl ParentWorkflowEntry {
-    fn from_blueprint_path(path: PathBuf, blueprint: &BlueprintJson) -> Result<Self, String> {
+    pub(super) fn from_blueprint_path(
+        path: PathBuf,
+        blueprint: &BlueprintJson,
+    ) -> Result<Self, String> {
         let file_name = path
             .file_name()
             .and_then(|value| value.to_str())
@@ -274,7 +277,9 @@ pub(super) async fn build_resource_registry(
         .workflows
         .root_dir
         .map(|path| normalize_resource_path(base_dir, path));
-    let workflow_registry = scan_parent_workflow_registry(workflows_root_dir.as_deref())?;
+    // Build the catalog from accepted, compiled sources during startup, after
+    // tool contracts are installed. Registration must not parse legacy graphs.
+    let workflow_registry = Vec::new();
     let data_dir = registration
         .data
         .data_dir
@@ -373,50 +378,6 @@ fn build_agent_profile_registry(
             profile.system_skills,
         )?;
         registry.insert(id, profile);
-    }
-    Ok(registry)
-}
-
-pub(super) fn scan_parent_workflow_registry(
-    workflows_root_dir: Option<&Path>,
-) -> Result<Vec<ParentWorkflowEntry>, RuntimeError> {
-    let Some(workflows_root_dir) = workflows_root_dir else {
-        return Ok(Vec::new());
-    };
-    let entries = match fs::read_dir(workflows_root_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "scan workflow registry failed from '{}': {error}",
-                workflows_root_dir.display()
-            )))
-        }
-    };
-
-    let mut registry: Vec<ParentWorkflowEntry> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !BlueprintJson::is_workflow_file_path(&path) {
-            continue;
-        }
-        let blueprint = match BlueprintJson::from_workflow_file(&path) {
-            Ok(blueprint) => blueprint,
-            Err(error) => {
-                return Err(RuntimeError::InvalidConfig(format!(
-                    "parse workflow registry entry failed from '{}': {error}",
-                    path.display()
-                )))
-            }
-        };
-        let entry = ParentWorkflowEntry::from_blueprint_path(path, &blueprint)
-            .map_err(RuntimeError::InvalidConfig)?;
-        registry.retain(|existing| {
-            existing.file_name != entry.file_name
-                && existing.name != entry.name
-                && (entry.id.is_empty() || existing.id != entry.id)
-        });
-        registry.push(entry);
     }
     Ok(registry)
 }
@@ -833,13 +794,25 @@ pub(super) fn install_workflow_runtime_from_config(
     let dir = auto_load_dir.unwrap_or_else(|| PathBuf::from("workflows"));
     let module = WorkflowsModule::new_with_event_bus(dir.clone(), event_bus)
         .map_err(|e| RuntimeError::Internal(format!("initialize workflow runtime failed: {e}")))?;
-    let count = module
-        .scan_local_dir()
-        .map_err(|e| RuntimeError::Internal(format!("read workflow registry failed: {e}")))?;
-    tracing::info!(
-        "workflow runtime initialized from {} with {} workflows",
-        dir.display(),
-        count
-    );
     Ok(Arc::new(module))
+}
+
+pub(super) fn compiled_parent_workflow_registry(
+    module: &WorkflowsModule,
+) -> Result<Vec<ParentWorkflowEntry>, RuntimeError> {
+    module
+        .registered_workflows()
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?
+        .into_iter()
+        .map(|entry| {
+            let view = module
+                .read_workflow_resource(&entry.id)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            let blueprint = view.blueprint.ok_or_else(|| {
+                RuntimeError::Internal("Registered workflow has no compiled graph".into())
+            })?;
+            ParentWorkflowEntry::from_blueprint_path(PathBuf::from(entry.file_path), &blueprint)
+                .map_err(RuntimeError::Internal)
+        })
+        .collect()
 }

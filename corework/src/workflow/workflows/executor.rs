@@ -56,6 +56,8 @@ impl Default for WorkflowSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BlueprintEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) accepted: Option<super::revision::PreparedRevision>,
     pub(crate) metadata: BlueprintMetadata,
     pub(crate) file_path: String,
     pub(crate) key: String,
@@ -256,6 +258,10 @@ impl WorkflowsModule {
     /// 扫描 `workflows_dir` 下工作流 JSON 文件，兼容旧的普通 `.json` 文件。
     /// 返回成功加载的数量。
     pub fn scan_local_dir(&self) -> Result<usize> {
+        self.scan_legacy_dir(true)
+    }
+
+    pub(crate) fn scan_legacy_dir(&self, validate: bool) -> Result<usize> {
         let _reference_guard = self.reference_lock.lock();
         let entries = std::fs::read_dir(&self.workflows_dir).map_err(|e| {
             FrameworkError::SystemError(format!(
@@ -284,6 +290,9 @@ impl WorkflowsModule {
 
             match std::fs::read_to_string(&path) {
                 Ok(json_str) => {
+                    if super::resource_api::resource_source_kind(&json_str)?.is_some() {
+                        continue;
+                    }
                     match BlueprintJson::from_json_str(&json_str) {
                         Ok(blueprint) => {
                             if let Err(e) = blueprint.validate() {
@@ -294,6 +303,7 @@ impl WorkflowsModule {
                             // 按 key 去重（可能同名工作流被改过文件名）
                             registry.retain(|e| e.key != key);
                             registry.push(BlueprintEntry {
+                                accepted: None,
                                 metadata: blueprint.metadata,
                                 file_path: path_str,
                                 key,
@@ -317,7 +327,11 @@ impl WorkflowsModule {
         }
 
         self.unit.set_resource(REGISTRY, &registry, None)?;
-        if let Err(error) = self.validate_reference_catalog_unlocked() {
+        if let Err(error) = if validate {
+            self.validate_reference_catalog_unlocked()
+        } else {
+            Ok(())
+        } {
             self.unit.set_resource(REGISTRY, &previous_registry, None)?;
             return Err(error);
         }
@@ -361,6 +375,7 @@ impl WorkflowsModule {
         let mut registry = self.get_registry()?;
         registry.retain(|e| e.key != key && e.metadata.name != blueprint.metadata.name);
         registry.push(BlueprintEntry {
+            accepted: None,
             metadata: blueprint.metadata.clone(),
             file_path: file_path_str.clone(),
             key: key.clone(),
@@ -400,6 +415,7 @@ impl WorkflowsModule {
         let mut registry = self.get_registry()?;
         registry.retain(|e| e.key != key);
         registry.push(BlueprintEntry {
+            accepted: None,
             metadata: blueprint.metadata,
             file_path: path_str,
             key: key.clone(),
@@ -446,6 +462,10 @@ impl WorkflowsModule {
 
     pub fn delete_resource(&self, id: &str) -> Result<RegisteredWorkflow> {
         let _reference_guard = self.reference_lock.lock();
+        self.delete_resource_unlocked(id)
+    }
+
+    pub(crate) fn delete_resource_unlocked(&self, id: &str) -> Result<RegisteredWorkflow> {
         self.ensure_reference_unused_unlocked(id)?;
         let id = Self::validate_resource_id(id)?;
         let registry = self.get_registry()?;
@@ -535,7 +555,7 @@ impl WorkflowsModule {
     // 蓝图执行（即用即弃）
     // =========================================================================
 
-    /// 按名称执行工作流：从文件加载 → 创建实例 → 执行 → 丢弃。
+    /// 按名称执行工作流：使用已接受的图 → 创建实例 → 执行 → 丢弃。
     pub async fn execute_by_name(
         &self,
         name: &str,
@@ -549,14 +569,8 @@ impl WorkflowsModule {
                 FrameworkError::InvalidOperation(format!("未找到名为「{}」的工作流", name))
             })?;
 
-        if entry.file_path.is_empty() {
-            return Err(FrameworkError::InvalidOperation(format!(
-                "工作流「{}」无关联文件，无法执行",
-                name
-            )));
-        }
-
-        self.execute_from_file(&entry.file_path, inputs).await
+        self.execute_from_blueprint(Self::accepted_blueprint(&entry)?, inputs)
+            .await
     }
 
     pub async fn execute_registered_report(
@@ -585,8 +599,7 @@ impl WorkflowsModule {
                     selector
                 ))
             })?;
-        let blueprint = BlueprintJson::from_workflow_file(&entry.file_path)
-            .map_err(FrameworkError::SystemError)?;
+        let blueprint = Self::accepted_blueprint(&entry)?;
         self.execute_from_blueprint_report(blueprint, inputs, trace_enabled)
             .await
     }
@@ -646,8 +659,7 @@ impl WorkflowsModule {
                     selector
                 ))
             })?;
-        let blueprint = BlueprintJson::from_workflow_file(&entry.file_path)
-            .map_err(FrameworkError::SystemError)?;
+        let blueprint = Self::accepted_blueprint(&entry)?;
         self.execute_from_blueprint_outcome_with_context_and_run_id(
             blueprint,
             inputs,
@@ -1058,6 +1070,14 @@ impl WorkflowsModule {
         revision: Option<u64>,
         prepared: Option<&super::revision::PreparedRevision>,
     ) -> Result<RegisteredWorkflow> {
+        if let Some(prepared) = prepared.filter(|prepared| prepared.resource_source.is_some()) {
+            return self.persist_logic_registered_unlocked(
+                prepared,
+                revision.unwrap_or(1),
+                update,
+                true,
+            );
+        }
         self.validate_references_unlocked(blueprint)?;
         let mut blueprint = blueprint.clone();
         let id = Self::validate_resource_id(&blueprint.metadata.id)?;
@@ -1114,6 +1134,17 @@ impl WorkflowsModule {
             )));
         }
 
+        if existing.is_some() && prepared.and_then(|p| p.logic.as_ref()).is_none() {
+            let stored: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).map_err(|e| FrameworkError::SystemError(e.to_string()))?,
+            )?;
+            if stored.get("logic").is_some_and(|v| !v.is_null()) {
+                return Err(FrameworkError::InvalidOperation(
+                    "Logic-owned workflows require a logic revision".into(),
+                ));
+            }
+        }
+
         let next_revision = match revision {
             Some(revision) => revision,
             None => match existing.as_ref() {
@@ -1127,6 +1158,12 @@ impl WorkflowsModule {
 
         let mut document = serde_json::to_value(&blueprint)?;
         if let Some(prepared) = prepared {
+            document["logic"] = serde_json::json!(prepared.logic);
+            document["logic_source"] = serde_json::json!(prepared.logic_source);
+            if prepared.logic.is_some() {
+                document["logic_compiler_version"] =
+                    serde_json::json!(crate::workflow::logic::COMPILER_VERSION);
+            }
             document["script"] = serde_json::json!(prepared.script);
             document["source"] = serde_json::json!(prepared.source);
             document["validator_version"] = serde_json::json!(prepared.validator_version);
@@ -1145,6 +1182,7 @@ impl WorkflowsModule {
         })?;
 
         let entry = BlueprintEntry {
+            accepted: None,
             metadata: blueprint.metadata.clone(),
             file_path: path.to_string_lossy().to_string(),
             key: Self::make_key(&blueprint.metadata),
@@ -1175,6 +1213,14 @@ impl WorkflowsModule {
             return Err(error);
         }
         Ok(Self::registered_workflow(entry))
+    }
+
+    pub(crate) fn accepted_blueprint(entry: &BlueprintEntry) -> Result<BlueprintJson> {
+        match &entry.accepted {
+            Some(accepted) => Ok(accepted.blueprint.clone()),
+            None => BlueprintJson::from_workflow_file(&entry.file_path)
+                .map_err(FrameworkError::SystemError),
+        }
     }
 
     pub(crate) fn registered_workflow(entry: BlueprintEntry) -> RegisteredWorkflow {
@@ -1212,7 +1258,7 @@ impl WorkflowsModule {
         Ok(id.to_string())
     }
 
-    fn ensure_owned_resource_path(&self, path: &std::path::Path) -> Result<()> {
+    pub(crate) fn ensure_owned_resource_path(&self, path: &std::path::Path) -> Result<()> {
         if path.parent() != Some(self.workflows_dir.as_path()) {
             return Err(FrameworkError::InvalidOperation(format!(
                 "workflow resource file '{}' is outside the configured workflow directory",
@@ -1222,7 +1268,7 @@ impl WorkflowsModule {
         Ok(())
     }
 
-    fn make_key(meta: &BlueprintMetadata) -> String {
+    pub(crate) fn make_key(meta: &BlueprintMetadata) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();

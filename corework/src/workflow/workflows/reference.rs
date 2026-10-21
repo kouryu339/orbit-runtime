@@ -25,14 +25,7 @@ impl WorkflowsModule {
         self.get_registry()?
             .into_iter()
             .map(|entry| {
-                let raw = std::fs::read_to_string(&entry.file_path).map_err(|e| {
-                    error(format!(
-                        "Read registered workflow '{}': {e}",
-                        entry.metadata.id
-                    ))
-                })?;
-                let blueprint =
-                    BlueprintJson::from_json_str(&raw).map_err(|e| error(e.to_string()))?;
+                let blueprint = Self::accepted_blueprint(&entry)?;
                 if blueprint.metadata.id != entry.metadata.id {
                     return Err(error(format!(
                         "Registered workflow '{}' has mismatched file identity",

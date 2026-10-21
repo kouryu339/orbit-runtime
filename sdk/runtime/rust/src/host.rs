@@ -240,14 +240,50 @@ impl RuntimeApp {
         Ok(self.lock_runtime()?.capabilities().clone())
     }
 
+    /// Register or replace a complete resource document; state and revision are in source.
+    pub fn register_workflow(&self, source: &str) -> Result<Value> {
+        self.invoke("workflow.register", json!({"source":source}))
+    }
+
+    /// Validate without saving or running nodes.
+    pub fn validate_workflow(&self, source: &str) -> Result<Value> {
+        self.invoke("workflow.validate", json!({"source":source}))
+    }
+
+    pub fn promote_workflow(&self, id: &str, expected_revision: u64) -> Result<Value> {
+        self.invoke(
+            "workflow.promote",
+            json!({"id":id,"expected_revision":expected_revision}),
+        )
+    }
+
+    pub fn remove_workflow(&self, id: &str, expected_revision: u64) -> Result<Value> {
+        self.invoke(
+            "workflow.remove",
+            json!({"id":id,"expected_revision":expected_revision}),
+        )
+    }
+
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn create_workflow_draft(&self, resource: Value) -> Result<Value> {
         self.invoke("workflow.create", json!({ "resource": resource }))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn read_workflow(&self, id: &str) -> Result<Value> {
         self.invoke("workflow.read", json!({ "id": id }))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn register_workflow_draft(
         &self,
         id: &str,
@@ -261,6 +297,10 @@ impl RuntimeApp {
     }
 
     /// Atomically validate and commit one script or blueprint change.
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn revise_workflow(
         &self,
         id: &str,
@@ -276,6 +316,10 @@ impl RuntimeApp {
     }
 
     /// Use the same preparation pipeline without saving or incrementing the revision.
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn validate_workflow_revision(
         &self,
         id: &str,
@@ -290,7 +334,10 @@ impl RuntimeApp {
         )
     }
 
-    #[deprecated(note = "use revise_workflow with an explicit expected revision")]
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn update_workflow(
         &self,
         resource: Value,
@@ -302,10 +349,18 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn compile_workflow_draft(&self, id: &str) -> Result<Value> {
         self.invoke("workflow.compile", json!({ "id": id }))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn workflow_script_to_blueprint(&self, script: &str) -> Result<Value> {
         self.invoke(
             "workflow.convert.script_to_blueprint",
@@ -313,6 +368,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn workflow_blueprint_to_script(&self, blueprint: Value) -> Result<Value> {
         self.invoke(
             "workflow.convert.blueprint_to_script",
@@ -320,6 +379,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn delete_workflow(&self, id: &str, expected_revision: Option<u64>) -> Result<Value> {
         self.invoke(
             "workflow.delete",
@@ -338,6 +401,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn test_workflow_draft(&self, id: &str, inputs: Value, trace: bool) -> Result<Value> {
         self.invoke(
             "workflow.execute",
@@ -345,6 +412,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn execute_workflow_script(
         &self,
         script: &str,
@@ -371,6 +442,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn test_workflow_draft_in_context(
         &self,
         id: &str,
@@ -385,6 +460,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn execute_workflow_script_in_context(
         &self,
         script: &str,
@@ -399,10 +478,18 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn start_workflow_run(&self) -> Result<Value> {
         self.invoke("workflow.start", json!({}))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn run_workflow(&self, workflow_run_id: &str, id: &str, inputs: Value) -> Result<Value> {
         self.invoke(
             "workflow.run",
@@ -410,6 +497,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn run_workflow_draft_test(
         &self,
         workflow_run_id: &str,
@@ -422,6 +513,10 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn run_workflow_script(
         &self,
         workflow_run_id: &str,
@@ -434,10 +529,18 @@ impl RuntimeApp {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn describe_workflow_inputs(&self, id: &str) -> Result<Value> {
         self.invoke("workflow.describe_inputs", json!({"id": id}))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn describe_workflow_script_inputs(&self, script: &str) -> Result<Value> {
         self.invoke("workflow.describe_inputs", json!({"script": script}))
     }
@@ -640,6 +743,10 @@ impl RuntimeApp {
         self.invoke("runtime.get_workflow_node_definitions", json!({}))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn get_workflow_reference_node(&self, workflow_id: &str, node_id: &str) -> Result<Value> {
         self.invoke(
             "workflow.get_reference_node",
@@ -655,10 +762,18 @@ impl RuntimeApp {
         self.invoke("runtime.get_rpc_endpoint_definitions", json!({}))
     }
 
+    #[deprecated(
+        note = "Standalone Workflow Studio and Agent Test Studio pages are deprecated and disabled."
+    )]
+    #[doc(hidden)]
     pub fn open_workflow_studio(&self, options: Value) -> Result<Value> {
         self.invoke("studio.open_workflow", json!({ "options": options }))
     }
 
+    #[deprecated(
+        note = "Standalone Workflow Studio and Agent Test Studio pages are deprecated and disabled."
+    )]
+    #[doc(hidden)]
     pub fn open_agent_test_studio(&self, options: Value) -> Result<Value> {
         self.invoke("studio.open_agent_test", json!({ "options": options }))
     }

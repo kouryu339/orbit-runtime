@@ -1,5 +1,9 @@
 # 1 Agent Runtime ABI 1 对外协议契约
 
+> 当前 Workflow 对外接口保留列表、注册、移除、验证、转正、执行。本文其余旧接口和示例为历史资料。参见 [当前六接口契约](12-workflow-resource-api.md)。
+
+
+
 本文是 `sdk/runtime/c/include/agent_runtime.h` 与 `agent_runtime_ffi/src/lib.rs` 的宿主
 契约。ABI 1 只导出生命周期和传输函数；功能通过版本化 JSON command 扩展。
 

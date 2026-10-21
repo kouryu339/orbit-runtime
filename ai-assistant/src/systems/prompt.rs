@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use corework::ai_system::AISystemFactory;
 use corework::buns_system;
-use corework::cache::CacheExt;
 use corework::error::FrameworkError;
 use corework::orchestration::Context;
 use corework::rpc_tool::RuntimeToolMetadata;
@@ -189,6 +188,13 @@ pub(crate) fn format_immutable_cache_entries_section(entries: &BTreeMap<String, 
         output.push_str(text);
     }
     output
+}
+
+/// Workflow syntax is available only with a current JSON authoring tool.
+pub(crate) fn workflow_authoring_enabled(tool_names: &[String]) -> bool {
+    tool_names
+        .iter()
+        .any(|name| matches!(name.as_str(), "registerWorkflow" | "validateWorkflow"))
 }
 
 /// Format tool metadata as prompt text for EXEC line-protocol usage.
@@ -478,21 +484,8 @@ impl SystemOperation for BuildSystemPromptSystem {
         }
 
         let all_tools = AssistantContext::all_active_tools(&ctx.cache).await?;
-        let system_skills: BTreeMap<String, String> = ctx
-            .cache
-            .get(crate::context::keys::SYSTEM_SKILLS)
-            .await?
-            .unwrap_or_default();
-        let thinking_skill = system_skills
-            .get(crate::state::states::THINKING)
-            .map(String::as_str)
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or(crate::state::states::THINKING);
-        let include_tool_outputs = mgr()
-            .read()
-            .await
-            .system_skill_declares_tool(thinking_skill, "executeWorkflowScript");
-        let tools_section = format_tools_section(&all_tools, include_tool_outputs);
+        let workflow_authoring_enabled = workflow_authoring_enabled(&all_tools);
+        let tools_section = format_tools_section(&all_tools, workflow_authoring_enabled);
         if !tools_section.is_empty() {
             sections.push(PromptSection::new(tools_section));
         }
@@ -508,7 +501,7 @@ impl SystemOperation for BuildSystemPromptSystem {
         if !plan_execution_rules.is_empty() {
             sections.push(PromptSection::new(plan_execution_rules));
         }
-        if include_tool_outputs {
+        if workflow_authoring_enabled {
             let workflow_tool_rules = crate::prompt_assets::template("workflow_tool_rules.md")
                 .trim()
                 .to_string();
@@ -699,7 +692,7 @@ pub fn build_system_prompt_text_for_protocol(
     state_skill: Option<&str>,
     frontend_widgets_enabled: bool,
     tool_protocol: crate::ToolProtocol,
-    workflow_script_enabled: bool,
+    workflow_authoring_enabled: bool,
 ) -> String {
     let mut sections: Vec<PromptSection> = Vec::new();
 
@@ -720,7 +713,7 @@ pub fn build_system_prompt_text_for_protocol(
     if !plan_execution_rules.is_empty() {
         sections.push(PromptSection::new(plan_execution_rules));
     }
-    if workflow_script_enabled {
+    if workflow_authoring_enabled {
         let workflow_tool_rules = crate::prompt_assets::template("workflow_tool_rules.md")
             .trim()
             .to_string();
@@ -805,7 +798,7 @@ pub fn format_workflows_section(registry: &[serde_json::Value]) -> String {
     output.push_str(
         "Available Registered workflows can be executed with `executeWorkflow --workflow_id <id> --input.<name> <value>`.\n\n",
     );
-    output.push_str("When composing a Workflow script, read the registered resource's `reference_script` with `readWorkflow`. Use its `WorkflowRef_<workflow_id>` node and direct `--parameter` names. These are compiler-only registered workflow references, not FC tools; never invent their interfaces or recursively invoke executeWorkflow/executeWorkflowScript inside a Workflow. Drafts and cyclic references are rejected.\n\n");
+    output.push_str("Use host-provided WorkflowRef_<workflow_id> node contracts for references. Drafts and cyclic references are rejected. Legacy script editing and temporary script execution APIs are deprecated and unavailable.\n\n");
 
     for entry in registry {
         let meta = match entry.get("metadata") {
@@ -1059,18 +1052,18 @@ mod tests {
     }
 
     #[test]
-    fn local_ai_only_guidance_is_projected_for_script_capable_thinking() {
+    fn local_ai_only_guidance_is_projected_for_json_authoring() {
         let tools = vec!["GetSkillsList".to_string()];
 
         let regular = format_tools_section(&tools, false);
-        let script_capable = format_tools_section(&tools, true);
+        let authoring = format_tools_section(&tools, true);
 
-        assert_ne!(regular, script_capable);
-        assert!(script_capable.len() > regular.len());
+        assert_ne!(regular, authoring);
+        assert!(authoring.len() > regular.len());
     }
 
     #[test]
-    fn workflow_tool_rule_is_only_injected_for_script_capable_mode() {
+    fn workflow_json_syntax_is_only_injected_for_authoring_mode() {
         let regular = build_system_prompt_text_for_protocol(
             "persona",
             "",
@@ -1084,7 +1077,7 @@ mod tests {
             crate::ToolProtocol::NativeFc,
             false,
         );
-        let script_capable = build_system_prompt_text_for_protocol(
+        let authoring = build_system_prompt_text_for_protocol(
             "persona",
             "",
             "",
@@ -1098,8 +1091,28 @@ mod tests {
             true,
         );
 
-        assert!(!regular.contains("workflow_enabled"));
-        assert!(script_capable.contains("workflow_enabled=true"));
+        assert!(!regular.contains("returns.<name>.value"));
+        assert!(authoring.contains("orbit.workflow.resource/v1"));
+        assert!(authoring.contains("returns.<name>.value"));
+        for legacy in [
+            "executeWorkflowScript",
+            "createWorkflowDraft",
+            "compileWorkflow",
+            "N: EXEC",
+            "WorkflowRef_<",
+        ] {
+            assert!(!authoring.contains(legacy), "{legacy}");
+        }
+        assert!(workflow_authoring_enabled(&["registerWorkflow".into()]));
+        assert!(workflow_authoring_enabled(&["validateWorkflow".into()]));
+        for name in [
+            "executeWorkflowScript",
+            "executeWorkflow",
+            "listWorkflows",
+            "ToolDescribe",
+        ] {
+            assert!(!workflow_authoring_enabled(&[name.into()]), "{name}");
+        }
     }
 
     #[test]

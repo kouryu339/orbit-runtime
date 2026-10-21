@@ -763,18 +763,20 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         (crate::ToolProtocol::NativeFc, "thinking-pro") => "thinking-pro-fc",
         (_, configured) => configured,
     };
-    let (mut all_tools, include_tool_outputs) = {
+    let (mut all_tools, workflow_authoring_enabled) = {
         let mut tools = AssistantContext::all_active_tools(&cache).await?;
         let m = mgr().read().await;
         tools = m.filtered_tools_for_state(thinking_skill, tools);
-        let include_outputs = m.system_skill_declares_tool(thinking_skill, "executeWorkflowScript");
-        (tools, include_outputs)
+        let authoring = crate::systems::prompt::workflow_authoring_enabled(&tools);
+        (tools, authoring)
     };
     if tool_protocol == crate::ToolProtocol::Disabled {
         all_tools.clear();
     }
+    let workflow_authoring_enabled =
+        workflow_authoring_enabled && tool_protocol != crate::ToolProtocol::Disabled;
     let tools_section = if tool_protocol == crate::ToolProtocol::ExecLegacy {
-        format_tools_section(&all_tools, include_tool_outputs)
+        format_tools_section(&all_tools, workflow_authoring_enabled)
     } else {
         String::new()
     };
@@ -847,7 +849,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                 .as_ref()
                 .map(|provider| provider.strict_tool_schema)
                 .unwrap_or(false),
-            include_tool_outputs,
+            workflow_authoring_enabled,
         )
         .map_err(corework::error::FrameworkError::InvalidOperation)?
     } else {
@@ -897,7 +899,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         Some(thinking_skill),
         frontend_widgets_enabled,
         tool_protocol,
-        include_tool_outputs,
+        workflow_authoring_enabled,
     );
 
     #[cfg(debug_assertions)]

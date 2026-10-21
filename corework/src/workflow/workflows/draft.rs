@@ -165,6 +165,7 @@ fn extract_variables_from_script(script_text: &str) -> Vec<BlueprintVariable> {
         }
         let (data_type, default_value) = infer_var_default(value);
         variables.push(BlueprintVariable {
+            display_name: None,
             name,
             data_type,
             default_value,
