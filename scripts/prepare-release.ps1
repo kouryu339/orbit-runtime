@@ -128,6 +128,15 @@ Source syntax: docs/zh/workflow-json-source-syntax.md (also available in en).
 Distribute these files with the native library. Schemas describe normalized
 structures; validate authored source through workflow.validate.
 Old script APIs and both standalone Studio pages are disabled.
+Dynamic clusters: runtime.add_agent_cluster / runtime.update_agent_cluster.
+Updates require all cluster conversations to be closed. Read
+docs/zh/13-dynamic-agent-clusters.md (also available in en) and
+docs/dynamic-clusters-update.zh-CN.md for the contract and local build notes.
+Skill candidate transactions: runtime.read_skill / runtime.validate_skill_transaction /
+runtime.commit_skill_transaction. See docs/zh/14-skill-candidate-transactions.md
+(also available in en) and schemas/skill-transaction.schema.json.
+Existing Workflow edits become drafts; active runs block edits to their complete
+reference chain. Detect these features through capabilities rather than base version.
 Load this package's native library explicitly: SDK automatic downloads still
 refer to the published release and do not retrieve a local branch build.
 See build-info.json for the source branch, commit, and dirty-worktree status.
@@ -198,9 +207,13 @@ function New-ReleasePackage($platform) {
     foreach ($schema in @('logic.schema.json', 'resource.schema.json')) {
         Copy-RequiredFile (Join-Path $repo "corework\src\workflow\$schema") (Join-Path $packageRoot "schemas\$schema")
     }
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/skill-transaction.schema.json') (Join-Path $packageRoot 'schemas/skill-transaction.schema.json')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\workflow-json-update.zh-CN.md') (Join-Path $packageRoot 'docs\workflow-json-update.zh-CN.md')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
     foreach ($language in @('zh', 'en')) {
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\12-workflow-resource-api.md") (Join-Path $packageRoot "docs\$language\12-workflow-resource-api.md")
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\13-dynamic-agent-clusters.md") (Join-Path $packageRoot "docs\$language\13-dynamic-agent-clusters.md")
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/14-skill-candidate-transactions.md") (Join-Path $packageRoot "docs/$language/14-skill-candidate-transactions.md")
         Copy-RequiredFile (Join-Path $repo "ai-assistant\prompts\$language\workflow_tool_rules.md") (Join-Path $packageRoot "docs\$language\workflow-json-source-syntax.md")
     }
     New-Directory (Join-Path $packageRoot 'examples\workflows')
@@ -229,6 +242,10 @@ function New-ReleasePackage($platform) {
     $packagedArtifacts += @('schemas/', 'examples/workflows/', 'docs/', 'sdk/', 'build-info.json')
     Copy-RequiredFile (Join-Path $repo 'scripts/verify-workflow-json.py') (Join-Path $packageRoot 'scripts/verify-workflow-json.py')
     $packagedArtifacts += 'scripts/verify-workflow-json.py'
+    Copy-RequiredFile (Join-Path $repo 'scripts/verify-dynamic-clusters.py') (Join-Path $packageRoot 'scripts\verify-dynamic-clusters.py')
+    $packagedArtifacts += 'scripts/verify-dynamic-clusters.py'
+    Copy-RequiredFile (Join-Path $repo 'scripts/verify-runtime-transactions.py') (Join-Path $packageRoot 'scripts/verify-runtime-transactions.py')
+    $packagedArtifacts += 'scripts/verify-runtime-transactions.py'
 
     Write-PackageReadme `
         (Join-Path $packageRoot 'README.md') `

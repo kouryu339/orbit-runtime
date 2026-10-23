@@ -124,6 +124,9 @@ impl WorkflowsModule {
         let id = resource.id.clone();
         let result = {
             let _guard = self.reference_lock.lock();
+            if commit && !restoring {
+                self.ensure_not_running_unlocked(&id)?;
+            }
             let summary = self
                 .list_workflow_catalog(None)?
                 .into_iter()
@@ -142,7 +145,9 @@ impl WorkflowsModule {
                         resource.revision, current.summary.revision
                     )));
                 }
-                if current.summary.kind != resource.state {
+                if current.summary.kind == WorkflowResourceKind::Draft
+                    && resource.state != WorkflowResourceKind::Draft
+                {
                     return Err(invalid(
                         "Registration cannot change existing state; use workflow.promote",
                     ));
@@ -150,6 +155,13 @@ impl WorkflowsModule {
             } else if !restoring && resource.revision != 1 {
                 return Err(invalid("A new resource must have revision 1"));
             }
+            // Editing keeps identity but removes trust, even if the editor
+            // submits the previously read registered header.
+            let state = if !restoring && current.is_some() {
+                WorkflowResourceKind::Draft
+            } else {
+                resource.state
+            };
             let path = restore_path
                 .map(Path::to_path_buf)
                 .or_else(|| {
@@ -192,6 +204,9 @@ impl WorkflowsModule {
                 });
             let mut effective = tools.to_vec();
             effective.extend(self.workflow_reference_tools_unlocked()?);
+            if restoring {
+                effective.extend(self.draft_reference_tools_unlocked()?);
+            }
             let mut prepared = revision::prepare(
                 revision::WorkflowChange::Logic(resource.logic),
                 previous.as_ref(),
@@ -213,10 +228,10 @@ impl WorkflowsModule {
             } else {
                 resource.revision
             };
-            prepared.resource_source = Some(stamp(source, resource.state, revision)?);
+            prepared.resource_source = Some(stamp(source, state, revision)?);
             prepared.resource_path = Some(path.to_string_lossy().into_owned());
             if commit {
-                match resource.state {
+                match state {
                     WorkflowResourceKind::Draft => {
                         let mut drafts = self.get_draft_registry()?;
                         drafts.retain(|entry| entry.id != id);
@@ -235,13 +250,20 @@ impl WorkflowsModule {
                             blueprint: Some(prepared.blueprint.clone()),
                             validation: super::WorkflowValidation::valid(),
                         });
-                        self.commit_source_registry(
+                        let previous_registry = self.get_registry()?;
+                        let mut registered = previous_registry.clone();
+                        registered.retain(|entry| entry.metadata.id != id);
+                        self.unit.set_resource(REGISTRY, &registered, None)?;
+                        if let Err(error) = self.commit_source_registry(
                             &path,
                             prepared.resource_source.as_ref().unwrap(),
                             DRAFT_REGISTRY,
                             &drafts,
                             !restoring,
-                        )?;
+                        ) {
+                            self.unit.set_resource(REGISTRY, &previous_registry, None)?;
+                            return Err(error);
+                        }
                     }
                     WorkflowResourceKind::Registered => {
                         self.persist_logic_registered_unlocked(
@@ -253,7 +275,7 @@ impl WorkflowsModule {
                     }
                 }
             }
-            json!({"id":id,"state":resource.state,"revision":revision,"valid":true,"committed":commit,
+            json!({"id":id,"state":state,"revision":revision,"valid":true,"committed":commit,
                 "metadata":{"name":name,"description":prepared.blueprint.metadata.description,"extensions":prepared.blueprint.metadata.extensions},
                 "inputs":prepared.blueprint.metadata.inputs,"returns":prepared.blueprint.metadata.outputs})
         };
@@ -280,6 +302,7 @@ impl WorkflowsModule {
         update: bool,
         write: bool,
     ) -> Result<super::executor::RegisteredWorkflow> {
+        self.ensure_not_running_unlocked(&prepared.blueprint.metadata.id)?;
         let mut registry = self.get_registry()?;
         let id = &prepared.blueprint.metadata.id;
         let existing = registry.iter().find(|entry| entry.metadata.id == *id);
@@ -416,16 +439,27 @@ impl WorkflowsModule {
         }
         {
             let _guard = self.reference_lock.lock();
-            self.validate_reference_catalog_unlocked()?;
+            self.validate_restored_reference_catalog_unlocked()?;
             for accepted in self
                 .get_registry()?
                 .into_iter()
                 .filter_map(|entry| entry.accepted)
             {
-                self.validate_prepared_source(&accepted)?;
+                if self
+                    .workflow_dependencies_ready_unlocked(&accepted.blueprint)
+                    .is_ok()
+                {
+                    self.validate_prepared_source(&accepted)?;
+                }
             }
             for draft in self.get_draft_registry()? {
                 if let Some(blueprint) = draft.blueprint {
+                    if self
+                        .workflow_dependencies_ready_unlocked(&blueprint)
+                        .is_err()
+                    {
+                        continue;
+                    }
                     let frozen = self.freeze_references_unlocked(&blueprint)?;
                     crate::workflow::BlueprintLoader::with_workflows(std::sync::Arc::new(frozen))
                         .load_from_blueprint_json(blueprint, &self.create_run_context())?;

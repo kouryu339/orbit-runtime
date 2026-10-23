@@ -90,6 +90,7 @@ struct FfiError {
     code: c_int,
     kind: &'static str,
     message: String,
+    details: Option<Value>,
 }
 
 impl FfiError {
@@ -98,6 +99,7 @@ impl FfiError {
             code,
             kind,
             message: message.into(),
+            details: None,
         }
     }
 
@@ -138,19 +140,84 @@ impl FfiError {
     }
 
     fn to_json(&self) -> Value {
-        json!({
+        let mut value = json!({
             "schema": "agent-runtime-error/v1",
             "code": self.code,
             "kind": self.kind,
             "message": self.message,
-        })
+        });
+        if let Some(details) = &self.details {
+            value["details"] = details.clone();
+        }
+        value
     }
 }
 
 impl From<RuntimeError> for FfiError {
     fn from(error: RuntimeError) -> Self {
         match error {
-            RuntimeError::InvalidConfig(message) => Self::invalid_argument(message),
+            RuntimeError::SkillVersionConflict {
+                name,
+                expected,
+                actual,
+            } => {
+                let mut error = Self::bad_state("Skill content version conflict");
+                error.kind = "skill_version_conflict";
+                error.details = Some(json!({"name":name,"expected":expected,"actual":actual}));
+                error
+            }
+            RuntimeError::SkillStoreConflict { expected, actual } => {
+                let mut error = Self::bad_state(
+                    "Skill store revision conflict; reopen resources before retrying",
+                );
+                error.kind = "skill_store_conflict";
+                error.details = Some(json!({"expected":expected,"actual":actual}));
+                error
+            }
+            RuntimeError::InvalidConfig(message) => {
+                let mut error = Self::invalid_argument(message);
+                if error.message.contains("workflow_in_use:") {
+                    error.kind = "workflow_in_use";
+                }
+                error
+            }
+            RuntimeError::ClusterInUse {
+                cluster_id,
+                conversation_ids,
+            } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    "cluster_in_use",
+                    "cluster has live conversations",
+                );
+                error.details =
+                    Some(json!({"cluster_id": cluster_id, "conversation_ids": conversation_ids}));
+                error
+            }
+            RuntimeError::ClusterVersionConflict {
+                cluster_id,
+                expected,
+                actual,
+            } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    "cluster_version_conflict",
+                    "cluster definition version does not match",
+                );
+                error.details = Some(
+                    json!({"cluster_id": cluster_id, "expected_version": expected, "actual_version": actual}),
+                );
+                error
+            }
+            RuntimeError::SkillInUse { dependencies } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    "skill_in_use",
+                    "Skill is referenced by live Agent instances",
+                );
+                error.details = Some(json!({"dependencies": dependencies}));
+                error
+            }
             RuntimeError::NotStarted => Self::bad_state("runtime has not been started"),
             RuntimeError::Llm(message) => Self::new(
                 AGENT_RUNTIME_ERR_RUNTIME,
@@ -666,6 +733,45 @@ fn invoke_command_inner(
             facade.register_agent_cluster_input(&registration_input(payload)?)?;
             json!({})
         }
+        "runtime.read_skill" => facade.read_skill(&required_string(payload, "name")?)?,
+        "runtime.validate_skill_transaction" | "runtime.commit_skill_transaction" => facade
+            .skill_transaction(
+                &Value::Object(payload.clone()),
+                command_type == "runtime.commit_skill_transaction",
+            )?,
+        "runtime.add_agent_cluster" | "runtime.update_agent_cluster" => {
+            for key in payload.keys() {
+                if key != "registration"
+                    && !(command_type == "runtime.update_agent_cluster"
+                        && matches!(key.as_str(), "expected_version" | "reload_skills"))
+                {
+                    return Err(FfiError::invalid_argument(format!(
+                        "unsupported payload field '{key}'"
+                    )));
+                }
+            }
+            let registration = payload
+                .get("registration")
+                .filter(|value| value.is_object())
+                .ok_or_else(|| {
+                    FfiError::invalid_argument("payload.registration must be an object")
+                })?;
+            if command_type == "runtime.add_agent_cluster" {
+                facade.add_agent_cluster(registration)?
+            } else {
+                let reload_skills: Vec<String> = match payload.get("reload_skills") {
+                    Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
+                        FfiError::invalid_argument("reload_skills must be an array of Skill names")
+                    })?,
+                    None => Vec::new(),
+                };
+                facade.update_agent_cluster_with_skills(
+                    registration,
+                    &required_string(payload, "expected_version")?,
+                    &reload_skills,
+                )?
+            }
+        }
         "runtime.set_auth_context" => {
             let context = payload
                 .get("context")
@@ -1152,9 +1258,10 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
                 .expect("capabilities commands must be an array");
             commands.retain(|command| !command.as_str().is_some_and(|command| command.starts_with("workflow.") || DEPRECATED_STUDIO_COMMANDS.contains(&command)));
             commands.extend(PUBLIC_WORKFLOW_COMMANDS.iter().map(|command| Value::String((*command).into())));
-            for command in ["jev.configure", "jev.register", "jev.list", "jev.run"] {
+            for command in ["jev.configure", "jev.register", "jev.list", "jev.run", "runtime.add_agent_cluster", "runtime.update_agent_cluster", "runtime.read_skill", "runtime.validate_skill_transaction", "runtime.commit_skill_transaction"] {
                 commands.push(Value::String(command.to_string()));
             }
+            capabilities["features"] = json!({"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"skill_candidate_transactions":1});
             let event_types = capabilities["events"]["types"]
                 .as_array_mut()
                 .expect("capabilities event types must be an array");

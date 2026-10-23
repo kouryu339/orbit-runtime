@@ -63,6 +63,9 @@ impl super::WorkflowsModule {
     ) -> Result<Value> {
         let result = {
             let _guard = self.reference_lock.lock();
+            if commit {
+                self.ensure_not_running_unlocked(&request.id)?;
+            }
             let current = self.read_workflow_resource(&request.id)?;
             if current.resource_source.is_some() {
                 return Err(invalid(

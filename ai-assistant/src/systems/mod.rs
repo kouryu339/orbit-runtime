@@ -153,6 +153,8 @@ impl SystemOperation for UpdateSkillsSystem {
                 .collect()
         };
 
+        let admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
+        crate::skills::usage::track(&ctx.cache);
         // 全量替换 imported_skills（仅 feature 层）
         ctx.cache.set(keys::IMPORTED_SKILLS, &desired, None).await?;
 
@@ -182,6 +184,8 @@ impl SystemOperation for UpdateSkillsSystem {
         m.inject_tools_for_state(crate::state::states::THINKING, &mut new_tools);
 
         ctx.cache.set(keys::ACTIVE_TOOLS, &new_tools, None).await?;
+        drop(m);
+        drop(admission);
         let (event_agent_id, event_agent_name) =
             crate::agent::source_meta_from_cache(&*ctx.cache).await;
         let mut event = corework::event::BaseEvent::new(

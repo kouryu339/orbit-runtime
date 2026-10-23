@@ -253,6 +253,30 @@ func (*Runtime) RegisterAgentClusterFile(context.Context, string) (json.RawMessa
 	return nil, errors.New("runtimehost requires linux and cgo")
 }
 
+func (*Runtime) AddAgentCluster(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) ReadSkill(context.Context, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) ValidateSkillTransaction(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) CommitSkillTransaction(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) UpdateAgentCluster(context.Context, json.RawMessage, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) UpdateAgentClusterWithSkills(context.Context, json.RawMessage, string, []string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
 func (*Runtime) CreateConversation(context.Context, json.RawMessage) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires linux and cgo")
 }

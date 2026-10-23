@@ -4,7 +4,7 @@ import ctypes
 import json
 import queue
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -901,6 +901,29 @@ class Runtime:
 
     def set_current_model(self, model_uid: int) -> Any:
         return self.invoke("runtime.set_current_model", {"model_uid": model_uid})
+
+    def add_agent_cluster(self, registration: Mapping[str, Any]) -> Any:
+        """Add a cluster after start; its primary agent must reference a Role Skill."""
+        return self.invoke("runtime.add_agent_cluster", {"registration": registration})
+
+    def read_skill(self, name: str) -> Any:
+        return self.invoke("runtime.read_skill", {"name": name})
+
+    def validate_skill_transaction(self, transaction: Mapping[str, Any]) -> Any:
+        return self.invoke("runtime.validate_skill_transaction", transaction)
+
+    def commit_skill_transaction(self, transaction: Mapping[str, Any]) -> Any:
+        return self.invoke("runtime.commit_skill_transaction", transaction)
+
+    def update_agent_cluster(self, registration: Mapping[str, Any], expected_version: str,
+                             *, reload_skills: Sequence[str] | None = None) -> Any:
+        """Replace an unused cluster; optionally reload Skills without live dependents."""
+        payload: dict[str, Any] = {
+            "registration": registration, "expected_version": expected_version,
+        }
+        if reload_skills is not None:
+            payload["reload_skills"] = list(reload_skills)
+        return self.invoke("runtime.update_agent_cluster", payload)
 
     def provider_definitions(self) -> Any:
         return self.invoke("runtime.get_provider_definitions")

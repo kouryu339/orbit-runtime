@@ -231,6 +231,7 @@ impl SystemOperation for CreateAgentSystem {
     type Error = FrameworkError;
 
     async fn execute(&self, input: AIInput, ctx: &Context) -> Result<AIOutput, FrameworkError> {
+        let skill_admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
         let args = match input.safe_parse_args() {
             Ok(a) => a,
             Err(e) => return Ok(e),
@@ -378,6 +379,8 @@ impl SystemOperation for CreateAgentSystem {
         }
         cache.set(keys::ACTIVE_TOOLS, &tool_names, None).await?;
         cache.set(keys::MAIN_SKILLS, &skills, None).await?;
+        crate::skills::usage::track(&cache);
+        drop(skill_admission);
 
         if let Some(ref wf) = workflow {
             cache.set("agent_workflow", wf, None).await?;
@@ -2386,6 +2389,7 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
     type Error = FrameworkError;
 
     async fn execute(&self, input: AIInput, ctx: &Context) -> Result<AIOutput, FrameworkError> {
+        let skill_admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
         let args = match input.safe_parse_args() {
             Ok(a) => a,
             Err(e) => return Ok(e),
@@ -2539,6 +2543,7 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
                 None,
             )
             .await?;
+        crate::skills::usage::track(&cache);
         let task_contract = serde_json::json!({
             "task_id": task_id.clone(),
             "delegator_agent_id": delegator_agent_id.clone(),
@@ -2589,6 +2594,7 @@ impl SystemOperation for CreateBackgroundAgentTaskSystem {
             .await
             .map_err(|e| FrameworkError::SystemError(e.to_string()))?;
         cluster.register(Arc::clone(&runtime)).await;
+        drop(skill_admission);
 
         ledger
             .event_bus()

@@ -37,7 +37,7 @@ impl RuntimeFacade {
             .rt
             .block_on(module.register_logic_resource(source, &self.runtime_tools, commit))
             .map_err(workflow_input_error)?;
-        if commit && result["state"] == "registered" {
+        if commit {
             self.sync_parent_workflow_registry()?;
         }
         Ok(result)
@@ -170,6 +170,11 @@ impl RuntimeFacade {
         } else {
             "catalog"
         };
+        let occupancy = workflow_id
+            .as_deref()
+            .map(|id| module.reserve_catalog_execution(id))
+            .transpose()
+            .map_err(workflow_input_error)?;
         self.workflow_runs
             .lock()
             .map_err(|_| RuntimeError::Internal("workflow run registry lock poisoned".to_string()))?
@@ -178,6 +183,7 @@ impl RuntimeFacade {
 
         let task_run_id = workflow_run_id.clone();
         self.rt.handle().spawn(async move {
+            let _occupancy = occupancy;
             let started = Instant::now();
             let execution = if let Some(script) = script {
                 let mut blueprint = match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(

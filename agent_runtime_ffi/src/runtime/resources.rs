@@ -73,6 +73,7 @@ impl Default for ResourceRegistration {
 pub struct ResourceSkillsConfig {
     pub root_dir: PathBuf,
     pub builtin_system: bool,
+    pub managed_dir: Option<PathBuf>,
 }
 
 impl Default for ResourceSkillsConfig {
@@ -80,6 +81,7 @@ impl Default for ResourceSkillsConfig {
         Self {
             root_dir: PathBuf::from("skills"),
             builtin_system: true,
+            managed_dir: None,
         }
     }
 }
@@ -194,6 +196,9 @@ impl Default for ResourceRpcEndpointConfig {
 pub struct RuntimeResourceRegistry {
     pub id: String,
     pub skills_root_dir: PathBuf,
+    pub managed_skills_dir: PathBuf,
+    pub(super) managed_skill_revision: u64,
+    pub(super) managed_clusters: BTreeMap<String, RuntimeAgentCluster>,
     pub builtin_system_skills: bool,
     pub workflows_root_dir: Option<PathBuf>,
     pub workflow_registry_id: Option<String>,
@@ -263,7 +268,12 @@ pub(super) async fn build_resource_registry(
     );
 
     let skills_root_dir = normalize_resource_path(base_dir, registration.skills.root_dir);
-    let skill_manager = SkillManager::from_directory(&skills_root_dir)
+    let managed_skills_dir = registration
+        .skills
+        .managed_dir
+        .map(|path| normalize_resource_path(base_dir, path))
+        .unwrap_or_else(|| skills_root_dir.join(".orbit-managed"));
+    let mut skill_manager = SkillManager::from_directory(&skills_root_dir)
         .await
         .map_err(|error| {
             RuntimeError::InvalidConfig(format!(
@@ -271,7 +281,11 @@ pub(super) async fn build_resource_registry(
                 skills_root_dir.display()
             ))
         })?;
-    ai_assistant::skills::replace_skill_manager(skill_manager).await;
+    let managed =
+        super::skill_transactions::restore_managed_skills(&managed_skills_dir, &mut skill_manager)?;
+    ai_assistant::skills::replace_skill_manager(skill_manager)
+        .await
+        .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))?;
 
     let workflows_root_dir = registration
         .workflows
@@ -332,6 +346,9 @@ pub(super) async fn build_resource_registry(
     Ok(RuntimeResourceRegistry {
         id: registration.id,
         skills_root_dir,
+        managed_skills_dir,
+        managed_skill_revision: managed.revision,
+        managed_clusters: managed.clusters,
         builtin_system_skills: registration.skills.builtin_system,
         workflows_root_dir,
         workflow_registry_id: registration.workflows.registry_id,
@@ -804,6 +821,13 @@ pub(super) fn compiled_parent_workflow_registry(
         .registered_workflows()
         .map_err(|error| RuntimeError::Internal(error.to_string()))?
         .into_iter()
+        .filter(|entry| {
+            module
+                .read_workflow_resource(&entry.id)
+                .ok()
+                .and_then(|view| view.blueprint)
+                .is_some_and(|blueprint| module.workflow_dependencies_ready(&blueprint).is_ok())
+        })
         .map(|entry| {
             let view = module
                 .read_workflow_resource(&entry.id)

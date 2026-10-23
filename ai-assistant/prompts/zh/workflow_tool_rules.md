@@ -22,7 +22,7 @@
 }
 ```
 
-1. **提交**：将整份源文本作为 `source` 字符串提交给当前开放的注册或验证工具；外层请求仍是标准 JSON。`state` 为 draft/registered。新资源 revision 为 1，更新提交当前 revision，成功后由 Runtime 递增；草稿转正使用转正操作。
+1. **提交**：将整份源文本作为 `source` 字符串提交给当前开放的注册或验证工具；外层请求仍是标准 JSON。`state` 为 draft/registered。新资源 revision 为 1，更新提交当前 revision，成功后由 Runtime 递增并保存为 draft；草稿转正使用转正操作。运行中的工作流及其递归引用禁止修改，失败时保留候选。
 2. **声明**：inputs、variables、returns 都是以名称为键的对象。输入写 type，可带静态 default；变量必须先声明 type、静态 initial，set 只能写已声明变量；返回值写在 value 中。输入和返回可带 disablename、简短 description；变量可带 disablename，不写 description。metadata.extensions 保存按命名空间划分的宿主对象。
 3. **值与引用**：只在节点 args 内的任意值和 `returns.<name>.value` 内允许裸表达式。`input.名称` 引用输入，`数字ID.输出名` 引用节点输出，`var.名称` 引用变量。Pure 调用写成 `已登记函数名(参数, ...)`，可嵌套。对象和数组可递归混用这些值；带引号的字符串始终是固定文字，数字、布尔、null 是常量。不要提交内部 expression/literal/array/object 包装。
 4. **操作**：steps 和各分支／循环体是有序数组。每项有全局唯一、稳定的正安全整数 id，只选下表一种操作；不写 op。参数名及节点输出不能自行编造。

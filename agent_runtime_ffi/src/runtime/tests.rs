@@ -4,6 +4,1010 @@ use tokio::time::sleep;
 
 static RUNTIME_START_TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
+fn dynamic_cluster_runtime(root: &std::path::Path) -> RuntimeFacade {
+    let skills = root.join("skills");
+    for name in ["cluster_role_a", "cluster_role_b"] {
+        write_role_skill(
+            &skills,
+            name,
+            "role",
+            "# Identity\n\nWork on assigned requests.",
+        );
+    }
+    write_role_skill(
+        &skills,
+        "cluster_feature",
+        "capability",
+        "# Capability\n\nUse available tools.",
+    );
+    let mut facade = RuntimeFacade::create(&minimal_runtime_create_options(root)).unwrap();
+    facade.register_resources_json(&json!({
+        "schema": "agent-runtime-resource-registration/v1", "id": "dynamic-cluster-resources",
+        "skills": {"root_dir": skills}
+    }).to_string()).unwrap();
+    register_test_llm(&mut facade, 7301);
+    facade
+}
+
+fn dynamic_cluster_registration(id: &str, role: &str) -> Value {
+    json!({
+        "schema": "agent-runtime-agent-cluster-registration/v1", "id": id,
+        "description": "Dynamic cluster", "focus_agent_id": "primary",
+        "agents": [{"id": "primary", "role": role, "features": ["cluster_feature"]}]
+    })
+}
+
+#[test]
+fn dynamic_cluster_requires_primary_role_and_rejects_invalid_candidates_atomically() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("dynamic-cluster-validation");
+    let mut facade = dynamic_cluster_runtime(&root);
+    let valid = dynamic_cluster_registration("dynamic", "cluster_role_a");
+    assert!(matches!(
+        facade.add_agent_cluster(&valid),
+        Err(RuntimeError::NotStarted)
+    ));
+    facade.start().unwrap();
+    let before = facade.agent_cluster_definitions().unwrap();
+    write_role_skill(
+        &root.join("skills"),
+        "late-role",
+        "role",
+        "# Late identity\n\nNot registered at startup.",
+    );
+    let mut no_role = valid.clone();
+    no_role["agents"][0].as_object_mut().unwrap().remove("role");
+    let mut role_as_feature = valid.clone();
+    role_as_feature["agents"][0]["features"] = json!(["cluster_role_b"]);
+    let mut bad_model = valid.clone();
+    bad_model["agents"][0]["model_uid"] = json!(99999999);
+    let mut duplicate_agents = valid.clone();
+    duplicate_agents["agents"]
+        .as_array_mut()
+        .unwrap()
+        .push(valid["agents"][0].clone());
+    for candidate in [
+        no_role,
+        role_as_feature,
+        bad_model,
+        duplicate_agents,
+        dynamic_cluster_registration("dynamic", "cluster_feature"),
+        dynamic_cluster_registration("dynamic", "missing-role"),
+        dynamic_cluster_registration("dynamic", "late-role"),
+        dynamic_cluster_registration("workflow-studio", "cluster_role_a"),
+    ] {
+        assert!(facade.add_agent_cluster(&candidate).is_err(), "{candidate}");
+        assert_eq!(facade.agent_cluster_definitions().unwrap(), before);
+    }
+    let accepted = facade.add_agent_cluster(&valid).unwrap();
+    assert_eq!(accepted["action"], "added");
+    let version = accepted["cluster"]["version"].as_str().unwrap().to_string();
+    assert!(version.starts_with("sha256:"));
+    assert!(facade.add_agent_cluster(&valid).is_err());
+    let mut invalid_update = valid;
+    invalid_update["agents"][0]["role"] = json!("missing-role");
+    let before = facade.agent_cluster_definitions().unwrap();
+    assert!(facade
+        .update_agent_cluster(&invalid_update, &version)
+        .is_err());
+    assert_eq!(facade.agent_cluster_definitions().unwrap(), before);
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn dynamic_cluster_addition_leaves_existing_conversations_unchanged() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("dynamic-cluster-add");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let first = dynamic_cluster_registration("first", "cluster_role_a");
+    facade.add_agent_cluster(&first).unwrap();
+    let a = facade
+        .spawn_conversation(&json!({"cluster_id": "first"}).to_string())
+        .unwrap();
+    let manager = facade.manager().unwrap();
+    let before = facade
+        .rt
+        .block_on(manager.cluster_snapshot(&a.conversation_id))
+        .unwrap();
+    let second = dynamic_cluster_registration("second", "cluster_role_b");
+    facade.add_agent_cluster(&second).unwrap();
+    assert_eq!(
+        before.agents,
+        facade
+            .rt
+            .block_on(manager.cluster_snapshot(&a.conversation_id))
+            .unwrap()
+            .agents
+    );
+    let b = facade
+        .spawn_conversation(&json!({"cluster_id": "second"}).to_string())
+        .unwrap();
+    let skills = facade.rt.block_on(async {
+        manager
+            .default_agent_cache(&b.conversation_id)
+            .await
+            .unwrap()
+            .get::<Vec<String>>(ai_assistant::context::keys::MAIN_SKILLS)
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    assert!(skills.contains(&"cluster_role_b".to_string()));
+    assert!(!skills.contains(&"cluster_role_a".to_string()));
+    facade.close_conversation(&a.conversation_id).unwrap();
+    facade.close_conversation(&b.conversation_id).unwrap();
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn dynamic_cluster_update_rejects_every_live_conversation_then_accepts_after_close() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("dynamic-cluster-update");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let initial = dynamic_cluster_registration("team", "cluster_role_a");
+    let result = facade.add_agent_cluster(&initial).unwrap();
+    let version = result["cluster"]["version"].as_str().unwrap();
+    let spawn = json!({"cluster_id": "team"}).to_string();
+    let first = facade.spawn_conversation(&spawn).unwrap();
+    let second = facade.spawn_conversation(&spawn).unwrap();
+    let old_snapshot = facade
+        .export_conversation_snapshot(&first.conversation_id, "{}")
+        .unwrap();
+    let manager = facade.manager().unwrap();
+    facade
+        .rt
+        .block_on(manager.request_pause(&second.conversation_id))
+        .unwrap();
+    let replacement = dynamic_cluster_registration("team", "cluster_role_b");
+    let before = facade.agent_cluster_definitions().unwrap();
+    let error = crate::invoke_command(
+        &mut facade,
+        "runtime.update_agent_cluster",
+        json!({
+            "registration": replacement, "expected_version": version
+        })
+        .as_object()
+        .unwrap(),
+        "blocked-update",
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, "cluster_in_use");
+    let mut expected_ids = vec![
+        first.conversation_id.clone(),
+        second.conversation_id.clone(),
+    ];
+    expected_ids.sort();
+    assert_eq!(
+        error.to_json()["details"]["conversation_ids"],
+        json!(expected_ids)
+    );
+    assert_eq!(facade.agent_cluster_definitions().unwrap(), before);
+    facade.close_conversation(&first.conversation_id).unwrap();
+    assert!(matches!(
+        facade.update_agent_cluster(&replacement, version),
+        Err(RuntimeError::ClusterInUse { .. })
+    ));
+    facade.close_conversation(&second.conversation_id).unwrap();
+    let updated = facade.update_agent_cluster(&replacement, version).unwrap();
+    assert_eq!(updated["action"], "updated");
+    assert_ne!(updated["cluster"]["version"], version);
+    assert!(matches!(
+        facade.update_agent_cluster(&replacement, version),
+        Err(RuntimeError::ClusterVersionConflict { .. })
+    ));
+    // A stale archive must fail before allocating/publishing a replacement conversation.
+    assert!(matches!(
+        facade.spawn_conversation_from_snapshot(&spawn, &old_snapshot),
+        Err(RuntimeError::ClusterVersionConflict { .. })
+    ));
+    assert!(facade.rt.block_on(manager.list()).is_empty());
+    let fresh = facade.spawn_conversation(&spawn).unwrap();
+    let snapshot = facade
+        .export_conversation_snapshot(&fresh.conversation_id, "{}")
+        .unwrap();
+    assert!(matches!(
+        facade.import_conversation_snapshot(
+            &old_snapshot,
+            &json!({"conversation_id": fresh.conversation_id}).to_string()
+        ),
+        Err(RuntimeError::ClusterVersionConflict { .. })
+    ));
+    facade.close_conversation(&fresh.conversation_id).unwrap();
+    let restored = facade
+        .spawn_conversation_from_snapshot(&spawn, &snapshot)
+        .unwrap();
+    facade
+        .close_conversation(&restored.conversation_id)
+        .unwrap();
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn dynamic_cluster_ffi_commands_are_exposed_and_reject_unknown_payload_fields() {
+    let _guard = runtime_start_test_guard();
+    let capabilities: Value =
+        unsafe { std::ffi::CStr::from_ptr(crate::agent_runtime_capabilities_v1()) }
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+    for command in ["runtime.add_agent_cluster", "runtime.update_agent_cluster"] {
+        assert!(capabilities["commands"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(command)));
+    }
+    let root = unique_test_dir("dynamic-cluster-ffi");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let registration = dynamic_cluster_registration("ffi-team", "cluster_role_a");
+    let result = crate::invoke_command(
+        &mut facade,
+        "runtime.add_agent_cluster",
+        json!({"registration": registration}).as_object().unwrap(),
+        "add-cluster",
+    )
+    .unwrap();
+    assert_eq!(result["cluster"]["id"], "ffi-team");
+    assert!(crate::invoke_command(
+        &mut facade,
+        "runtime.update_agent_cluster",
+        json!({"registration": registration}).as_object().unwrap(),
+        "no-version"
+    )
+    .is_err());
+    assert!(crate::invoke_command(
+        &mut facade,
+        "runtime.add_agent_cluster",
+        json!({"registration": registration, "ignore_live_conversations": true})
+            .as_object()
+            .unwrap(),
+        "unknown-field"
+    )
+    .is_err());
+    let legacy_snapshot = json!({"schema": "agent-runtime-conversation-snapshot/v1", "ledger": []});
+    assert!(facade
+        .spawn_conversation_from_snapshot(
+            &json!({"cluster_id": "ffi-team"}).to_string(),
+            &legacy_snapshot.to_string()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("cluster_version_missing"));
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn dynamic_cluster_snapshot_version_is_stable_across_runtime_restart() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("dynamic-cluster-restart");
+    let registration = dynamic_cluster_registration("restart-team", "cluster_role_a");
+    let spawn = json!({"cluster_id": "restart-team"}).to_string();
+    let mut first = dynamic_cluster_runtime(&root);
+    first.start().unwrap();
+    first.add_agent_cluster(&registration).unwrap();
+    let info = first.spawn_conversation(&spawn).unwrap();
+    let snapshot = first
+        .export_conversation_snapshot(&info.conversation_id, "{}")
+        .unwrap();
+    first.close_conversation(&info.conversation_id).unwrap();
+    first.shutdown().unwrap();
+    drop(first);
+
+    let mut second = dynamic_cluster_runtime(&root);
+    second.start().unwrap();
+    let accepted = second.add_agent_cluster(&registration).unwrap();
+    let restored = second
+        .spawn_conversation_from_snapshot(&spawn, &snapshot)
+        .unwrap();
+    second
+        .close_conversation(&restored.conversation_id)
+        .unwrap();
+    second
+        .update_agent_cluster(
+            &dynamic_cluster_registration("restart-team", "cluster_role_b"),
+            accepted["cluster"]["version"].as_str().unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        second.spawn_conversation_from_snapshot(&spawn, &snapshot),
+        Err(RuntimeError::ClusterVersionConflict { .. })
+    ));
+    second.shutdown().unwrap();
+}
+
+fn cached_skill_body(facade: &RuntimeFacade, name: &str) -> String {
+    facade.rt.block_on(async {
+        ai_assistant::skills::systems::SKILL_MANAGER
+            .get()
+            .unwrap()
+            .write()
+            .await
+            .load(name)
+            .await
+            .unwrap()
+            .instructions
+            .clone()
+    })
+}
+
+#[test]
+fn dynamic_cluster_skill_reload_checks_other_clusters_and_preserves_cache_on_failure() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("skill-reload-cross-cluster");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let target = dynamic_cluster_registration("editor", "cluster_role_a");
+    let accepted = facade.add_agent_cluster(&target).unwrap();
+    let version = accepted["cluster"]["version"].as_str().unwrap();
+    facade
+        .add_agent_cluster(&dynamic_cluster_registration("other", "cluster_role_a"))
+        .unwrap();
+    let info = facade
+        .spawn_conversation(r#"{"cluster_id":"other"}"#)
+        .unwrap();
+    let manager = facade.manager().unwrap();
+    facade
+        .rt
+        .block_on(manager.request_pause(&info.conversation_id))
+        .unwrap();
+    let old_body = cached_skill_body(&facade, "cluster_role_a");
+    write_role_skill(
+        &root.join("skills"),
+        "cluster_role_a",
+        "role",
+        "# Revised identity\n\nNew instructions.",
+    );
+    let path = root.join("skills/role/cluster_role_a/SKILL.md");
+    let file = fs::read(&path).unwrap();
+    let before = facade.agent_cluster_definitions().unwrap();
+    let error = crate::invoke_command(&mut facade, "runtime.update_agent_cluster",
+        json!({"registration":target, "expected_version":version, "reload_skills":["cluster_role_a"]})
+            .as_object().unwrap(), "reload-blocked").unwrap_err();
+    assert_eq!(error.kind, "skill_in_use");
+    assert_eq!(
+        error.to_json()["details"]["dependencies"],
+        json!([{
+            "conversation_id":info.conversation_id, "agent_id":"primary", "skill_names":["cluster_role_a"]
+        }])
+    );
+    assert_eq!(facade.agent_cluster_definitions().unwrap(), before);
+    assert_eq!(cached_skill_body(&facade, "cluster_role_a"), old_body);
+    assert_eq!(fs::read(&path).unwrap(), file);
+    // Rediscovery must not silently invalidate the body retained by a live instance.
+    facade.rt.block_on(async {
+        ai_assistant::skills::systems::SKILL_MANAGER
+            .get()
+            .unwrap()
+            .write()
+            .await
+            .discover()
+            .await
+            .unwrap();
+    });
+    assert_eq!(cached_skill_body(&facade, "cluster_role_a"), old_body);
+    facade.close_conversation(&info.conversation_id).unwrap();
+    let result = facade
+        .update_agent_cluster_with_skills(&target, version, &["cluster_role_a".into()])
+        .unwrap();
+    assert_eq!(result["cluster"]["version"], version);
+    assert!(result["reloaded_skills"]["cluster_role_a"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    assert!(cached_skill_body(&facade, "cluster_role_a").contains("New instructions."));
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn dynamic_cluster_skill_reload_tracks_registered_children_and_imported_features() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("skill-reload-instances");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let target = dynamic_cluster_registration("editor", "cluster_role_a");
+    let accepted = facade.add_agent_cluster(&target).unwrap();
+    let version = accepted["cluster"]["version"].as_str().unwrap();
+    let mut other = dynamic_cluster_registration("other", "cluster_role_b");
+    other["agents"][0]["features"] = json!([]);
+    facade.add_agent_cluster(&other).unwrap();
+    let info = facade
+        .spawn_conversation(r#"{"cluster_id":"other"}"#)
+        .unwrap();
+    let manager = facade.manager().unwrap();
+    // Merely defining the same Skill in another cluster is allowed: no instance uses it.
+    facade
+        .update_agent_cluster_with_skills(&target, version, &["cluster_role_a".into()])
+        .unwrap();
+    facade.rt.block_on(async {
+        manager
+            .register_agent(
+                &info.conversation_id,
+                ai_assistant::AIAssistantConfig {
+                    agent_id: "worker".into(),
+                    name: "Worker".into(),
+                    ..Default::default()
+                },
+                &["cluster_role_a"],
+                10,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+    });
+    match facade.update_agent_cluster_with_skills(&target, version, &["cluster_role_a".into()]) {
+        Err(RuntimeError::SkillInUse { dependencies }) => {
+            assert_eq!(dependencies.len(), 1);
+            assert_eq!(dependencies[0].conversation_id, info.conversation_id);
+            assert_eq!(dependencies[0].agent_id, "worker");
+        }
+        other => panic!("expected child dependency, got {other:?}"),
+    }
+    let cache = facade
+        .rt
+        .block_on(manager.default_agent_cache(&info.conversation_id))
+        .unwrap();
+    facade
+        .rt
+        .block_on(ai_assistant::AssistantContext::add_imported_skill(
+            &cache,
+            "cluster_feature".into(),
+        ))
+        .unwrap();
+    match facade.update_agent_cluster_with_skills(&target, version, &["cluster_feature".into()]) {
+        Err(RuntimeError::SkillInUse { dependencies }) => {
+            assert_eq!(dependencies.len(), 1);
+            assert_eq!(dependencies[0].agent_id, "primary");
+            assert_eq!(dependencies[0].skill_names, ["cluster_feature"]);
+        }
+        other => panic!("expected imported dependency, got {other:?}"),
+    }
+    facade.close_conversation(&info.conversation_id).unwrap();
+    // Retaining an external cache Arc after close must not keep an instance alive.
+    facade
+        .update_agent_cluster_with_skills(
+            &target,
+            version,
+            &["cluster_role_a".into(), "cluster_feature".into()],
+        )
+        .unwrap();
+    drop(cache);
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn dynamic_cluster_skill_reload_is_atomic_and_rejects_stale_skill_archives() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("skill-reload-transaction");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let target = dynamic_cluster_registration("team", "cluster_role_a");
+    let accepted = facade.add_agent_cluster(&target).unwrap();
+    let version = accepted["cluster"]["version"].as_str().unwrap();
+    let info = facade
+        .spawn_conversation(r#"{"cluster_id":"team"}"#)
+        .unwrap();
+    let snapshot = facade
+        .export_conversation_snapshot(&info.conversation_id, "{}")
+        .unwrap();
+    let saved: Value = serde_json::from_str(&snapshot).unwrap();
+    assert!(saved["skill_versions"]["cluster_role_a"].is_string());
+    facade.close_conversation(&info.conversation_id).unwrap();
+    let original = cached_skill_body(&facade, "cluster_role_a");
+    write_role_skill(
+        &root.join("skills"),
+        "cluster_role_a",
+        "role",
+        "# Identity\n\nRevised content.",
+    );
+    write_role_skill(&root.join("skills"), "cluster_feature", "capability", "");
+    let mut changed = target.clone();
+    changed["description"] = json!("Changed description");
+    let before = facade.agent_cluster_definitions().unwrap();
+    assert!(facade
+        .update_agent_cluster_with_skills(
+            &changed,
+            version,
+            &["cluster_role_a".into(), "cluster_feature".into()]
+        )
+        .is_err());
+    assert_eq!(facade.agent_cluster_definitions().unwrap(), before);
+    assert_eq!(cached_skill_body(&facade, "cluster_role_a"), original);
+    write_role_skill(
+        &root.join("skills"),
+        "cluster_feature",
+        "capability",
+        "# Capability\n\nRevised capability.",
+    );
+    for invalid in [
+        vec!["cluster_role_a".into(), "cluster_role_a".into()],
+        vec!["cluster_role_b".into()],
+        vec!["thinking".into()],
+    ] {
+        assert!(facade
+            .update_agent_cluster_with_skills(&target, version, &invalid)
+            .is_err());
+        assert_eq!(cached_skill_body(&facade, "cluster_role_a"), original);
+    }
+    facade
+        .update_agent_cluster_with_skills(
+            &target,
+            version,
+            &["cluster_role_a".into(), "cluster_feature".into()],
+        )
+        .unwrap();
+    assert!(facade
+        .spawn_conversation_from_snapshot(r#"{"cluster_id":"team"}"#, &snapshot)
+        .unwrap_err()
+        .to_string()
+        .contains("skill_version_conflict"));
+    assert!(facade
+        .rt
+        .block_on(facade.manager().unwrap().list())
+        .is_empty());
+    let fresh = facade
+        .spawn_conversation(r#"{"cluster_id":"team"}"#)
+        .unwrap();
+    assert!(facade
+        .import_conversation_snapshot(
+            &snapshot,
+            &json!({"conversation_id":fresh.conversation_id}).to_string()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("skill_version_conflict"));
+    facade.close_conversation(&fresh.conversation_id).unwrap();
+    facade.shutdown().unwrap();
+}
+
+fn skill_candidate(name: &str, kind: &str, body: &str, version: Value) -> Value {
+    json!({"name":name,"kind":kind,"expected_version":version,
+        "source":format!("---\nname: {name}\ndescription: Candidate role\nkind: {kind}\n---\n\n{body}\n")})
+}
+
+#[test]
+fn skill_transaction_creates_updates_and_restores_role_and_cluster_together() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("skill-candidate-lifecycle");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let missing = facade.read_skill("new_employee").unwrap();
+    assert_eq!(missing["exists"], false);
+    let registration = dynamic_cluster_registration("employee-team", "new_employee");
+    let request = json!({"expected_store_revision":0,"skills":[skill_candidate("new_employee","role","Serve assigned requests.",Value::Null)],
+        "cluster":{"registration":registration,"expected_version":null}});
+    let validated = facade.skill_transaction(&request, false).unwrap();
+    assert_eq!(validated["committed"], false);
+    let store = root.join("skills/.orbit-managed");
+    assert!(
+        !store.exists(),
+        "Validation must not write candidates or accepted files"
+    );
+    let created = crate::invoke_command(
+        &mut facade,
+        "runtime.commit_skill_transaction",
+        request.as_object().unwrap(),
+        "commit-role",
+    )
+    .unwrap();
+    assert_eq!(created["store_revision"], 1);
+    assert!(facade.read_skill("new_employee").unwrap()["source"]
+        .as_str()
+        .unwrap()
+        .contains("Serve assigned"));
+    let accepted_file = fs::read(store.join("catalog.json")).unwrap();
+    let info = facade
+        .spawn_conversation(r#"{"cluster_id":"employee-team"}"#)
+        .unwrap();
+    let old_snapshot = facade
+        .export_conversation_snapshot(&info.conversation_id, "{}")
+        .unwrap();
+    let version = created["skills"][0]["version"].clone();
+    let update = json!({"expected_store_revision":1,"skills":[skill_candidate("new_employee","role","Use revised responsibilities.",version.clone())]});
+    let blocked = crate::invoke_command(
+        &mut facade,
+        "runtime.commit_skill_transaction",
+        update.as_object().unwrap(),
+        "occupied-role",
+    )
+    .unwrap_err();
+    assert_eq!(blocked.kind, "skill_in_use");
+    assert_eq!(
+        blocked.to_json()["details"]["dependencies"][0]["conversation_id"],
+        info.conversation_id
+    );
+    assert_eq!(fs::read(store.join("catalog.json")).unwrap(), accepted_file);
+    facade.close_conversation(&info.conversation_id).unwrap();
+    let mut wrong_version = update.clone();
+    wrong_version["skills"][0]["expected_version"] = json!("sha256:old-editor");
+    assert!(matches!(
+        facade.skill_transaction(&wrong_version, true),
+        Err(RuntimeError::SkillVersionConflict { .. })
+    ));
+    let changed = facade.skill_transaction(&update, true).unwrap();
+    assert_eq!(changed["store_revision"], 2);
+    assert_ne!(changed["skills"][0]["version"], version);
+    assert!(facade
+        .spawn_conversation_from_snapshot(r#"{"cluster_id":"employee-team"}"#, &old_snapshot)
+        .unwrap_err()
+        .to_string()
+        .contains("skill_version_conflict"));
+    let fresh = facade
+        .spawn_conversation(r#"{"cluster_id":"employee-team"}"#)
+        .unwrap();
+    let snapshot = facade
+        .export_conversation_snapshot(&fresh.conversation_id, "{}")
+        .unwrap();
+    facade.close_conversation(&fresh.conversation_id).unwrap();
+    assert!(facade
+        .update_agent_cluster(
+            &registration,
+            created["cluster"]["version"].as_str().unwrap()
+        )
+        .is_err());
+    facade.shutdown().unwrap();
+    drop(facade);
+    let mut restarted = dynamic_cluster_runtime(&root);
+    restarted.start().unwrap();
+    assert_eq!(
+        restarted.read_skill("new_employee").unwrap()["version"],
+        changed["skills"][0]["version"]
+    );
+    assert!(cached_skill_body(&restarted, "new_employee").contains("revised responsibilities"));
+    let restored = restarted
+        .spawn_conversation_from_snapshot(r#"{"cluster_id":"employee-team"}"#, &snapshot)
+        .unwrap();
+    restarted
+        .close_conversation(&restored.conversation_id)
+        .unwrap();
+    restarted.shutdown().unwrap();
+}
+
+#[test]
+fn skill_transaction_failure_and_interruption_have_one_durable_commit_point() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("skill-transaction-recovery");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let request = json!({"expected_store_revision":0,"skills":[skill_candidate("crash_role","role","Accepted only as one transaction.",Value::Null)],
+        "cluster":{"registration":dynamic_cluster_registration("crash-team","crash_role"),"expected_version":null}});
+    super::skill_transactions::FAIL_POINT.with(|point| point.set(1));
+    assert!(facade.skill_transaction(&request, true).is_err());
+    assert_eq!(facade.read_skill("crash_role").unwrap()["exists"], false);
+    assert!(!root.join("skills/.orbit-managed/catalog.json").exists());
+    assert!(!facade.registries.agent_clusters.contains_key("crash-team"));
+    // The abandoned immutable object may exist, but startup must ignore it.
+    facade.shutdown().unwrap();
+    drop(facade);
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    assert_eq!(facade.read_skill("crash_role").unwrap()["exists"], false);
+    super::skill_transactions::FAIL_POINT.with(|point| point.set(2));
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        facade.skill_transaction(&request, true)
+    }));
+    assert!(interrupted.is_err());
+    facade.shutdown().unwrap();
+    drop(facade);
+    let mut recovered = dynamic_cluster_runtime(&root);
+    recovered.start().unwrap();
+    assert_eq!(
+        recovered.read_skill("crash_role").unwrap()["store_revision"],
+        1
+    );
+    let info = recovered
+        .spawn_conversation(r#"{"cluster_id":"crash-team"}"#)
+        .unwrap();
+    recovered.close_conversation(&info.conversation_id).unwrap();
+    recovered.shutdown().unwrap();
+}
+
+#[test]
+fn skill_transaction_rejects_invalid_batches_stale_writers_and_busy_store() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("skill-transaction-invalid");
+    let mut facade = dynamic_cluster_runtime(&root);
+    facade.start().unwrap();
+    let original = facade.read_skill("cluster_role_a").unwrap();
+    let first = skill_candidate(
+        "cluster_role_a",
+        "role",
+        "New content.",
+        original["version"].clone(),
+    );
+    let mut bad_tool = first.clone();
+    bad_tool["source"] = json!(bad_tool["source"]
+        .as_str()
+        .unwrap()
+        .replace("kind: role", "kind: role\ntools: [NonexistentTool]"));
+    for skills in [
+        json!([
+            first.clone(),
+            skill_candidate("bad_role", "role", "", Value::Null)
+        ]),
+        json!([first.clone(), first.clone()]),
+        json!([skill_candidate(
+            "../escape",
+            "role",
+            "Invalid path.",
+            Value::Null
+        )]),
+        json!([bad_tool]),
+        json!([skill_candidate(
+            "thinking",
+            "role",
+            "No system replacement.",
+            Value::Null
+        )]),
+    ] {
+        assert!(facade
+            .skill_transaction(&json!({"expected_store_revision":0,"skills":skills}), true)
+            .is_err());
+        assert_eq!(
+            facade.read_skill("cluster_role_a").unwrap()["version"],
+            original["version"]
+        );
+        assert!(!root.join("skills/.orbit-managed/catalog.json").exists());
+    }
+    let request = json!({"expected_store_revision":0,"skills":[first]});
+    let store = root.join("skills/.orbit-managed");
+    fs::create_dir_all(&store).unwrap();
+    let writer = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(store.join("writer.lock"))
+        .unwrap();
+    writer.try_lock().unwrap();
+    assert!(facade
+        .skill_transaction(&request, true)
+        .unwrap_err()
+        .to_string()
+        .contains("writer busy"));
+    drop(writer);
+    let committed = facade.skill_transaction(&request, true).unwrap();
+    assert!(matches!(
+        facade.skill_transaction(&request, true),
+        Err(RuntimeError::SkillStoreConflict { .. })
+    ));
+    let file_before = fs::read(root.join("skills/role/cluster_role_a/SKILL.md")).unwrap();
+    assert!(String::from_utf8(file_before)
+        .unwrap()
+        .contains("Work on assigned requests"));
+    assert_eq!(
+        facade.read_skill("cluster_role_a").unwrap()["version"],
+        committed["skills"][0]["version"]
+    );
+    assert!(facade
+        .update_agent_cluster_with_skills(
+            &dynamic_cluster_registration("missing", "cluster_role_a"),
+            "",
+            &["cluster_role_a".into()]
+        )
+        .is_err());
+    facade.shutdown().unwrap();
+}
+
+#[test]
+fn skill_transactions_reject_another_handles_catalog_root_before_creating_agents() {
+    let _guard = runtime_start_test_guard();
+    let first_root = unique_test_dir("catalog-first");
+    let second_root = unique_test_dir("catalog-second");
+    let mut first = dynamic_cluster_runtime(&first_root);
+    first.start().unwrap();
+    first
+        .add_agent_cluster(&dynamic_cluster_registration(
+            "first-team",
+            "cluster_role_a",
+        ))
+        .unwrap();
+    let mut second = dynamic_cluster_runtime(&second_root);
+    assert!(first
+        .read_skill("cluster_role_a")
+        .unwrap_err()
+        .to_string()
+        .contains("another resource root"));
+    assert!(first
+        .spawn_conversation(r#"{"cluster_id":"first-team"}"#)
+        .unwrap_err()
+        .to_string()
+        .contains("another resource root"));
+    assert!(first
+        .rt
+        .block_on(first.manager().unwrap().list())
+        .is_empty());
+    first.shutdown().unwrap();
+    drop(first);
+    second.start().unwrap();
+    assert!(second.read_skill("cluster_role_a").is_ok());
+    second.shutdown().unwrap();
+}
+
+struct WorkflowExecutionBarrier {
+    reached: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+    once: std::sync::atomic::AtomicBool,
+}
+#[async_trait]
+impl EventHandler for WorkflowExecutionBarrier {
+    async fn handle(&self, event: &BaseEvent) -> corework::error::Result<()> {
+        if event.payload["workflow_id"] == "parent" && !self.once.swap(true, Ordering::SeqCst) {
+            self.reached.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn workflow_edit_demotes_identity_and_blocks_recursive_callers_until_promoted() {
+    let _guard = runtime_start_test_guard();
+    let root = unique_test_dir("workflow-edit-demote");
+    let dir = root.join("workflows");
+    fs::create_dir_all(&dir).unwrap();
+    let source = r#"{"schema":"orbit.workflow.resource/v1","id":"child","metadata":{"name":"Child","description":"Original","extensions":{"host":{"asset":"preserved"}}},"state":"registered","revision":1,"logic":{"schema":"orbit.workflow.logic/v1","inputs":{"text":{"type":"String"}},"steps":[],"returns":{"text":{"value":input.text}}}}"#;
+    let parent = r#"{"schema":"orbit.workflow.resource/v1","id":"parent","metadata":{"name":"Parent","description":"Caller","extensions":{}},"state":"registered","revision":1,"logic":{"schema":"orbit.workflow.logic/v1","inputs":{"text":{"type":"String"}},"steps":[{"id":1,"call":"WorkflowRef_child","args":{"text":input.text}}],"returns":{"text":{"value":1.text}}}}"#;
+    let grand = parent
+        .replace("\"id\":\"parent\"", "\"id\":\"grand\"")
+        .replace("\"Parent\"", "\"Grand\"")
+        .replace("WorkflowRef_child", "WorkflowRef_parent");
+    for (name, text) in [
+        ("child", source),
+        ("parent", parent),
+        ("grand", grand.as_str()),
+    ] {
+        fs::write(dir.join(format!("{name}.workflow.json")), text).unwrap();
+    }
+    let open = || {
+        let mut facade = dynamic_cluster_runtime(&root);
+        facade.config.workflow.auto_load_dir = Some(dir.clone());
+        facade.start().unwrap();
+        facade
+    };
+    let mut facade = open();
+    let edited = source.replace("Original", "Edited");
+    let barrier = Arc::new(WorkflowExecutionBarrier {
+        reached: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+        once: std::sync::atomic::AtomicBool::new(false),
+    });
+    let module = facade.workflow_module().unwrap();
+    facade
+        .rt
+        .block_on(
+            facade
+                .event_bus
+                .subscribe(WORKFLOW_EXECUTION_STARTED_EVENT.into(), barrier.clone()),
+        )
+        .unwrap();
+    let running = module.clone();
+    let execution = facade.rt.spawn(async move {
+        running
+            .execute_registered_outcome(
+                "parent",
+                HashMap::from([("text".into(), json!("before-edit"))]),
+            )
+            .await
+    });
+    facade.rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(3), barrier.reached.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    });
+    assert!(facade
+        .register_logic_resource(&edited, true)
+        .unwrap_err()
+        .to_string()
+        .contains("workflow_in_use"));
+    assert!(facade
+        .register_logic_resource(parent, true)
+        .unwrap_err()
+        .to_string()
+        .contains("workflow_in_use"));
+    assert!(facade
+        .rt
+        .block_on(module.delete_catalog_resource("child", Some(1)))
+        .unwrap_err()
+        .to_string()
+        .contains("workflow_in_use"));
+    assert_eq!(
+        fs::read_to_string(dir.join("child.workflow.json")).unwrap(),
+        source
+    );
+    barrier.release.add_permits(1);
+    let completed = facade.rt.block_on(execution).unwrap().unwrap();
+    assert_eq!(
+        completed.report.outputs["text"].json_value(),
+        &json!("before-edit")
+    );
+    barrier.once.store(false, Ordering::SeqCst);
+    let cancelled_module = module.clone();
+    let cancelled = facade.rt.spawn(async move {
+        cancelled_module
+            .execute_registered_outcome(
+                "parent",
+                HashMap::from([("text".into(), json!("cancelled"))]),
+            )
+            .await
+    });
+    facade.rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(3), barrier.reached.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    });
+    cancelled.abort();
+    assert!(facade.rt.block_on(cancelled).unwrap_err().is_cancelled());
+    assert_eq!(
+        facade.register_logic_resource(&edited, false).unwrap()["state"],
+        "draft"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("child.workflow.json")).unwrap(),
+        source
+    );
+    let result = facade.register_logic_resource(&edited, true).unwrap();
+    assert_eq!(result["state"], "draft");
+    assert_eq!(result["revision"], 2);
+    for id in ["parent", "grand"] {
+        let view = module.read_workflow_resource(id).unwrap();
+        assert!(!view.summary.production_executable);
+        assert!(facade
+            .rt
+            .block_on(module.execute_registered_outcome(id, HashMap::new()))
+            .is_err());
+        assert!(module.workflow_reference_definition(id, "test").is_err());
+    }
+    assert!(module
+        .workflow_reference_definition("child", "test")
+        .is_err());
+    let saved = fs::read_to_string(dir.join("child.workflow.json")).unwrap();
+    assert!(saved.contains("preserved"));
+    assert!(facade
+        .rt
+        .block_on(module.delete_catalog_resource("child", Some(2)))
+        .unwrap_err()
+        .to_string()
+        .contains("referenced"));
+    assert_eq!(
+        fs::read_to_string(dir.join("child.workflow.json")).unwrap(),
+        saved
+    );
+    drop(module);
+    facade.shutdown().unwrap();
+    drop(facade);
+    let mut restarted = open();
+    let module = restarted.workflow_module().unwrap();
+    assert!(
+        !module
+            .read_workflow_resource("grand")
+            .unwrap()
+            .summary
+            .production_executable
+    );
+    restarted
+        .register_workflow_draft("child", Some(2), None)
+        .unwrap();
+    let output = restarted
+        .rt
+        .block_on(module.execute_registered_outcome(
+            "grand",
+            HashMap::from([("text".into(), json!("restored"))]),
+        ))
+        .unwrap();
+    assert_eq!(
+        output.report.outputs["text"].json_value(),
+        &json!("restored")
+    );
+    restarted.shutdown().unwrap();
+}
+
 struct WorkflowResultExpansionSystem;
 
 #[async_trait::async_trait]

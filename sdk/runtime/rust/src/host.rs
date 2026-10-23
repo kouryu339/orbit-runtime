@@ -758,6 +758,48 @@ impl RuntimeApp {
         self.invoke("runtime.get_agent_cluster_definitions", json!({}))
     }
 
+    pub fn add_agent_cluster(&self, registration: Value) -> Result<Value> {
+        self.invoke(
+            "runtime.add_agent_cluster",
+            json!({"registration": registration}),
+        )
+    }
+
+    pub fn read_skill(&self, name: &str) -> Result<Value> {
+        self.invoke("runtime.read_skill", json!({"name":name}))
+    }
+
+    pub fn validate_skill_transaction(&self, transaction: Value) -> Result<Value> {
+        self.invoke("runtime.validate_skill_transaction", transaction)
+    }
+
+    pub fn commit_skill_transaction(&self, transaction: Value) -> Result<Value> {
+        self.invoke("runtime.commit_skill_transaction", transaction)
+    }
+
+    pub fn update_agent_cluster(
+        &self,
+        registration: Value,
+        expected_version: &str,
+    ) -> Result<Value> {
+        self.update_agent_cluster_with_skills(registration, expected_version, &[])
+    }
+
+    pub fn update_agent_cluster_with_skills(
+        &self,
+        registration: Value,
+        expected_version: &str,
+        reload_skills: &[String],
+    ) -> Result<Value> {
+        self.invoke(
+            "runtime.update_agent_cluster",
+            json!({
+                "registration": registration, "expected_version": expected_version,
+                "reload_skills": reload_skills
+            }),
+        )
+    }
+
     pub fn get_rpc_endpoint_definitions(&self) -> Result<Value> {
         self.invoke("runtime.get_rpc_endpoint_definitions", json!({}))
     }

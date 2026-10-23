@@ -503,6 +503,11 @@ pub(super) struct ConversationSnapshotImport {
     #[serde(default)]
     pub(super) model_uid: Option<u32>,
     #[serde(default)]
+    pub(super) cluster_definition:
+        Option<super::agent_cluster_operations::ClusterDefinitionVersion>,
+    #[serde(default)]
+    pub(super) skill_versions: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     pub(super) ledger: Vec<ai_assistant::ledger::LedgerRecord>,
     /// Protocol is conversation history, not a current registry default. A
     /// missing map denotes the supported legacy EXEC snapshot format.
@@ -815,6 +820,22 @@ impl RuntimeFacade {
         let manager = self.manager()?;
         let conversation_id = non_empty_arg(conversation_id, "conversation_id")?;
         self.require_conversation_owner(&conversation_id)?;
+        // Resolve the assistant cache before admission: activation takes the
+        // assistant lock before entering reference admission.
+        let conversation_cache = self
+            .rt
+            .block_on(manager.default_agent_cache(&conversation_id))
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        let _skill_admission = self
+            .rt
+            .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.write());
+        let skill_versions = self.conversation_skill_versions(&conversation_id)?;
+        // A live cluster cannot be updated, so its current token is also the
+        // token bound to this conversation when it was created.
+        let cluster_definition = self
+            .conversation_instances
+            .get(&conversation_id)
+            .and_then(|metadata| self.cluster_definition_version(&metadata.cluster_id));
         self.rt.block_on(async move {
             let conversation_state = manager
                 .frontend_state(&conversation_id)
@@ -851,10 +872,6 @@ impl RuntimeFacade {
                 .agent_tasks(&conversation_id)
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))?;
-            let conversation_cache = manager
-                .default_agent_cache(&conversation_id)
-                .await
-                .map_err(|e| RuntimeError::Internal(e.to_string()))?;
             let model_uid = conversation_cache
                 .get::<String>(ai_assistant::config_resolver::conversation_keys::CONFIG_MODEL)
                 .await
@@ -885,6 +902,8 @@ impl RuntimeFacade {
                 "ledger": ledger,
                 "runtime": cluster,
                 "tool_protocols": tool_protocols,
+                "cluster_definition": cluster_definition,
+                "skill_versions": skill_versions,
                 "tasks": tasks,
                 "exported_at_unix_ms": std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -924,6 +943,40 @@ impl RuntimeFacade {
             "options.conversation_id",
         )?;
         let mut snapshot = parse_conversation_snapshot(snapshot_json)?;
+        let _skill_admission = self
+            .rt
+            .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.read());
+        let cluster_id = self
+            .conversation_instances
+            .get(&target_conversation_id)
+            .map(|metadata| metadata.cluster_id.as_str());
+        self.check_snapshot_skill_versions(cluster_id, snapshot.skill_versions.as_ref())?;
+        if let Some(metadata) = self.conversation_instances.get(&target_conversation_id) {
+            if self
+                .registries
+                .agent_clusters
+                .contains_key(&metadata.cluster_id)
+            {
+                self.check_snapshot_cluster_version(
+                    &metadata.cluster_id,
+                    snapshot.cluster_definition.as_ref(),
+                )?;
+            } else if let Some(definition) = snapshot.cluster_definition.as_ref() {
+                if self
+                    .registries
+                    .dynamic_agent_clusters
+                    .contains(&definition.cluster_id)
+                {
+                    return Err(RuntimeError::InvalidConfig(
+                        "cannot import a dynamic-cluster snapshot into an unbound conversation"
+                            .into(),
+                    ));
+                }
+                // Preserve static-cluster materialize/import compatibility, but
+                // still check that the source definition has not changed.
+                self.check_snapshot_cluster_version(&definition.cluster_id, Some(definition))?;
+            }
+        }
         self.normalize_snapshot_images(&target_conversation_id, &mut snapshot.ledger)?;
         let tool_protocols = snapshot.tool_protocols.clone();
         let state_deltas = snapshot_state_deltas(&snapshot);
@@ -931,6 +984,7 @@ impl RuntimeFacade {
         let recovery =
             self.replace_conversation_ledger(&target_conversation_id, snapshot.ledger)?;
         self.apply_conversation_state_deltas(&target_conversation_id, state_deltas)?;
+        drop(_skill_admission);
         self.apply_conversation_recovery(&target_conversation_id, recovery)
     }
 

@@ -10,6 +10,23 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub const PREFIX: &str = "WorkflowRef_";
+pub struct WorkflowOccupancy {
+    active: Arc<parking_lot::Mutex<HashMap<String, usize>>>,
+    ids: HashSet<String>,
+}
+impl Drop for WorkflowOccupancy {
+    fn drop(&mut self) {
+        let mut active = self.active.lock();
+        for id in &self.ids {
+            if let Some(count) = active.get_mut(id) {
+                *count -= 1;
+                if *count == 0 {
+                    active.remove(id);
+                }
+            }
+        }
+    }
+}
 pub fn is_reference(node_type: &str) -> bool {
     node_type.starts_with(PREFIX)
 }
@@ -17,8 +34,111 @@ fn error(message: impl Into<String>) -> FrameworkError {
     FrameworkError::WorkflowError(message.into())
 }
 
+fn execution_graph_value(blueprint: &BlueprintJson) -> Result<Value> {
+    let mut normalized = blueprint.clone();
+    normalized.normalize_node_sizes();
+    serde_json::to_value(normalized).map_err(Into::into)
+}
+
 impl WorkflowsModule {
-    fn reference_catalog_unlocked(&self) -> Result<HashMap<String, BlueprintJson>> {
+    /// Reserve the root and its recursive dependencies before dispatching an
+    /// asynchronous run. Dropping the lease releases every reserved identity.
+    pub fn reserve_catalog_execution(&self, id: &str) -> Result<WorkflowOccupancy> {
+        let _guard = self.reference_lock.lock();
+        let view = self.read_workflow_resource(id)?;
+        let blueprint = view
+            .blueprint
+            .ok_or_else(|| error("Workflow has no accepted graph"))?;
+        let frozen = self.freeze_references_unlocked(&blueprint)?;
+        Ok(self.occupy_frozen_unlocked(&blueprint, &frozen))
+    }
+    pub(crate) fn select_execution(
+        &self,
+        selector: &str,
+    ) -> Result<(BlueprintJson, Self, WorkflowOccupancy)> {
+        let _admission = self.reference_lock.lock();
+        let entry = self
+            .get_registry()?
+            .into_iter()
+            .find(|entry| {
+                entry.metadata.id == selector
+                    || entry.metadata.name == selector
+                    || entry.key == selector
+            })
+            .ok_or_else(|| error(format!("registered workflow '{selector}' does not exist")))?;
+        let blueprint = Self::accepted_blueprint(&entry)?;
+        let frozen = self.freeze_references_unlocked(&blueprint)?;
+        let occupancy = self.occupy_frozen_unlocked(&blueprint, &frozen);
+        Ok((blueprint, frozen, occupancy))
+    }
+    pub(crate) fn ensure_not_running_unlocked(&self, id: &str) -> Result<()> {
+        if self.active_workflows.lock().contains_key(id) {
+            return Err(error(format!(
+                "workflow_in_use: Workflow '{id}' is used by an active execution"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn occupy_frozen_unlocked(
+        &self,
+        root: &BlueprintJson,
+        frozen: &Self,
+    ) -> WorkflowOccupancy {
+        let mut ids = frozen
+            .reference_snapshot
+            .as_ref()
+            .map(|catalog| catalog.keys().cloned().collect::<HashSet<_>>())
+            .unwrap_or_default();
+        ids.insert(root.metadata.id.clone());
+        let mut active = self.active_workflows.lock();
+        for id in &ids {
+            *active.entry(id.clone()).or_default() += 1;
+        }
+        WorkflowOccupancy {
+            active: self.active_workflows.clone(),
+            ids,
+        }
+    }
+
+    pub(crate) fn admit_workflow_execution(
+        &self,
+        root: &BlueprintJson,
+    ) -> Result<(Self, WorkflowOccupancy)> {
+        let _guard = self.reference_lock.lock();
+        // A caller that read a graph before an edit may not execute stale content.
+        if self.reference_snapshot.is_none() {
+            if let Some(draft) = self
+                .get_draft_registry()?
+                .iter()
+                .find(|entry| entry.id == root.metadata.id)
+            {
+                if draft
+                    .blueprint
+                    .as_ref()
+                    .map(execution_graph_value)
+                    .transpose()?
+                    != Some(execution_graph_value(root)?)
+                {
+                    return Err(error("Workflow changed before execution admission"));
+                }
+            } else if let Some(entry) = self
+                .get_registry()?
+                .iter()
+                .find(|entry| entry.metadata.id == root.metadata.id)
+            {
+                if execution_graph_value(&Self::accepted_blueprint(entry)?)?
+                    != execution_graph_value(root)?
+                {
+                    return Err(error("Workflow changed before execution admission"));
+                }
+            }
+        }
+        let frozen = self.freeze_references_unlocked(root)?;
+        let occupancy = self.occupy_frozen_unlocked(root, &frozen);
+        Ok((frozen, occupancy))
+    }
+    pub(crate) fn reference_catalog_unlocked(&self) -> Result<HashMap<String, BlueprintJson>> {
         if let Some(snapshot) = &self.reference_snapshot {
             return Ok((**snapshot).clone());
         }
@@ -41,9 +161,68 @@ impl WorkflowsModule {
         reference_script(candidate)?;
         let mut catalog = self.reference_catalog_unlocked()?;
         catalog.insert(candidate.metadata.id.clone(), candidate.clone());
-        let mut done = HashSet::new();
+        validate(candidate, &catalog, &mut Vec::new(), &mut HashSet::new())?;
+        for blueprint in catalog.values().filter(|blueprint| {
+            blueprint.metadata.id != candidate.metadata.id
+                && blueprint
+                    .nodes
+                    .iter()
+                    .any(|node| node.node_type == format!("{PREFIX}{}", candidate.metadata.id))
+        }) {
+            validate(blueprint, &catalog, &mut Vec::new(), &mut HashSet::new())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn workflow_dependencies_ready_unlocked(
+        &self,
+        blueprint: &BlueprintJson,
+    ) -> Result<()> {
+        validate(
+            blueprint,
+            &self.reference_catalog_unlocked()?,
+            &mut Vec::new(),
+            &mut HashSet::new(),
+        )
+    }
+
+    pub fn workflow_dependencies_ready(&self, blueprint: &BlueprintJson) -> Result<()> {
+        let _guard = self.reference_lock.lock();
+        self.workflow_dependencies_ready_unlocked(blueprint)
+    }
+
+    fn executable_catalog_unlocked(&self) -> Result<HashMap<String, BlueprintJson>> {
+        let catalog = self.reference_catalog_unlocked()?;
+        Ok(catalog
+            .iter()
+            .filter(|(_, blueprint)| {
+                validate(blueprint, &catalog, &mut Vec::new(), &mut HashSet::new()).is_ok()
+            })
+            .map(|(id, blueprint)| (id.clone(), blueprint.clone()))
+            .collect())
+    }
+
+    pub(crate) fn draft_reference_tools_unlocked(
+        &self,
+    ) -> Result<Vec<crate::rpc_tool::RuntimeToolMetadata>> {
+        self.get_draft_registry()?
+            .iter()
+            .filter_map(|draft| draft.blueprint.as_ref())
+            .map(reference_tool)
+            .collect()
+    }
+
+    /// After restart, registered callers of a draft remain visible but blocked.
+    /// Still reject missing IDs, cycles and mismatched interfaces between formal resources.
+    pub(crate) fn validate_restored_reference_catalog_unlocked(&self) -> Result<()> {
+        let mut catalog = self.reference_catalog_unlocked()?;
+        for draft in self.get_draft_registry()? {
+            if let Some(blueprint) = draft.blueprint {
+                catalog.insert(draft.id, blueprint);
+            }
+        }
         for blueprint in catalog.values() {
-            validate(blueprint, &catalog, &mut Vec::new(), &mut done)?;
+            validate(blueprint, &catalog, &mut Vec::new(), &mut HashSet::new())?;
         }
         Ok(())
     }
@@ -64,7 +243,13 @@ impl WorkflowsModule {
     }
 
     pub(crate) fn ensure_reference_unused_unlocked(&self, id: &str) -> Result<()> {
-        for (owner, blueprint) in self.reference_catalog_unlocked()? {
+        let mut catalog = self.reference_catalog_unlocked()?;
+        for draft in self.get_draft_registry()? {
+            if let Some(blueprint) = draft.blueprint {
+                catalog.insert(draft.id, blueprint);
+            }
+        }
+        for (owner, blueprint) in catalog {
             if owner != id
                 && blueprint
                     .nodes
@@ -99,7 +284,7 @@ impl WorkflowsModule {
     /// Complete compiler-ready node JSON. Instance IDs belong to the caller's graph.
     pub fn workflow_reference_definition(&self, workflow_id: &str, node_id: &str) -> Result<Value> {
         let _guard = self.reference_lock.lock();
-        let catalog = self.reference_catalog_unlocked()?;
+        let catalog = self.executable_catalog_unlocked()?;
         let blueprint = catalog
             .get(workflow_id)
             .ok_or_else(|| error(format!("Workflow '{workflow_id}' is not registered")))?;
@@ -113,7 +298,7 @@ impl WorkflowsModule {
 
     pub fn workflow_reference_definitions(&self) -> Result<Vec<Value>> {
         let _guard = self.reference_lock.lock();
-        let catalog = self.reference_catalog_unlocked()?;
+        let catalog = self.executable_catalog_unlocked()?;
         let mut ids = catalog.keys().collect::<Vec<_>>();
         ids.sort();
         Ok(ids
@@ -128,7 +313,10 @@ impl WorkflowsModule {
 
     pub fn workflow_reference_tools(&self) -> Result<Vec<crate::rpc_tool::RuntimeToolMetadata>> {
         let _guard = self.reference_lock.lock();
-        self.workflow_reference_tools_unlocked()
+        self.executable_catalog_unlocked()?
+            .values()
+            .map(reference_tool)
+            .collect()
     }
 
     pub(crate) fn workflow_reference_tools_unlocked(

@@ -165,9 +165,10 @@ impl RuntimeFacade {
     }
 }
 
-fn cluster_definition(cluster: &RuntimeAgentCluster, source: &str) -> Value {
+pub(super) fn cluster_definition(cluster: &RuntimeAgentCluster, source: &str) -> Value {
     json!({
         "id": cluster.id,
+        "version": super::agent_cluster_operations::cluster_version(cluster),
         "description": cluster.description,
         "source": source,
         "focus_agent_id": cluster.focus_agent_id,
@@ -183,7 +184,8 @@ fn cluster_definition(cluster: &RuntimeAgentCluster, source: &str) -> Value {
             "model_uid": (agent.model_uid != 0).then_some(agent.model_uid),
             "retrieval": agent.retrieval,
             "system_prompt_constraints": agent.system_prompt_constraints,
-            "frontend_widgets_enabled": agent.frontend_widgets_enabled
+            "frontend_widgets_enabled": agent.frontend_widgets_enabled,
+            "tool_protocol": agent.tool_protocol
         })).collect::<Vec<_>>()
     })
 }

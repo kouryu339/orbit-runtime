@@ -119,6 +119,17 @@ AGENT_RUNTIME_EXPORT int agent_runtime_start_v1(AgentRuntimeHandle handle);
  * - workflow.execute_script for temporary script text with the same optional identity pair
  * - runtime.get_workflow_node_definitions for the registered graph-node catalog
  * Command availability must still be checked through capabilities JSON.
+ * Dynamic cluster commands:
+ * - runtime.add_agent_cluster accepts a registration object after start.
+ * - runtime.update_agent_cluster also requires expected_version and rejects
+ *   updates while any conversation of that cluster is live.
+ *   Optional reload_skills reloads registered Role/Feature files only when no
+ *   live Agent depends on them. skill_in_use details identify conversations/Agents.
+ * Both commands require a primary Agent with a valid Role Skill.
+ * Skill candidate transactions: runtime.read_skill (name),
+ * runtime.validate_skill_transaction and runtime.commit_skill_transaction
+ * (expected_store_revision, skills, optional cluster). Candidate source text
+ * is committed by Runtime; do not overwrite accepted files before invoking.
  */
 AGENT_RUNTIME_EXPORT int agent_runtime_invoke_v1(
     AgentRuntimeHandle handle,

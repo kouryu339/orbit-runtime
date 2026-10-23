@@ -26,6 +26,8 @@ create options -> runtime.register_resources -> [runtime.register_llm 空/可选
 
 ## 2.1 顶层结构
 
+启动后新增、更新集群配置使用专门的动态管理命令，见 [动态集群配置](./13-dynamic-agent-clusters.md)。主 Agent 必须绑定 Role Skill；集群有任意存活 Conversation 时禁止更新。该能力不放开 Resources 或工具端点的启动后重载。
+
 ```json
 {
   "schema": "agent-runtime-create-options/v1",

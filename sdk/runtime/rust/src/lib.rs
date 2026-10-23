@@ -686,6 +686,51 @@ impl Runtime {
         )
     }
 
+    /// Add a cluster after start. Its primary agent must reference a Role Skill.
+    pub fn add_agent_cluster(&mut self, registration: Value) -> Result<Value> {
+        self.invoke(
+            "runtime.add_agent_cluster",
+            json!({"registration": registration}),
+        )
+    }
+
+    pub fn read_skill(&mut self, name: &str) -> Result<Value> {
+        self.invoke("runtime.read_skill", json!({"name":name}))
+    }
+
+    pub fn validate_skill_transaction(&mut self, transaction: Value) -> Result<Value> {
+        self.invoke("runtime.validate_skill_transaction", transaction)
+    }
+
+    pub fn commit_skill_transaction(&mut self, transaction: Value) -> Result<Value> {
+        self.invoke("runtime.commit_skill_transaction", transaction)
+    }
+
+    /// Replace a cluster only when it has no live conversations.
+    pub fn update_agent_cluster(
+        &mut self,
+        registration: Value,
+        expected_version: &str,
+    ) -> Result<Value> {
+        self.update_agent_cluster_with_skills(registration, expected_version, &[])
+    }
+
+    /// Reload registered Skill files only if no live Agent still references them.
+    pub fn update_agent_cluster_with_skills(
+        &mut self,
+        registration: Value,
+        expected_version: &str,
+        reload_skills: &[String],
+    ) -> Result<Value> {
+        self.invoke(
+            "runtime.update_agent_cluster",
+            json!({
+                "registration": registration, "expected_version": expected_version,
+                "reload_skills": reload_skills
+            }),
+        )
+    }
+
     pub fn register_agent_cluster_path(&mut self, path: impl AsRef<Path>) -> Result<Value> {
         self.invoke(
             "runtime.register_agent_cluster",

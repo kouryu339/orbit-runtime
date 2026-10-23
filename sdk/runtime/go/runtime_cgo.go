@@ -358,6 +358,36 @@ func (r *Runtime) RegisterAgentClusterFile(ctx context.Context, path string) (js
 	})
 }
 
+func (r *Runtime) AddAgentCluster(ctx context.Context, registration json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.add_agent_cluster", map[string]any{"registration": registration})
+}
+
+func (r *Runtime) ReadSkill(ctx context.Context, name string) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.read_skill", map[string]any{"name": name})
+}
+
+func (r *Runtime) ValidateSkillTransaction(ctx context.Context, transaction json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.validate_skill_transaction", transaction)
+}
+
+func (r *Runtime) CommitSkillTransaction(ctx context.Context, transaction json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.commit_skill_transaction", transaction)
+}
+
+func (r *Runtime) UpdateAgentCluster(ctx context.Context, registration json.RawMessage, expectedVersion string) (json.RawMessage, error) {
+	return r.UpdateAgentClusterWithSkills(ctx, registration, expectedVersion, []string{})
+}
+
+func (r *Runtime) UpdateAgentClusterWithSkills(ctx context.Context, registration json.RawMessage, expectedVersion string, reloadSkills []string) (json.RawMessage, error) {
+	if reloadSkills == nil {
+		reloadSkills = []string{}
+	}
+	return r.invoke(ctx, "runtime.update_agent_cluster", map[string]any{
+		"registration": registration, "expected_version": expectedVersion,
+		"reload_skills": reloadSkills,
+	})
+}
+
 func (r *Runtime) Enabled() bool {
 	return r != nil && r.handle != C.AgentRuntimeHandle(C.AGENT_RUNTIME_INVALID_HANDLE)
 }

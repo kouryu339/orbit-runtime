@@ -931,6 +931,39 @@ public:
         invoke("runtime.register_agent_cluster", registration_payload(registration_json));
     }
 
+    std::string add_agent_cluster_json(const std::string& registration_json)
+    {
+        return invoke("runtime.add_agent_cluster", registration_payload(registration_json));
+    }
+
+    std::string read_skill(const std::string& name)
+    {
+        return invoke("runtime.read_skill", std::string("{\"name\":") + detail::quote(name) + "}");
+    }
+
+    std::string validate_skill_transaction_json(const std::string& transaction_json)
+    {
+        return invoke("runtime.validate_skill_transaction", object_or_empty(transaction_json));
+    }
+
+    std::string commit_skill_transaction_json(const std::string& transaction_json)
+    {
+        return invoke("runtime.commit_skill_transaction", object_or_empty(transaction_json));
+    }
+
+    std::string update_agent_cluster_json(const std::string& registration_json, const std::string& expected_version,
+        const std::vector<std::string>& reload_skills = {})
+    {
+        std::string names = "[";
+        for (const auto& name : reload_skills) {
+            if (names.size() > 1) names += ",";
+            names += detail::quote(name);
+        }
+        names += "]";
+        return invoke("runtime.update_agent_cluster", std::string("{\"registration\":") + object_or_empty(registration_json)
+            + ",\"expected_version\":" + detail::quote(expected_version) + ",\"reload_skills\":" + names + "}");
+    }
+
     void set_auth_context_json(const std::string& context_json)
     {
         invoke("runtime.set_auth_context", std::string("{\"context\":") + context_json + "}");

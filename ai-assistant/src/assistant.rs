@@ -149,6 +149,8 @@ impl AIAssistant {
                 .await?;
         }
 
+        let _admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
+        crate::skills::usage::track(&cache);
         self.state_machine = Some(sm);
         Ok(())
     }
@@ -158,6 +160,7 @@ impl AIAssistant {
     /// 返回 `RestoreResult`，其中 `active_agents` 供调用方决定是否重建子 Agent。
     /// 必须在 `init()` + `activate_skills()` 之后调用。
     pub async fn restore_session(&self) -> Result<crate::persistence::RestoreResult> {
+        let _admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
         let sm = self
             .state_machine
             .as_ref()
@@ -320,6 +323,7 @@ impl AIAssistant {
         skill_names: &[&str],
         cache: &Arc<dyn Cache>,
     ) -> Result<()> {
+        let _admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
         use crate::skills::systems::SKILL_MANAGER;
 
         let mgr_lock = match SKILL_MANAGER.get() {

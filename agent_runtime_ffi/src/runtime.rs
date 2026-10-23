@@ -43,6 +43,7 @@ use crate::{
 };
 
 mod agent_cluster;
+mod agent_cluster_operations;
 mod agent_test_host;
 mod config;
 mod conversation;
@@ -56,6 +57,7 @@ mod recovery;
 mod resource_definitions;
 mod resources;
 mod rpc;
+mod skill_transactions;
 mod tool_definitions;
 mod workflow_node_definitions;
 mod workflow_operations;
@@ -117,6 +119,29 @@ const JEV_EXECUTION_COMPLETED_EVENT: &str = "jev.execution_completed";
 pub enum RuntimeError {
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+    #[error("agent cluster '{cluster_id}' is used by live conversations: {conversation_ids:?}")]
+    ClusterInUse {
+        cluster_id: String,
+        conversation_ids: Vec<String>,
+    },
+    #[error("agent cluster '{cluster_id}' definition version does not match")]
+    ClusterVersionConflict {
+        cluster_id: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("Skill content is used by live Agent instances")]
+    SkillInUse {
+        dependencies: Vec<ai_assistant::skills::usage::SkillDependency>,
+    },
+    #[error("skill_version_conflict: Skill '{name}' content version does not match")]
+    SkillVersionConflict {
+        name: String,
+        expected: Option<String>,
+        actual: Option<String>,
+    },
+    #[error("Skill store revision does not match (expected {expected}, actual {actual})")]
+    SkillStoreConflict { expected: u64, actual: u64 },
     #[error("runtime has not been started")]
     NotStarted,
     #[error("LLM configuration failed: {0}")]
@@ -130,7 +155,12 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn code(&self) -> i32 {
         match self {
-            Self::InvalidConfig(_) => ffi_error_code_invalid_config(),
+            Self::InvalidConfig(_)
+            | Self::ClusterInUse { .. }
+            | Self::ClusterVersionConflict { .. } => ffi_error_code_invalid_config(),
+            Self::SkillInUse { .. }
+            | Self::SkillVersionConflict { .. }
+            | Self::SkillStoreConflict { .. } => ffi_error_code_invalid_config(),
             Self::Llm(_) => ffi_error_code_llm_failed(),
             Self::Rpc(_) => ffi_error_code_rpc_failed(),
             Self::NotStarted | Self::Internal(_) => ffi_error_code_internal(),
@@ -206,6 +236,8 @@ pub struct RuntimeRegistries {
     pub resources: Option<RuntimeResourceRegistry>,
     pub llm: Option<RuntimeLlmRegistry>,
     pub agent_clusters: BTreeMap<String, RuntimeAgentCluster>,
+    pub dynamic_agent_clusters: BTreeSet<String>,
+    pub skill_store_revision: u64,
     pub frozen: bool,
 }
 
@@ -616,6 +648,13 @@ impl RuntimeFacade {
             .block_on(build_resource_registry(registration, base_dir))?;
 
         self.config.runtime.skills_dir = Some(registry.skills_root_dir.clone());
+        for (id, cluster) in &registry.managed_clusters {
+            self.registries.dynamic_agent_clusters.insert(id.clone());
+            self.registries
+                .agent_clusters
+                .insert(id.clone(), cluster.clone());
+        }
+        self.registries.skill_store_revision = registry.managed_skill_revision;
         if let Some(data_dir) = registry.data_dir.clone() {
             self.config.runtime.data_dir = Some(data_dir);
         }
@@ -654,8 +693,19 @@ impl RuntimeFacade {
                 .map(runtime_agent_definition_to_agent_section),
             );
         }
-        self.rt
-            .block_on(async move { validate_agent_skills(&config_for_skill_validation).await })?;
+        let has_resources = self.registries.resources.is_some();
+        self.rt.block_on(async move {
+            if !has_resources {
+                return validate_agent_skills(&config_for_skill_validation).await;
+            }
+            let catalog = ai_assistant::skills::systems::SKILL_MANAGER
+                .get()
+                .ok_or_else(|| {
+                    RuntimeError::InvalidConfig("Skill catalog is not initialized".into())
+                })?;
+            let mut manager = catalog.read().await.clone();
+            validate_agent_skill_catalog(&config_for_skill_validation, false, &mut manager).await
+        })?;
 
         ai_assistant::prompt_assets::set_prompts_dir(
             ai_assistant::prompt_assets::default_prompts_dir(),
@@ -1673,6 +1723,13 @@ fn validate_registered_agent_retrieval(
 }
 
 async fn validate_agent_skills(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    validate_agent_skill_bindings(config, false).await
+}
+
+async fn validate_agent_skill_bindings(
+    config: &RuntimeConfig,
+    validate_features: bool,
+) -> Result<(), RuntimeError> {
     let skills_dir = config.runtime.skills_dir.as_ref().ok_or_else(|| {
         RuntimeError::InvalidConfig("runtime.skills_dir must not be empty".to_string())
     })?;
@@ -1685,6 +1742,19 @@ async fn validate_agent_skills(config: &RuntimeConfig) -> Result<(), RuntimeErro
             ))
         })?;
 
+    validate_agent_skill_catalog(config, validate_features, &mut manager).await
+}
+
+async fn validate_agent_skill_catalog(
+    config: &RuntimeConfig,
+    validate_features: bool,
+    manager: &mut SkillManager,
+) -> Result<(), RuntimeError> {
+    let skills_dir = config
+        .runtime
+        .skills_dir
+        .as_deref()
+        .unwrap_or_else(|| Path::new("skills"));
     for agent in &config.agents {
         if let Some(role) = agent
             .role
@@ -1711,6 +1781,23 @@ async fn validate_agent_skills(config: &RuntimeConfig) -> Result<(), RuntimeErro
                     "agent '{}' role skill '{}' must include non-empty instructions",
                     agent.id, role
                 )));
+            }
+        }
+
+        if validate_features {
+            for name in &agent.features {
+                let skill = manager.load(name).await.map_err(|error| {
+                    RuntimeError::InvalidConfig(format!("feature skill '{name}': {error}"))
+                })?;
+                if skill.metadata.is_role()
+                    || skill.metadata.system_layer
+                    || skill.instructions.trim().is_empty()
+                {
+                    return Err(RuntimeError::InvalidConfig(format!(
+                        "agent '{}' feature '{}' must be a non-system capability with non-empty instructions",
+                        agent.id, name
+                    )));
+                }
             }
         }
 

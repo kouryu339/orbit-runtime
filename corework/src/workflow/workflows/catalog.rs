@@ -307,6 +307,7 @@ impl WorkflowsModule {
         let (view, previous_revision) = {
             let _guard = self.reference_lock.lock();
             let id = Self::validate_resource_id(id)?;
+            self.ensure_not_running_unlocked(&id)?;
             let name = self.validate_resource_name(name)?;
             let mut drafts = self.get_draft_registry()?;
             let position = drafts
@@ -390,6 +391,7 @@ impl WorkflowsModule {
                 .position(|entry| entry.id == id)
                 .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
             let draft = drafts[position].clone();
+            self.ensure_not_running_unlocked(&id)?;
             ensure_revision(&id, draft.revision, expected_revision)?;
             if !draft.validation.valid {
                 return Err(FrameworkError::InvalidOperation(format!(
@@ -483,10 +485,12 @@ impl WorkflowsModule {
         let summary = {
             let _guard = self.reference_lock.lock();
             let id = Self::validate_resource_id(id)?;
+            self.ensure_not_running_unlocked(&id)?;
             let mut drafts = self.get_draft_registry()?;
             if let Some(position) = drafts.iter().position(|entry| entry.id == id) {
                 let entry = drafts[position].clone();
                 ensure_revision(&id, entry.revision, expected_revision)?;
+                self.ensure_reference_unused_unlocked(&id)?;
                 if let Some(path) = &entry.resource_path {
                     self.ensure_owned_resource_path(std::path::Path::new(path))?;
                 }
@@ -544,7 +548,15 @@ impl WorkflowsModule {
                     id
                 ))
             })?;
-        Self::registered_view(entry)
+        let mut view = Self::registered_view(entry)?;
+        if let Some(blueprint) = &view.blueprint {
+            if let Err(error) = self.workflow_dependencies_ready_unlocked(blueprint) {
+                view.summary.production_executable = false;
+                view.summary.validation = WorkflowValidation::invalid(error.to_string());
+                view.reference_script = None;
+            }
+        }
+        Ok(view)
     }
 
     pub fn list_workflow_catalog(
@@ -557,6 +569,8 @@ impl WorkflowsModule {
         }
         if kind != Some(WorkflowResourceKind::Draft) {
             resources.extend(self.get_registry()?.into_iter().map(|entry| {
+                let validation = Self::accepted_blueprint(&entry)
+                    .and_then(|blueprint| self.workflow_dependencies_ready_unlocked(&blueprint));
                 WorkflowResourceSummary {
                     id: entry.metadata.id,
                     name: entry.metadata.name,
@@ -564,8 +578,11 @@ impl WorkflowsModule {
                     kind: WorkflowResourceKind::Registered,
                     revision: entry.revision,
                     trusted: true,
-                    production_executable: true,
-                    validation: WorkflowValidation::valid(),
+                    production_executable: validation.is_ok(),
+                    validation: validation
+                        .err()
+                        .map(|error| WorkflowValidation::invalid(error.to_string()))
+                        .unwrap_or_else(WorkflowValidation::valid),
                 }
             }));
         }

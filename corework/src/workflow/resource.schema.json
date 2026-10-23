@@ -52,7 +52,7 @@
         "draft",
         "registered"
       ],
-      "description": "首次注册时声明资源状态。已有资源转正必须通过 promote，注册不得改变已有状态。"
+      "description": "首次注册时声明状态；已有资源修改成功统一转为 draft，转正必须通过 promote。"
     },
     "revision": {
       "type": "integer",

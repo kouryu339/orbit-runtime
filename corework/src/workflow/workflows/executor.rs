@@ -161,6 +161,7 @@ pub struct WorkflowsModule {
     pub(crate) event_bus: Arc<dyn EventBus>,
     pub(crate) reference_snapshot: Option<Arc<HashMap<String, BlueprintJson>>>,
     pub(crate) reference_lock: Arc<parking_lot::Mutex<()>>,
+    pub(crate) active_workflows: Arc<parking_lot::Mutex<HashMap<String, usize>>>,
 }
 
 impl WorkflowsModule {
@@ -230,6 +231,7 @@ impl WorkflowsModule {
             event_bus,
             reference_snapshot: None,
             reference_lock: Arc::new(parking_lot::Mutex::new(())),
+            active_workflows: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         })
     }
 
@@ -347,6 +349,7 @@ impl WorkflowsModule {
     ///
     pub fn save_local(&self, blueprint: &BlueprintJson) -> Result<String> {
         let _reference_guard = self.reference_lock.lock();
+        self.ensure_not_running_unlocked(&blueprint.metadata.id)?;
         let mut blueprint = blueprint.clone();
         if blueprint.metadata.id.is_empty() {
             blueprint.metadata.id = blueprint.metadata.name.clone();
@@ -411,6 +414,7 @@ impl WorkflowsModule {
             .load_from_blueprint_json(blueprint.clone(), &self.create_run_context())?;
         let _reference_guard = self.reference_lock.lock();
         self.validate_references_unlocked(&blueprint)?;
+        self.ensure_not_running_unlocked(&blueprint.metadata.id)?;
         let key = Self::make_key(&blueprint.metadata);
         let mut registry = self.get_registry()?;
         registry.retain(|e| e.key != key);
@@ -466,6 +470,7 @@ impl WorkflowsModule {
     }
 
     pub(crate) fn delete_resource_unlocked(&self, id: &str) -> Result<RegisteredWorkflow> {
+        self.ensure_not_running_unlocked(id)?;
         self.ensure_reference_unused_unlocked(id)?;
         let id = Self::validate_resource_id(id)?;
         let registry = self.get_registry()?;
@@ -511,8 +516,12 @@ impl WorkflowsModule {
 
     /// 卸载蓝图（从注册表移除；Local 工作流同时删除文件）。
     pub fn unload(&self, key: &str) -> Result<()> {
+        let _reference_guard = self.reference_lock.lock();
         let mut reg = self.get_registry()?;
         let entry = reg.iter().find(|e| e.key == key).cloned();
+        if let Some(entry) = &entry {
+            self.ensure_not_running_unlocked(&entry.metadata.id)?;
+        }
         let before = reg.len();
         reg.retain(|e| e.key != key);
         if reg.len() == before {
@@ -561,16 +570,8 @@ impl WorkflowsModule {
         name: &str,
         inputs: HashMap<String, JsonValue>,
     ) -> Result<HashMap<String, JsonValue>> {
-        let entry = self
-            .get_registry()?
-            .into_iter()
-            .find(|e| e.metadata.name == name)
-            .ok_or_else(|| {
-                FrameworkError::InvalidOperation(format!("未找到名为「{}」的工作流", name))
-            })?;
-
-        self.execute_from_blueprint(Self::accepted_blueprint(&entry)?, inputs)
-            .await
+        let (blueprint, frozen, _occupancy) = self.select_execution(name)?;
+        frozen.execute_from_blueprint(blueprint, inputs).await
     }
 
     pub async fn execute_registered_report(
@@ -585,22 +586,9 @@ impl WorkflowsModule {
                 "workflow selector must not be empty".to_string(),
             ));
         }
-        let entry = self
-            .get_registry()?
-            .into_iter()
-            .find(|entry| {
-                entry.metadata.id == selector
-                    || entry.metadata.name == selector
-                    || entry.key == selector
-            })
-            .ok_or_else(|| {
-                FrameworkError::InvalidOperation(format!(
-                    "registered workflow '{}' does not exist",
-                    selector
-                ))
-            })?;
-        let blueprint = Self::accepted_blueprint(&entry)?;
-        self.execute_from_blueprint_report(blueprint, inputs, trace_enabled)
+        let (blueprint, frozen, _occupancy) = self.select_execution(selector)?;
+        frozen
+            .execute_from_blueprint_report(blueprint, inputs, trace_enabled)
             .await
     }
 
@@ -645,28 +633,15 @@ impl WorkflowsModule {
                 "workflow selector must not be empty".to_string(),
             ));
         }
-        let entry = self
-            .get_registry()?
-            .into_iter()
-            .find(|entry| {
-                entry.metadata.id == selector
-                    || entry.metadata.name == selector
-                    || entry.key == selector
-            })
-            .ok_or_else(|| {
-                FrameworkError::InvalidOperation(format!(
-                    "registered workflow '{}' does not exist",
-                    selector
-                ))
-            })?;
-        let blueprint = Self::accepted_blueprint(&entry)?;
-        self.execute_from_blueprint_outcome_with_context_and_run_id(
-            blueprint,
-            inputs,
-            execution_context,
-            workflow_run_id,
-        )
-        .await
+        let (blueprint, frozen, _occupancy) = self.select_execution(selector)?;
+        frozen
+            .execute_from_blueprint_outcome_with_context_and_run_id(
+                blueprint,
+                inputs,
+                execution_context,
+                workflow_run_id,
+            )
+            .await
     }
 
     /// 从文件加载并执行工作流（即用即弃）。
@@ -705,7 +680,7 @@ impl WorkflowsModule {
         tracing::debug!(workflow_name = %workflow_name, "inline workflow execution started");
         let t = std::time::Instant::now();
         let ctx = self.create_run_context();
-        let references = self.freeze_references(&blueprint)?;
+        let (references, _occupancy) = self.admit_workflow_execution(&blueprint)?;
         let loaded = BlueprintLoader::with_workflows(Arc::new(references))
             .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
@@ -743,7 +718,7 @@ impl WorkflowsModule {
         let workflow_name = blueprint.metadata.name.clone();
         tracing::debug!(workflow_name = %workflow_name, "inline workflow report started");
         let ctx = self.create_run_context();
-        let references = self.freeze_references(&blueprint)?;
+        let (references, _occupancy) = self.admit_workflow_execution(&blueprint)?;
         let loaded = BlueprintLoader::with_workflows(Arc::new(references))
             .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
@@ -847,7 +822,7 @@ impl WorkflowsModule {
         let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
         let ctx = execution_context.apply_to(self.create_run_context())?;
-        let references = self.freeze_references(&blueprint)?;
+        let (references, _occupancy) = self.admit_workflow_execution(&blueprint)?;
         let loaded = BlueprintLoader::with_workflows(Arc::new(references))
             .load_from_blueprint_json(blueprint, &ctx)?;
         let mut exec_ctx = ExecutionContext::from_context(ctx);
@@ -1070,6 +1045,7 @@ impl WorkflowsModule {
         revision: Option<u64>,
         prepared: Option<&super::revision::PreparedRevision>,
     ) -> Result<RegisteredWorkflow> {
+        self.ensure_not_running_unlocked(&blueprint.metadata.id)?;
         if let Some(prepared) = prepared.filter(|prepared| prepared.resource_source.is_some()) {
             return self.persist_logic_registered_unlocked(
                 prepared,

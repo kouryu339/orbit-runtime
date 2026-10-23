@@ -57,12 +57,14 @@ Schema 校验的是 Runtime 解析、规范化后的结构，不能直接解析�
 
 此例使用之前约定的 JSON 形状源语法：`returns.name.value` 是裸引用。整份文档必须作为 `source` 字符串交给 Runtime 解析；字符串 `"input.name"` 始终是文字。
 
-- `state` 必填，取 `draft` 或 `registered`。首次注册按文档声明加载对应状态。已有身份不能通过再次注册切换状态；草稿转正使用 promote，正式资源不允许直接降为草稿。
+- `state` 必填，取 `draft` 或 `registered`。首次注册按文档声明加载对应状态。已有身份修改成功统一保存为 draft：正式资源可继续提交读取到的 registered 或显式 draft，Runtime 自动草稿化；草稿不得通过再次注册转正，必须使用 promote。
 - 新身份的 `revision` 必须为 1。同一身份再次注册表示整份替换，文档 revision 必须等于当前值；提交成功后 Runtime 递增并返回新值。不存在另外的 Write/Update 工具。
 - `metadata.extensions` 按宿主命名空间保存，注册、转正和落盘后完整保留。
 - 注册、验证共用编译、工具契约、作用域和正式引用检查。注册失败不覆盖旧版本；验证不保存、不会改变 revision，也不会运行节点。
 - 执行按已接受的资源 state 选择草稿或正式路径，不需要 `mode` 或额外的 Draft 工具。草稿执行仍是真实执行，不是静态验证。
-- 移除和转正必须携带当前 `expected_revision`。被正式工作流引用的资源不能直接移除；破坏已有调用方接口的更新也会被拒绝。
+- 移除和转正必须携带当前 `expected_revision`。被其他工作流引用的资源不能直接移除，包括已草稿化的调用方；破坏已有正式调用方接口的更新也会被拒绝。
+- 存在正在执行的实例时拒绝修改、移除或转正；占用覆盖本次运行的根流程及递归引用，直到运行结束或取消。错误包含 `workflow_in_use`，失败不改变源文件、revision 和状态。静态验证不占用工作流。
+- 正式流程改成草稿后，同一 ID 保留，伴生引用从可用目录撤出；依赖它的正式流程保留定义但标记 `production_executable:false`、validation 无效，正式执行前递归拒绝不稳定引用。重新转正后恢复可用，重启保持这一关系。capabilities.features.workflow_edit_to_draft 与 workflow_running_edit_guard 均为 true。
 - Runtime 持久化源文本，启动时在工具契约安装后自动恢复草稿和正式资源，按引用依赖编译。源文件中的 revision 原样恢复，加载不会写文件或执行节点。
 - 新资源保存为管理目录下的 `<id>.workflow.json`；也可以在启动前放入完整 `.workflow` 或 `.json` 资源。旧脚本及旧图资源跳过并记录日志，不自动迁移。
 - 移除会删除管理目录中的对应源文件，包括手动导入的文件；目录外的作者备份不受影响。核心编译器和执行器继续沿用原机制。
