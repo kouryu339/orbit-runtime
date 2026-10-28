@@ -1,6 +1,6 @@
 # Workflow JSON 更新公告
 
-本地构建：`jiangrong/workflow-logic-json`，Runtime/SDK 基础版本 `0.5.1`。此包是分支验证包，未替换线上发布版。
+随 Runtime `0.5.2` 发布，包含 Workflow 逻辑资源、Skill 候选事务和动态集群接口。原 Workflow 开发分支保留。
 
 ## 接口变更
 
@@ -29,11 +29,11 @@ Workflow Studio 与 Agent Test Studio 两个独立页面已弃用，打开页面
 - 注册失败保留上一版本。正式接口变更若破坏调用方则拒绝；执行开始时固定本次图和引用快照。布局编辑与独立画布迁移不在本轮范围内。
 - 移除会删除 Runtime 管理目录中的对应源文件，包括手动放入该目录的资源。请将作者备份放在管理目录之外。
 
-## 使用本地包
+## 使用发布包
 
-直接加载包内 `bin/agent_runtime.dll`，并使用包内 `sdk/` 的接口。SDK 默认下载地址仍指向原正式 0.5.1，自动下载不会取得本分支构建。
+Windows 加载包内 `bin/agent_runtime.dll`，Linux 加载 `lib/libagent_runtime.so`。对应 SDK 源码单独提供在 `orbit-runtime-sdk-v0.5.2.zip`，SDK 默认下载固定到此版本并验证原生包 SHA-256。
 
-包内包含两份 Schema、可编辑示例、接口说明及各语言 SDK 源码。Schema 校验针对 Runtime 解析后的普通 JSON 结构，不能用标准 JSON 解析器直接读取带裸表达式的源文档。
+原生包包含两份 Schema、可编辑示例和接口说明。Schema 校验针对 Runtime 解析后的普通 JSON 结构，不能用标准 JSON 解析器直接读取带裸表达式的源文档。
 
 控制字段 `if/for/switch/set.value` 本轮仍使用结构化表达式；裸引用与 Pure 调用开放在任意节点 `args` 值及 `returns.<name>.value` 内。变量必须预先声明，循环默认提供当前层 `item/index`，switch 的 cases 数量可变。
 

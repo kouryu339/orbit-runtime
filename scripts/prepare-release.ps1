@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Prepare native Runtime release packages for Windows and Linux.
+  Prepare Runtime, standalone Svelte JS, and matching SDK release packages.
 
 .DESCRIPTION
   Builds, validates, and packages the Runtime FFI artifacts that SDKs download
@@ -11,6 +11,8 @@
   The script produces zip files under dist\releases:
     orbit-runtime-runtime-vX.Y.Z-windows-x86_64.zip
     orbit-runtime-runtime-vX.Y.Z-linux-x86_64.zip
+    orbit-runtime-frontend-svelte-vX.Y.Z.zip
+    orbit-runtime-sdk-vX.Y.Z.zip
 
   Each package contains:
     include\agent_runtime.h
@@ -35,6 +37,12 @@
 
 .PARAMETER SkipBuild
   Package artifacts already staged under dist\runtime without rebuilding.
+
+.PARAMETER FrontendOnly
+  Build and package only the standalone Svelte JS and its distribution archive.
+
+.PARAMETER SkipFrontendBuild
+  Reuse the already built and verified ui/svelte/dist-library output.
 
 .PARAMETER Clean
   Remove existing output and staging directories before packaging.
@@ -62,6 +70,10 @@ param(
 
     [switch]$SkipBuild,
 
+    [switch]$FrontendOnly,
+
+    [switch]$SkipFrontendBuild,
+
     [switch]$Clean
 )
 
@@ -72,6 +84,18 @@ $runtimeDist = Join-Path $repo 'dist\runtime'
 $stagingRoot = Join-Path $repo 'dist\release-staging'
 if (-not $OutputDir) {
     $OutputDir = Join-Path $repo 'dist\releases'
+}
+$OutputDir = [IO.Path]::GetFullPath($OutputDir)
+
+function Remove-GeneratedDirectory($path, $allowedRoot) {
+    $fullPath = [IO.Path]::GetFullPath($path)
+    $prefix = [IO.Path]::GetFullPath($allowedRoot).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "refusing to remove directory outside generated root: $fullPath"
+    }
+    if (Test-Path -LiteralPath $fullPath) {
+        Remove-Item -Recurse -Force -LiteralPath $fullPath
+    }
 }
 
 function Get-RuntimeVersion {
@@ -121,7 +145,7 @@ This package contains the native Runtime FFI library and the matching C header.
 Host SDKs should load the library from this package and call
 agent_runtime_abi_version_v1 before using the ABI.
 
-Workflow JSON schemas, examples, API documentation, and matching SDK sources
+Workflow JSON schemas, examples, and API documentation
 are included. Read docs/workflow-json-update.zh-CN.md for breaking changes.
 Public schemas: schemas/resource.schema.json and schemas/logic.schema.json.
 Source syntax: docs/zh/workflow-json-source-syntax.md (also available in en).
@@ -137,8 +161,9 @@ runtime.commit_skill_transaction. See docs/zh/14-skill-candidate-transactions.md
 (also available in en) and schemas/skill-transaction.schema.json.
 Existing Workflow edits become drafts; active runs block edits to their complete
 reference chain. Detect these features through capabilities rather than base version.
-Load this package's native library explicitly: SDK automatic downloads still
-refer to the published release and do not retrieve a local branch build.
+Matching SDK sources are distributed separately as $PackageName-sdk-$versionLabel.zip.
+Extract that archive's sdk directory here to use the included verification scripts.
+The Svelte frontend is a separate platform-independent release asset.
 See build-info.json for the source branch, commit, and dirty-worktree status.
 
 Artifacts:
@@ -210,6 +235,8 @@ function New-ReleasePackage($platform) {
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/skill-transaction.schema.json') (Join-Path $packageRoot 'schemas/skill-transaction.schema.json')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\workflow-json-update.zh-CN.md') (Join-Path $packageRoot 'docs\workflow-json-update.zh-CN.md')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
+    $releaseNotes = Join-Path $repo "agent_runtime_ffi/docs/releases/v$($Version.TrimStart('v'))/release-notes.md"
+    if (Test-Path -LiteralPath $releaseNotes) { Copy-RequiredFile $releaseNotes (Join-Path $packageRoot 'docs/release-notes.md') }
     foreach ($language in @('zh', 'en')) {
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\12-workflow-resource-api.md") (Join-Path $packageRoot "docs\$language\12-workflow-resource-api.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\13-dynamic-agent-clusters.md") (Join-Path $packageRoot "docs\$language\13-dynamic-agent-clusters.md")
@@ -219,11 +246,6 @@ function New-ReleasePackage($platform) {
     New-Directory (Join-Path $packageRoot 'examples\workflows')
     Get-ChildItem -LiteralPath (Join-Path $repo 'examples\workflows') -File | ForEach-Object {
         Copy-RequiredFile $_.FullName (Join-Path $packageRoot "examples\workflows\$($_.Name)")
-    }
-    $sdkFiles = @(git -C $repo ls-files -- sdk/runtime)
-    if ($LASTEXITCODE -ne 0 -or $sdkFiles.Count -eq 0) { throw 'could not enumerate Runtime SDK sources' }
-    foreach ($sdkFile in $sdkFiles) {
-        Copy-RequiredFile (Join-Path $repo $sdkFile) (Join-Path $packageRoot ("sdk/" + $sdkFile.Substring('sdk/runtime/'.Length)))
     }
     $nativePath = if ($platform -eq 'windows') { Join-Path $packageRoot 'bin\agent_runtime.dll' } else { Join-Path $packageRoot 'lib\libagent_runtime.so' }
     $buildInfo = [ordered]@{
@@ -239,7 +261,7 @@ function New-ReleasePackage($platform) {
         compiler_version = ([regex]::Match((Get-Content -Raw (Join-Path $repo 'corework/src/workflow/logic.rs')), 'COMPILER_VERSION: &str = "([^"]+)"')).Groups[1].Value
     }
     $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'build-info.json') -Encoding UTF8
-    $packagedArtifacts += @('schemas/', 'examples/workflows/', 'docs/', 'sdk/', 'build-info.json')
+    $packagedArtifacts += @('schemas/', 'examples/workflows/', 'docs/', 'build-info.json')
     Copy-RequiredFile (Join-Path $repo 'scripts/verify-workflow-json.py') (Join-Path $packageRoot 'scripts/verify-workflow-json.py')
     $packagedArtifacts += 'scripts/verify-workflow-json.py'
     Copy-RequiredFile (Join-Path $repo 'scripts/verify-dynamic-clusters.py') (Join-Path $packageRoot 'scripts\verify-dynamic-clusters.py')
@@ -268,18 +290,116 @@ function New-ReleasePackage($platform) {
     }
 }
 
+function Complete-Archive($root, $name, $platform) {
+    $zip = Join-Path $OutputDir "$name.zip"
+    if (Test-Path -LiteralPath $zip) { Remove-Item -Force -LiteralPath $zip }
+    Compress-Archive -LiteralPath $root -DestinationPath $zip -CompressionLevel Optimal
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$zip.sha256" -Encoding ASCII -Value "$hash  $name.zip"
+    [pscustomobject]@{ Platform = $platform; Package = $zip; Sha256 = "$zip.sha256" }
+}
+
+function New-FrontendPackage {
+    if (-not $SkipFrontendBuild) {
+        Push-Location (Join-Path $repo 'ui/lit')
+        try { & npm.cmd run build | Out-Host; if ($LASTEXITCODE -ne 0) { throw 'Lit contracts build failed' } }
+        finally { Pop-Location }
+        Push-Location (Join-Path $repo 'ui/svelte')
+        try {
+            & npm.cmd run check:styles | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'Svelte styles are stale' }
+            & npm.cmd run build:library | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'Svelte library build failed' }
+            & npm.cmd run verify:library | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'Svelte library verification failed' }
+        } finally { Pop-Location }
+    }
+    $name = "$PackageName-frontend-svelte-v$($Version.TrimStart('v'))"
+    $root = Join-Path $stagingRoot $name
+    Remove-GeneratedDirectory $root $stagingRoot
+    New-Directory $root
+    foreach ($file in @('orbit-conversation-svelte.js', 'THIRD_PARTY_NOTICES.txt')) {
+        Copy-RequiredFile (Join-Path $repo "ui/svelte/dist-library/$file") (Join-Path $root $file)
+    }
+    Copy-RequiredFile (Join-Path $repo 'ui/svelte/RELEASE-README.md') (Join-Path $root 'README.md')
+    foreach ($file in @('LICENSE', 'NOTICE')) { Copy-RequiredFile (Join-Path $repo $file) (Join-Path $root $file) }
+    $files = [ordered]@{}
+    Get-ChildItem -LiteralPath $root -File | ForEach-Object { $files[$_.Name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
+    [ordered]@{
+        schema = 'orbit-runtime-frontend/v1'
+        runtime_version = $Version.TrimStart('v')
+        entry = 'orbit-conversation-svelte.js'
+        format = 'esm'
+        styles = 'embedded'
+        commit = (git -C $repo rev-parse HEAD)
+        files = $files
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $root 'manifest.json') -Encoding UTF8
+    # Also expose the exact JS directly, without requiring archive extraction.
+    $js = Join-Path $OutputDir "$name.js"
+    Copy-RequiredFile (Join-Path $root 'orbit-conversation-svelte.js') $js
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $js).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$js.sha256" -Encoding ASCII -Value "$hash  $name.js"
+    Complete-Archive $root $name 'svelte-esm'
+}
+
+function New-SdkPackage {
+    $name = "$PackageName-sdk-v$($Version.TrimStart('v'))"
+    $root = Join-Path $stagingRoot $name
+    Remove-GeneratedDirectory $root $stagingRoot
+    New-Directory $root
+    $sdkFiles = @(git -C $repo ls-files -- sdk/runtime)
+    if ($LASTEXITCODE -ne 0 -or $sdkFiles.Count -eq 0) { throw 'could not enumerate Runtime SDK sources' }
+    foreach ($file in $sdkFiles) {
+        Copy-RequiredFile (Join-Path $repo $file) (Join-Path $root ("sdk/" + $file.Substring('sdk/runtime/'.Length)))
+    }
+    foreach ($file in @('LICENSE', 'NOTICE')) { Copy-RequiredFile (Join-Path $repo $file) (Join-Path $root $file) }
+    Complete-Archive $root $name 'sdk-sources'
+}
+
+function Update-SdkReleaseMetadata {
+    # SDK sources are outside native ZIPs so their pinned archive hashes cannot
+    # create a circular hash dependency.
+    $manifestPath = Join-Path $repo 'sdk/runtime/release_manifest.json'
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $oldVersion = $manifest.runtime_version
+    $newVersion = $Version.TrimStart('v')
+    $replacements = @{}
+    foreach ($platform in @('windows-x86_64', 'linux-x86_64')) {
+        $asset = $manifest.assets.$platform
+        $archive = "$PackageName-runtime-v$newVersion-$platform.zip"
+        $newHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $OutputDir $archive)).Hash.ToLowerInvariant()
+        $replacements[$asset.sha256] = $newHash
+        $asset.archive = $archive
+        $asset.sha256 = $newHash
+    }
+    foreach ($file in @(git -C $repo ls-files -- sdk/runtime)) {
+        if ($file -eq 'sdk/runtime/release_manifest.json') { continue }
+        $path = Join-Path $repo $file
+        $content = [IO.File]::ReadAllText($path)
+        $updated = $content.Replace($oldVersion, $newVersion)
+        foreach ($oldHash in $replacements.Keys) { $updated = $updated.Replace($oldHash, $replacements[$oldHash]) }
+        if ($updated -cne $content) { [IO.File]::WriteAllText($path, $updated, [Text.UTF8Encoding]::new($false)) }
+    }
+    $manifest.runtime_version = $newVersion
+    $manifest.release_tag = "v$newVersion"
+    $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+}
+
 Set-Location $repo
 
 if (-not $Version) {
     $Version = Get-RuntimeVersion
 }
+if ($Version -notmatch '^v?\d+\.\d+\.\d+([.-][A-Za-z0-9.-]+)?$' -or $PackageName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+    throw 'invalid version or package filename prefix'
+}
 
 if ($Clean) {
     if (Test-Path $OutputDir) {
-        Remove-Item -Recurse -Force -Path $OutputDir
+        Remove-GeneratedDirectory $OutputDir (Join-Path $repo 'dist')
     }
     if (Test-Path $stagingRoot) {
-        Remove-Item -Recurse -Force -Path $stagingRoot
+        Remove-GeneratedDirectory $stagingRoot (Join-Path $repo 'dist')
     }
 }
 
@@ -287,15 +407,22 @@ New-Directory $runtimeDist
 New-Directory $OutputDir
 New-Directory $stagingRoot
 
-if (-not $SkipBuild) {
+if (-not $SkipBuild -and -not $FrontendOnly) {
     & (Join-Path $PSScriptRoot 'build-runtime.ps1') -Targets $Targets -Release:$true
     if ($LASTEXITCODE -ne 0) {
         throw "runtime build failed ($LASTEXITCODE)"
     }
 }
 
-$results = foreach ($target in Get-SelectedTargets) {
-    New-ReleasePackage $target
+$results = @()
+if (-not $FrontendOnly) {
+    $results += foreach ($target in Get-SelectedTargets) { New-ReleasePackage $target }
+}
+$results += New-FrontendPackage
+if (-not $FrontendOnly) {
+    if ($Targets -eq 'all') { Update-SdkReleaseMetadata }
+    else { Write-Warning 'Single-platform preview: SDK download pins are unchanged; load the packaged library explicitly.' }
+    $results += New-SdkPackage
 }
 
 Write-Host ""

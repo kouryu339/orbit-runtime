@@ -16,6 +16,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "build": "vite build",
+    "build:library": "vite build --config vite.lib.config.ts",
+    "verify:library": "node scripts/verify-library.mjs",
     "check:styles": "node ../sync-svelte-styles.mjs --check"
   },
   "dependencies": {

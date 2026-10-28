@@ -64,3 +64,14 @@ state machine match Lit. Pass `composerController` for per-conversation settings
 and optional `transport.resume` for continue. Unsupported actions are disabled.
 See [the composer host contract](../lit/README.md#composer-controls); the demo
 implements those callbacks in memory, without changing Runtime DLL behavior.
+
+For a compiled browser ES module, run `npm run build:library` and
+`npm run verify:library`. The stable entry is
+`dist-library/orbit-conversation-svelte.js`; it bundles the rendering runtime,
+styles, and fonts. See [standalone integration](RELEASE-README.md).
+`npm run build` continues to build the acceptance website.
+
+The repository's `scripts/prepare-release.ps1` includes this frontend in every
+Runtime release. `-FrontendOnly` builds just the frontend; a complete
+`-Targets all` release also refreshes SDK download versions and hashes and
+creates a separate SDK source archive after the native archives are finalized.

@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["svelte", "node"]
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "vite.config.ts", "vite.lib.config.ts"]
 }
