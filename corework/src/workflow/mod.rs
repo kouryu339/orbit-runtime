@@ -14,6 +14,7 @@ pub mod compiler;
 pub mod core;
 pub mod execution;
 pub mod interface;
+pub mod logic;
 pub mod nodes;
 pub mod pure_function_codec;
 pub mod registry;

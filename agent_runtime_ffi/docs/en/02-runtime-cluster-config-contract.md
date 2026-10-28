@@ -1,5 +1,7 @@
 # 2 Runtime Create Options Contract
 
+For post-start cluster additions and updates, see [Dynamic agent clusters](./13-dynamic-agent-clusters.md). The primary Agent must bind a Role Skill, and any live conversation of the cluster blocks updates. Resources and tool endpoint registration remain frozen after start.
+
 This document describes the current `agent-runtime-create-options/v1`
 boundary. Runtime is an agent engine; it does not own business knowledge bases,
 Redis, MQ, HTTP SSE, cross-pod owner leases, or the full lifecycle of a vector

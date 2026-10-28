@@ -413,6 +413,7 @@ impl Conversation {
         session_id: &str,
         snapshots: &[AgentSnapshot],
     ) -> Result<()> {
+        let _admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
         let default_agent_id = self.cluster.default_agent_id().to_string();
         for snapshot in snapshots {
             // The default agent is initialized by AIAssistant; avoid rebuilding it.
@@ -470,6 +471,7 @@ impl Conversation {
             };
             let sm_cache = sm.unit().cache();
             crate::agent::set_conversation_id_in_cache(&*sm_cache, &self.conversation_id).await?;
+            crate::skills::usage::track(&sm_cache);
 
             sm.start()
                 .await

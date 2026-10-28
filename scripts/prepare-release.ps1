@@ -121,6 +121,26 @@ This package contains the native Runtime FFI library and the matching C header.
 Host SDKs should load the library from this package and call
 agent_runtime_abi_version_v1 before using the ABI.
 
+Workflow JSON schemas, examples, API documentation, and matching SDK sources
+are included. Read docs/workflow-json-update.zh-CN.md for breaking changes.
+Public schemas: schemas/resource.schema.json and schemas/logic.schema.json.
+Source syntax: docs/zh/workflow-json-source-syntax.md (also available in en).
+Distribute these files with the native library. Schemas describe normalized
+structures; validate authored source through workflow.validate.
+Old script APIs and both standalone Studio pages are disabled.
+Dynamic clusters: runtime.add_agent_cluster / runtime.update_agent_cluster.
+Updates require all cluster conversations to be closed. Read
+docs/zh/13-dynamic-agent-clusters.md (also available in en) and
+docs/dynamic-clusters-update.zh-CN.md for the contract and local build notes.
+Skill candidate transactions: runtime.read_skill / runtime.validate_skill_transaction /
+runtime.commit_skill_transaction. See docs/zh/14-skill-candidate-transactions.md
+(also available in en) and schemas/skill-transaction.schema.json.
+Existing Workflow edits become drafts; active runs block edits to their complete
+reference chain. Detect these features through capabilities rather than base version.
+Load this package's native library explicitly: SDK automatic downloads still
+refer to the published release and do not retrieve a local branch build.
+See build-info.json for the source branch, commit, and dirty-worktree status.
+
 Artifacts:
 $artifactLines
 
@@ -141,7 +161,12 @@ function New-ReleasePackage($platform) {
     $zipPath = Join-Path $OutputDir "$packageRootName.zip"
 
     if (Test-Path $packageRoot) {
-        Remove-Item -Recurse -Force -Path $packageRoot
+        $resolvedStage = [IO.Path]::GetFullPath($packageRoot)
+        $stagePrefix = [IO.Path]::GetFullPath($stagingRoot).TrimEnd('\') + '\'
+        if (-not $resolvedStage.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "staging path escaped its root: $resolvedStage"
+        }
+        Remove-Item -Recurse -Force -LiteralPath $resolvedStage
     }
     New-Directory $packageRoot
 
@@ -178,6 +203,49 @@ function New-ReleasePackage($platform) {
             (Join-Path $packageRoot 'lib\libagent_runtime.so')
         $packagedArtifacts += 'lib/libagent_runtime.so'
     }
+
+    foreach ($schema in @('logic.schema.json', 'resource.schema.json')) {
+        Copy-RequiredFile (Join-Path $repo "corework\src\workflow\$schema") (Join-Path $packageRoot "schemas\$schema")
+    }
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/skill-transaction.schema.json') (Join-Path $packageRoot 'schemas/skill-transaction.schema.json')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\workflow-json-update.zh-CN.md') (Join-Path $packageRoot 'docs\workflow-json-update.zh-CN.md')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
+    foreach ($language in @('zh', 'en')) {
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\12-workflow-resource-api.md") (Join-Path $packageRoot "docs\$language\12-workflow-resource-api.md")
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\13-dynamic-agent-clusters.md") (Join-Path $packageRoot "docs\$language\13-dynamic-agent-clusters.md")
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/14-skill-candidate-transactions.md") (Join-Path $packageRoot "docs/$language/14-skill-candidate-transactions.md")
+        Copy-RequiredFile (Join-Path $repo "ai-assistant\prompts\$language\workflow_tool_rules.md") (Join-Path $packageRoot "docs\$language\workflow-json-source-syntax.md")
+    }
+    New-Directory (Join-Path $packageRoot 'examples\workflows')
+    Get-ChildItem -LiteralPath (Join-Path $repo 'examples\workflows') -File | ForEach-Object {
+        Copy-RequiredFile $_.FullName (Join-Path $packageRoot "examples\workflows\$($_.Name)")
+    }
+    $sdkFiles = @(git -C $repo ls-files -- sdk/runtime)
+    if ($LASTEXITCODE -ne 0 -or $sdkFiles.Count -eq 0) { throw 'could not enumerate Runtime SDK sources' }
+    foreach ($sdkFile in $sdkFiles) {
+        Copy-RequiredFile (Join-Path $repo $sdkFile) (Join-Path $packageRoot ("sdk/" + $sdkFile.Substring('sdk/runtime/'.Length)))
+    }
+    $nativePath = if ($platform -eq 'windows') { Join-Path $packageRoot 'bin\agent_runtime.dll' } else { Join-Path $packageRoot 'lib\libagent_runtime.so' }
+    $buildInfo = [ordered]@{
+        schema = 'orbit-runtime-build/v1'
+        runtime_version = $Version.TrimStart('v')
+        platform = $platformId
+        branch = (git -C $repo branch --show-current)
+        commit = (git -C $repo rev-parse HEAD)
+        worktree_dirty = [bool](@(git -C $repo status --porcelain --untracked-files=normal).Count)
+        built_utc = [DateTime]::UtcNow.ToString('o')
+        native_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $nativePath).Hash.ToLowerInvariant()
+        workflow_schema = 'orbit.workflow.resource/v1'
+        compiler_version = ([regex]::Match((Get-Content -Raw (Join-Path $repo 'corework/src/workflow/logic.rs')), 'COMPILER_VERSION: &str = "([^"]+)"')).Groups[1].Value
+    }
+    $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'build-info.json') -Encoding UTF8
+    $packagedArtifacts += @('schemas/', 'examples/workflows/', 'docs/', 'sdk/', 'build-info.json')
+    Copy-RequiredFile (Join-Path $repo 'scripts/verify-workflow-json.py') (Join-Path $packageRoot 'scripts/verify-workflow-json.py')
+    $packagedArtifacts += 'scripts/verify-workflow-json.py'
+    Copy-RequiredFile (Join-Path $repo 'scripts/verify-dynamic-clusters.py') (Join-Path $packageRoot 'scripts\verify-dynamic-clusters.py')
+    $packagedArtifacts += 'scripts/verify-dynamic-clusters.py'
+    Copy-RequiredFile (Join-Path $repo 'scripts/verify-runtime-transactions.py') (Join-Path $packageRoot 'scripts/verify-runtime-transactions.py')
+    $packagedArtifacts += 'scripts/verify-runtime-transactions.py'
 
     Write-PackageReadme `
         (Join-Path $packageRoot 'README.md') `

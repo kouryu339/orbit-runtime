@@ -10,11 +10,12 @@ use corework::rpc_tool::RuntimeToolMetadata;
 use corework::system::SystemOperation;
 use corework::workflow::execution::WorkflowToAiMode;
 use corework::workflow::workflows::executor::{WorkflowExecutionContext, WorkflowExecutionOutcome};
-use corework::workflow::workflows::{
-    WorkflowEditorSession, WorkflowResourceKind, WorkflowValidation, WorkflowsModule,
-};
+#[cfg(test)]
+use corework::workflow::workflows::WorkflowValidation;
+use corework::workflow::workflows::{WorkflowEditorSession, WorkflowResourceKind, WorkflowsModule};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
@@ -198,6 +199,7 @@ fn parse_inputs(args: &SimpleArgs, reserved: &[&str]) -> Result<HashMap<String, 
     }
 }
 
+#[cfg(test)]
 async fn compile_script(
     script: &str,
     ctx: &Context,
@@ -214,6 +216,7 @@ async fn compile_script(
     .map_err(|error| compile_error_output(&error))
 }
 
+#[cfg(test)]
 fn compile_error_output(error: &corework::workflow::chain_compiler::ChainError) -> AIOutput {
     let mut validation = WorkflowValidation::from_compile_error(error);
     for diagnostic in &mut validation.diagnostics {
@@ -259,15 +262,12 @@ fn execution_output(
 
 #[define_operation(
     name = "listWorkflows",
-    display_name = "列出{kind}工作流{workflows}",
-    category = "Workflow",
-    description = "List unified Workflow catalog resources. kind may be all, draft, or registered.",
-    params { kind: "String@Optional: all, draft, or registered." },
-    outputs { workflows: "Array@Workflow summaries with id, kind, revision, trust, and validation." },
-    destructive = false,
-    readonly = true,
-    idempotent = true,
-    open_world = false
+    workflow_enabled = false,
+    display_name = "列出工作流{kind}并返回{workflows}", category = "Workflow",
+    description = "List accepted Workflow resources, including drafts and registered workflows. Returns identity, metadata, state, revision and validation summary; does not return source or execute nodes.",
+    params { kind: "String@Optional filter: all, draft, or registered. Defaults to all." },
+    outputs { workflows: "Array@Workflow resource summaries with stable ids, state and revision." },
+    destructive = false, readonly = true, idempotent = true, open_world = false
 )]
 pub struct ListWorkflows;
 
@@ -298,77 +298,15 @@ impl SystemOperation for ListWorkflows {
     }
 }
 
-#[define_operation(
-    name = "readWorkflow",
-    display_name = "读取工作流{workflow_id}并返回资源{workflow}",
-    category = "Workflow",
-    description = "Read a Draft or Registered Workflow from the unified catalog by stable id.",
-    params { workflow_id: "String@Stable Workflow resource id. Required." },
-    outputs { workflow: "Object@Complete Workflow resource view including script and blueprint." },
-    destructive = false,
-    readonly = true,
-    idempotent = true,
-    open_world = false
+#[cfg(test)]
+#[deprecated(
+    note = "Legacy script API is disabled externally; retained only for compatibility tests."
 )]
-pub struct ReadWorkflow;
+#[derive(Default)]
+pub(crate) struct CreateWorkflowDraft;
 
-#[async_trait]
-impl SystemOperation for ReadWorkflow {
-    type Input = AIInput;
-    type Output = AIOutput;
-    type Error = FrameworkError;
-
-    async fn execute(&self, input: AIInput, ctx: &Context) -> Result<AIOutput, FrameworkError> {
-        let args = match input.safe_parse_args() {
-            Ok(args) => args,
-            Err(error) => return Ok(error),
-        };
-        let id = match args.safe_require("workflow_id") {
-            Ok(id) => id,
-            Err(error) => return Ok(error),
-        };
-        let resource = match workflows(ctx)?.read_workflow_resource(&id) {
-            Ok(resource) => resource,
-            Err(error) => return Ok(AIOutput::error(404, error.to_string())),
-        };
-        sync_selection(ctx, &resource.summary.id, resource.summary.revision);
-        Ok(AIOutput::success(
-            json!({
-                "workflow": serde_json::to_value(&resource)
-                    .map_err(FrameworkError::SerializationError)?
-            }),
-            format!(
-                "Read Workflow '{}' at revision {}.{}",
-                resource.summary.name, resource.summary.revision,
-                resource.reference_script.as_ref().map(|script| format!("\nRegistered workflow reference script (direct parameter names):\n```workflow\n{script}\n```" )).unwrap_or_default()
-            ),
-        ))
-    }
-
-    fn name(&self) -> &str {
-        "readWorkflow"
-    }
-}
-
-#[define_operation(
-    name = "createWorkflowDraft",
-    display_name = "用脚本{script}和说明{description}创建标识{workflow_id}的工作流草稿{name}并返回{workflow}",
-    category = "Workflow",
-    description = "Compile a complete script and create an untrusted Draft in the unified Workflow catalog.",
-    params {
-        name: "String@Globally unique display name. Required.",
-        workflow_id: "String@Optional requested stable id.",
-        description: "String@Optional description.",
-        script: "String@Complete Workflow v2 script. Required."
-    },
-    outputs { workflow: "Object@Created Draft resource." },
-    destructive = false,
-    readonly = false,
-    idempotent = false,
-    open_world = false
-)]
-pub struct CreateWorkflowDraft;
-
+#[cfg(test)]
+#[allow(deprecated)]
 #[async_trait]
 impl SystemOperation for CreateWorkflowDraft {
     type Input = AIInput;
@@ -429,26 +367,15 @@ impl SystemOperation for CreateWorkflowDraft {
     }
 }
 
-#[define_operation(
-    name = "updateWorkflow",
-    display_name = "用脚本{script}和说明{description}将工作流{workflow_id}的版本{expected_revision}更新为{name}并返回{workflow}",
-    category = "Workflow",
-    description = "Compile and update a Draft or Registered Workflow using optimistic revision control.",
-    params {
-        workflow_id: "String@Stable Workflow resource id. Required.",
-        expected_revision: "u64@Current revision. Required.",
-        name: "String@Optional replacement display name.",
-        description: "String@Optional replacement description.",
-        script: "String@Complete replacement Workflow v2 script. Required."
-    },
-    outputs { workflow: "Object@Updated Workflow resource." },
-    destructive = false,
-    readonly = false,
-    idempotent = false,
-    open_world = false
+#[cfg(test)]
+#[deprecated(
+    note = "Legacy script API is disabled externally; retained only for compatibility tests."
 )]
-pub struct UpdateWorkflow;
+#[derive(Default)]
+pub(crate) struct UpdateWorkflow;
 
+#[cfg(test)]
+#[allow(deprecated)]
 #[async_trait]
 impl SystemOperation for UpdateWorkflow {
     type Input = AIInput;
@@ -520,23 +447,13 @@ impl SystemOperation for UpdateWorkflow {
     }
 }
 
-#[define_operation(
-    name = "compileWorkflow",
-    display_name = "编译工作流{workflow_id}或脚本{script}并返回蓝图{blueprint}",
-    category = "Workflow",
-    description = "Compile script text, or inspect the compiled validation and blueprint of a catalog resource.",
-    params {
-        workflow_id: "String@Stable resource id when compiling a catalog resource.",
-        script: "String@Complete Workflow v2 script when compiling temporary text."
-    },
-    outputs { blueprint: "Object@Compiled BlueprintJson and validation." },
-    destructive = false,
-    readonly = true,
-    idempotent = true,
-    open_world = false
-)]
-pub struct CompileWorkflow;
+#[cfg(test)]
+#[deprecated(note = "Legacy Workflow API is no longer exposed.")]
+#[derive(Default)]
+pub(crate) struct CompileWorkflow;
 
+#[cfg(test)]
+#[allow(deprecated)]
 #[async_trait]
 impl SystemOperation for CompileWorkflow {
     type Input = AIInput;
@@ -548,17 +465,10 @@ impl SystemOperation for CompileWorkflow {
             Ok(args) => args,
             Err(error) => return Ok(error),
         };
-        if let Some(script) = args
-            .get("script")
-            .filter(|script| !script.trim().is_empty())
-        {
-            let blueprint = match compile_script(script, ctx).await {
-                Ok(blueprint) => blueprint,
-                Err(error) => return Ok(error),
-            };
-            return Ok(AIOutput::success(
-                json!({ "validation": WorkflowValidation::valid(), "blueprint": blueprint }),
-                "Workflow script compiled successfully.".to_string(),
+        if args.get("script").is_some() {
+            return Ok(AIOutput::error(
+                410,
+                "Legacy script compilation is deprecated and disabled; supply workflow_id.",
             ));
         }
         let id = match args.safe_require("workflow_id") {
@@ -590,14 +500,14 @@ impl SystemOperation for CompileWorkflow {
 }
 
 #[define_operation(
-    name = "registerWorkflow",
-    display_name = "将草稿{workflow_id}的版本{expected_revision}注册为{name}并返回{workflow}",
+    name = "promoteWorkflow",
+    workflow_enabled = false,
+    display_name = "将工作流{workflow_id}的版本{expected_revision}转正并返回{workflow}",
     category = "Workflow",
     description = "Promote a valid Draft to a trusted Registered Workflow using optimistic revision control.",
     params {
-        workflow_id: "String@Stable Draft id. Required.",
-        expected_revision: "u64@Current Draft revision. Required.",
-        name: "String@Optional registered display name."
+        workflow_id: "String@Stable Workflow resource id. Required.",
+        expected_revision: "u64@Current revision. Required."
     },
     outputs { workflow: "Object@Registered Workflow resource." },
     destructive = true,
@@ -605,10 +515,10 @@ impl SystemOperation for CompileWorkflow {
     idempotent = false,
     open_world = false
 )]
-pub struct RegisterWorkflow;
+pub struct PromoteWorkflow;
 
 #[async_trait]
-impl SystemOperation for RegisterWorkflow {
+impl SystemOperation for PromoteWorkflow {
     type Input = AIInput;
     type Output = AIOutput;
     type Error = FrameworkError;
@@ -627,13 +537,7 @@ impl SystemOperation for RegisterWorkflow {
             Err(error) => return Ok(error),
         };
         let resource = match workflows(ctx)?
-            .register_draft_resource(
-                &id,
-                Some(revision),
-                args.get("name")
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty()),
-            )
+            .register_draft_resource(&id, Some(revision), None)
             .await
         {
             Ok(resource) => resource,
@@ -653,12 +557,13 @@ impl SystemOperation for RegisterWorkflow {
     }
 
     fn name(&self) -> &str {
-        "registerWorkflow"
+        "promoteWorkflow"
     }
 }
 
 #[define_operation(
-    name = "deleteWorkflow",
+    name = "removeWorkflow",
+    workflow_enabled = false,
     display_name = "删除工作流{workflow_id}的版本{expected_revision}并返回{workflow}",
     category = "Workflow",
     description = "Delete a Draft or Registered Workflow using optimistic revision control.",
@@ -672,10 +577,10 @@ impl SystemOperation for RegisterWorkflow {
     idempotent = false,
     open_world = false
 )]
-pub struct DeleteWorkflow;
+pub struct RemoveWorkflow;
 
 #[async_trait]
-impl SystemOperation for DeleteWorkflow {
+impl SystemOperation for RemoveWorkflow {
     type Input = AIInput;
     type Output = AIOutput;
     type Error = FrameworkError;
@@ -711,7 +616,7 @@ impl SystemOperation for DeleteWorkflow {
     }
 
     fn name(&self) -> &str {
-        "deleteWorkflow"
+        "removeWorkflow"
     }
 }
 
@@ -754,25 +659,13 @@ async fn execute_resource(
     }
 }
 
-#[define_operation(
-    name = "testWorkflow",
-    workflow_enabled = false,
-    display_name = "测试工作流{workflow_id}并用{inputs}返回输出{outputs}和追踪{trace}",
-    category = "Workflow",
-    description = "Test a Draft or Registered Workflow. Inputs use --input.<name> and trace is optional.",
-    params {
-        workflow_id: "String@Stable Workflow resource id. Required.",
-        trace: "bool@Include structured trace when true.",
-        inputs: "String@Marker: pass Workflow inputs as --input.<name>."
-    },
-    outputs { outputs: "Object@Workflow return values.", trace: "Array@Structured node trace when requested or failed." },
-    destructive = false,
-    readonly = false,
-    idempotent = false,
-    open_world = true
-)]
-pub struct TestWorkflow;
+#[cfg(test)]
+#[deprecated(note = "Legacy Workflow API is no longer exposed.")]
+#[derive(Default)]
+pub(crate) struct TestWorkflow;
 
+#[cfg(test)]
+#[allow(deprecated)]
 #[async_trait]
 impl SystemOperation for TestWorkflow {
     type Input = AIInput;
@@ -803,11 +696,11 @@ impl SystemOperation for TestWorkflow {
 #[define_operation(
     name = "executeWorkflow",
     workflow_enabled = false,
-    display_name = "执行已注册工作流{workflow_id}并用{inputs}返回输出{outputs}和追踪{trace}",
+    display_name = "执行已转正工作流{workflow_id}并用{inputs}返回输出{outputs}和追踪{trace}",
     category = "Workflow",
-    description = "Execute a trusted Registered Workflow by stable id. Inputs use --input.<name>.",
+    description = "Execute a trusted Workflow by stable id; its JSON state determines draft or production execution. Inputs use --input.<name>.",
     params {
-        workflow_id: "String@Stable Registered Workflow id. Required.",
+        workflow_id: "String@Stable Workflow resource id. Required.",
         trace: "bool@Include structured trace when true.",
         inputs: "String@Marker: pass Workflow inputs as --input.<name>."
     },
@@ -834,16 +727,6 @@ impl SystemOperation for ExecuteWorkflow {
             Ok(id) => id,
             Err(error) => return Ok(error),
         };
-        let resource = match workflows(ctx)?.read_workflow_resource(&id) {
-            Ok(resource) => resource,
-            Err(error) => return Ok(AIOutput::error(404, error.to_string())),
-        };
-        if resource.summary.kind != WorkflowResourceKind::Registered {
-            return Ok(AIOutput::error(
-                400,
-                "executeWorkflow only accepts Registered resources; use testWorkflow for Drafts",
-            ));
-        }
         let inputs = match parse_inputs(&args, &["workflow_id", "trace", "inputs"]) {
             Ok(inputs) => inputs,
             Err(error) => return Ok(error),
@@ -856,25 +739,15 @@ impl SystemOperation for ExecuteWorkflow {
     }
 }
 
-#[define_operation(
-    name = "executeWorkflowScript",
-    workflow_enabled = false,
-    display_name = "执行临时工作流脚本{script}并用{inputs}返回输出{outputs}和追踪{trace}",
-    category = "Workflow",
-    description = "Compile and execute temporary Workflow v2 script without creating a catalog resource.",
-    params {
-        script: "String@Complete Workflow v2 script. Required.",
-        trace: "bool@Include structured trace when true.",
-        inputs: "String@Marker: pass Workflow inputs as --input.<name>."
-    },
-    outputs { outputs: "Object@Workflow return values.", trace: "Array@Structured node trace when requested or failed." },
-    destructive = true,
-    readonly = false,
-    idempotent = false,
-    open_world = true
+#[cfg(test)]
+#[deprecated(
+    note = "Legacy script API is disabled externally; retained only for compatibility tests."
 )]
-pub struct ExecuteWorkflowScript;
+#[derive(Default)]
+pub(crate) struct ExecuteWorkflowScript;
 
+#[cfg(test)]
+#[allow(deprecated)]
 #[async_trait]
 impl SystemOperation for ExecuteWorkflowScript {
     type Input = AIInput;
@@ -918,7 +791,103 @@ impl SystemOperation for ExecuteWorkflowScript {
     }
 }
 
+#[define_operation(
+    name = "registerWorkflow",
+    workflow_enabled = false,
+    display_name = "注册工作流文档{source}并返回{workflow}", category = "Workflow",
+    description = "Register or replace a complete orbit.workflow.resource/v1 source document. JSON state selects draft or registered; revision is the expected current version, or 1 for a new identity. Existing state transitions require promoteWorkflow.",
+    params { source: "String@Complete resource source text, including metadata, state, revision and logic. Required." },
+    outputs { workflow: "Object@Accepted identity, state, revision, metadata and validation summary." },
+    destructive = true, readonly = false, idempotent = false, open_world = false
+)]
+pub struct RegisterWorkflow;
+
+#[async_trait]
+impl SystemOperation for RegisterWorkflow {
+    type Input = AIInput;
+    type Output = AIOutput;
+    type Error = FrameworkError;
+    async fn execute(&self, input: AIInput, ctx: &Context) -> Result<AIOutput, FrameworkError> {
+        resource_source_operation(input, ctx, true).await
+    }
+    fn name(&self) -> &str {
+        "registerWorkflow"
+    }
+}
+
+#[define_operation(
+    name = "validateWorkflow",
+    workflow_enabled = false,
+    display_name = "验证工作流文档{source}并返回{validation}", category = "Workflow",
+    description = "Statically validate a complete resource source document, tool contracts and references without saving or executing it. No prior draft is required.",
+    params { source: "String@Complete orbit.workflow.resource/v1 source text. Required." },
+    outputs { validation: "Object@Validation result with identity, state, revision and input/output contracts." },
+    destructive = false, readonly = true, idempotent = true, open_world = false
+)]
+pub struct ValidateWorkflow;
+
+#[async_trait]
+impl SystemOperation for ValidateWorkflow {
+    type Input = AIInput;
+    type Output = AIOutput;
+    type Error = FrameworkError;
+    async fn execute(&self, input: AIInput, ctx: &Context) -> Result<AIOutput, FrameworkError> {
+        resource_source_operation(input, ctx, false).await
+    }
+    fn name(&self) -> &str {
+        "validateWorkflow"
+    }
+}
+
+async fn resource_source_operation(
+    input: AIInput,
+    ctx: &Context,
+    commit: bool,
+) -> Result<AIOutput, FrameworkError> {
+    let args = match input.safe_parse_args() {
+        Ok(args) => args,
+        Err(error) => return Ok(error),
+    };
+    let source = match args.safe_require("source") {
+        Ok(value) => value,
+        Err(error) => return Ok(error),
+    };
+    let tools = match active_runtime_tools(ctx).await {
+        Ok(tools) => tools,
+        Err(error) => return Ok(error),
+    };
+    match workflows(ctx)?
+        .register_logic_resource(&source, &tools, commit)
+        .await
+    {
+        Ok(result) => {
+            if commit {
+                sync_selection(
+                    ctx,
+                    result["id"].as_str().unwrap(),
+                    result["revision"].as_u64().unwrap(),
+                );
+            }
+            let output = if commit {
+                json!({"workflow":result})
+            } else {
+                json!({"validation":result})
+            };
+            Ok(AIOutput::success(
+                output,
+                if commit {
+                    "Workflow resource registered."
+                } else {
+                    "Workflow source is valid; no changes saved."
+                },
+            ))
+        }
+        Err(error) => Ok(AIOutput::error(400, error.to_string())),
+    }
+}
+
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     #[test]
     fn compile_errors_reach_both_ai_transports_as_structured_diagnostics() {
@@ -992,6 +961,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_workflow_tool_preserves_agent_origin_context() {
+        let _guard = crate::test_support::global_test_guard().await;
         let (ctx, _unit, _workflows, _selection) = test_context();
         let ctx = ctx.with_conversation_id("conversation-1");
         ctx.cache
@@ -1083,7 +1053,7 @@ mod tests {
         assert_eq!(tested.error_code, 0, "{}", tested.to_ai);
         assert_eq!(tested.result["outputs"]["result"], "Ada");
 
-        let registered = RegisterWorkflow
+        let registered = PromoteWorkflow
             .execute(
                 input(&[("workflow_id", "echo-flow"), ("expected_revision", "2")]),
                 &ctx,
@@ -1104,7 +1074,7 @@ mod tests {
         assert_eq!(executed.error_code, 0, "{}", executed.to_ai);
         assert_eq!(executed.result["outputs"]["result"], "Grace");
 
-        let deleted = DeleteWorkflow
+        let deleted = RemoveWorkflow
             .execute(
                 input(&[("workflow_id", "echo-flow"), ("expected_revision", "3")]),
                 &ctx,
@@ -1170,10 +1140,164 @@ mod tests {
 
     #[test]
     fn workflow_execution_tools_are_destructive() {
-        for tool in ["executeWorkflow", "executeWorkflowScript"] {
+        for tool in ["executeWorkflow"] {
             let metadata = crate::tool_runner::permission_metadata(tool).unwrap();
             assert_eq!(metadata.effect, crate::ToolEffect::Destructive, "{tool}");
         }
+    }
+
+    #[test]
+    fn workflow_tool_catalog_contains_exactly_six_operations() {
+        let mut names = inventory::iter::<corework::ai_system::AISystemFactory>
+            .into_iter()
+            .filter(|factory| {
+                factory
+                    .metadata
+                    .name
+                    .to_ascii_lowercase()
+                    .contains("workflow")
+            })
+            .map(|factory| factory.metadata.name)
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec![
+                "executeWorkflow",
+                "listWorkflows",
+                "promoteWorkflow",
+                "registerWorkflow",
+                "removeWorkflow",
+                "validateWorkflow"
+            ]
+        );
+        assert_eq!(
+            crate::tool_runner::permission_metadata("validateWorkflow")
+                .unwrap()
+                .effect,
+            crate::ToolEffect::ReadOnly
+        );
+        assert_eq!(
+            crate::tool_runner::permission_metadata("listWorkflows")
+                .unwrap()
+                .effect,
+            crate::ToolEffect::ReadOnly
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_tools_list_validate_register_execute_promote_and_remove_documents() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let (ctx, _unit, module, _) = test_context();
+        let source = r#"{"schema":"orbit.workflow.resource/v1","id":"logic-flow","metadata":{"name":"Logic Flow","description":"Echo","extensions":{}},"state":"draft","revision":1,"logic":{"schema":"orbit.workflow.logic/v1","inputs":{"name":{"type":"String"}},"steps":[],"returns":{"result":{"value":input.name}}}}"#;
+        let validation = ValidateWorkflow
+            .execute(input(&[("source", source)]), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(validation.error_code, 0, "{}", validation.to_ai);
+        assert!(module.list_workflow_catalog(None).unwrap().is_empty());
+        let registered = RegisterWorkflow
+            .execute(input(&[("source", source)]), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(registered.error_code, 0, "{}", registered.to_ai);
+        assert_eq!(registered.result["workflow"]["state"], "draft");
+        let listed = ListWorkflows
+            .execute(input(&[("kind", "draft")]), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(listed.error_code, 0);
+        assert_eq!(listed.result["workflows"][0]["id"], "logic-flow");
+        assert_eq!(listed.result["workflows"][0]["revision"], 1);
+        assert!(ListWorkflows
+            .execute(input(&[("kind", "registered")]), &ctx)
+            .await
+            .unwrap()
+            .result["workflows"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let executed = ExecuteWorkflow
+            .execute(
+                input(&[("workflow_id", "logic-flow"), ("input.name", "Draft")]),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(executed.result["outputs"]["result"], "Draft");
+        let invalid = source.replace("input.name", "missing(1)");
+        assert_ne!(
+            RegisterWorkflow
+                .execute(input(&[("source", &invalid)]), &ctx)
+                .await
+                .unwrap()
+                .error_code,
+            0
+        );
+        assert_eq!(
+            module
+                .read_workflow_resource("logic-flow")
+                .unwrap()
+                .summary
+                .revision,
+            1
+        );
+        let changed_state = source.replace("\"state\":\"draft\"", "\"state\":\"registered\"");
+        assert!(module
+            .register_logic_resource(&changed_state, &[], true)
+            .await
+            .is_err());
+        let (first, second) = tokio::join!(
+            module.register_logic_resource(source, &[], true),
+            module.register_logic_resource(source, &[], true),
+        );
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let promoted = PromoteWorkflow
+            .execute(
+                input(&[("workflow_id", "logic-flow"), ("expected_revision", "2")]),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(promoted.error_code, 0, "{}", promoted.to_ai);
+        assert_eq!(promoted.result["workflow"]["revision"], 3);
+        let listed = ListWorkflows
+            .execute(input(&[("kind", "registered")]), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(listed.result["workflows"][0]["kind"], "registered");
+        assert_eq!(listed.result["workflows"][0]["revision"], 3);
+        assert_ne!(
+            ListWorkflows
+                .execute(input(&[("kind", "invalid")]), &ctx)
+                .await
+                .unwrap()
+                .error_code,
+            0
+        );
+        let removed = RemoveWorkflow
+            .execute(
+                input(&[("workflow_id", "logic-flow"), ("expected_revision", "3")]),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.error_code, 0, "{}", removed.to_ai);
+        assert!(module.list_workflow_catalog(None).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn compile_tool_rejects_script_even_with_resource_id() {
+        let _guard = crate::test_support::global_test_guard().await;
+        let (ctx, _unit, _workflows, _selection) = test_context();
+        let output = CompileWorkflow
+            .execute(
+                input(&[("script", "return"), ("workflow_id", "existing")]),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(output.error_code, 410);
     }
 
     #[tokio::test]

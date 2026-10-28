@@ -649,16 +649,36 @@ public:
         invoke("runtime.register_resources", registration_payload(registration_json));
     }
 
+    std::string register_workflow(const std::string& source)
+    {
+        return invoke("workflow.register", std::string("{\"source\":") + detail::quote(source) + "}");
+    }
+    std::string validate_workflow(const std::string& source)
+    {
+        return invoke("workflow.validate", std::string("{\"source\":") + detail::quote(source) + "}");
+    }
+    std::string promote_workflow(const std::string& id, uint64_t expected_revision)
+    {
+        return invoke("workflow.promote", std::string("{\"id\":") + detail::quote(id) + ",\"expected_revision\":" + std::to_string(expected_revision) + "}");
+    }
+    std::string remove_workflow(const std::string& id, uint64_t expected_revision)
+    {
+        return invoke("workflow.remove", std::string("{\"id\":") + detail::quote(id) + ",\"expected_revision\":" + std::to_string(expected_revision) + "}");
+    }
+
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string create_workflow_draft(const std::string& resource_json)
     {
         return invoke("workflow.create", std::string("{\"resource\":") + object_or_empty(resource_json) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string read_workflow(const std::string& id)
     {
         return invoke("workflow.read", std::string("{\"id\":") + detail::quote(id) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string register_workflow_draft(
         const std::string& id,
         std::optional<uint64_t> expected_revision = std::nullopt,
@@ -670,6 +690,7 @@ public:
         return invoke("workflow.register", payload + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string revise_workflow(const std::string& id, uint64_t expected_revision, const std::string& change_json,
         const std::optional<std::string>& name = std::nullopt, const std::optional<std::string>& description = std::nullopt)
     {
@@ -679,6 +700,7 @@ public:
         return invoke("workflow.revise", payload + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string validate_workflow_revision(const std::string& id, uint64_t expected_revision, const std::string& change_json,
         const std::optional<std::string>& name = std::nullopt, const std::optional<std::string>& description = std::nullopt)
     {
@@ -688,7 +710,7 @@ public:
         return invoke("workflow.validate_revision", payload + "}");
     }
 
-    [[deprecated("use revise_workflow")]] std::string update_workflow(
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]] std::string update_workflow(
         const std::string& resource_json,
         std::optional<uint64_t> expected_revision = std::nullopt)
     {
@@ -697,21 +719,25 @@ public:
         return invoke("workflow.update", payload + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string compile_workflow_draft(const std::string& id)
     {
         return invoke("workflow.compile", std::string("{\"id\":") + detail::quote(id) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string workflow_script_to_blueprint(const std::string& script)
     {
         return invoke("workflow.convert.script_to_blueprint", std::string("{\"script\":") + detail::quote(script) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string workflow_blueprint_to_script(const std::string& blueprint_json)
     {
         return invoke("workflow.convert.blueprint_to_script", std::string("{\"blueprint\":") + object_or_empty(blueprint_json) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string delete_workflow(
         const std::string& id,
         std::optional<uint64_t> expected_revision = std::nullopt)
@@ -754,6 +780,7 @@ public:
                 + ",\"agent_id\":" + detail::quote(agent_id) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string test_workflow_draft(
         const std::string& id,
         const std::string& inputs_json = "{}",
@@ -766,6 +793,7 @@ public:
                 + ",\"trace\":" + (trace ? "true" : "false") + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string test_workflow_draft_in_context(
         const std::string& id,
         const std::string& conversation_id,
@@ -782,6 +810,7 @@ public:
                 + ",\"agent_id\":" + detail::quote(agent_id) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string execute_workflow_script(
         const std::string& script,
         const std::string& inputs_json = "{}",
@@ -794,6 +823,7 @@ public:
                 + ",\"trace\":" + (trace ? "true" : "false") + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string execute_workflow_script_in_context(
         const std::string& script,
         const std::string& conversation_id,
@@ -810,11 +840,13 @@ public:
                 + ",\"agent_id\":" + detail::quote(agent_id) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string start_workflow_run()
     {
         return invoke("workflow.start", "{}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string run_workflow(
         const std::string& workflow_run_id,
         const std::string& id,
@@ -827,6 +859,7 @@ public:
                 + ",\"inputs\":" + object_or_empty(inputs_json) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string run_workflow_draft_test(
         const std::string& workflow_run_id,
         const std::string& id,
@@ -839,6 +872,7 @@ public:
                 + ",\"mode\":\"test\",\"inputs\":" + object_or_empty(inputs_json) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string run_workflow_script(
         const std::string& workflow_run_id,
         const std::string& script,
@@ -851,6 +885,7 @@ public:
                 + ",\"inputs\":" + object_or_empty(inputs_json) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string describe_workflow_inputs(const std::string& id)
     {
         return invoke(
@@ -858,6 +893,7 @@ public:
             std::string("{\"id\":") + detail::quote(id) + "}");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string describe_workflow_script_inputs(const std::string& script)
     {
         return invoke(
@@ -895,6 +931,39 @@ public:
         invoke("runtime.register_agent_cluster", registration_payload(registration_json));
     }
 
+    std::string add_agent_cluster_json(const std::string& registration_json)
+    {
+        return invoke("runtime.add_agent_cluster", registration_payload(registration_json));
+    }
+
+    std::string read_skill(const std::string& name)
+    {
+        return invoke("runtime.read_skill", std::string("{\"name\":") + detail::quote(name) + "}");
+    }
+
+    std::string validate_skill_transaction_json(const std::string& transaction_json)
+    {
+        return invoke("runtime.validate_skill_transaction", object_or_empty(transaction_json));
+    }
+
+    std::string commit_skill_transaction_json(const std::string& transaction_json)
+    {
+        return invoke("runtime.commit_skill_transaction", object_or_empty(transaction_json));
+    }
+
+    std::string update_agent_cluster_json(const std::string& registration_json, const std::string& expected_version,
+        const std::vector<std::string>& reload_skills = {})
+    {
+        std::string names = "[";
+        for (const auto& name : reload_skills) {
+            if (names.size() > 1) names += ",";
+            names += detail::quote(name);
+        }
+        names += "]";
+        return invoke("runtime.update_agent_cluster", std::string("{\"registration\":") + object_or_empty(registration_json)
+            + ",\"expected_version\":" + detail::quote(expected_version) + ",\"reload_skills\":" + names + "}");
+    }
+
     void set_auth_context_json(const std::string& context_json)
     {
         invoke("runtime.set_auth_context", std::string("{\"context\":") + context_json + "}");
@@ -925,6 +994,7 @@ public:
         return invoke("runtime.get_workflow_node_definitions");
     }
 
+    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
     std::string workflow_reference_node(const std::string& workflow_id, const std::string& node_id)
     {
         return invoke("workflow.get_reference_node", std::string("{\"workflow_id\":") + detail::quote(workflow_id) + ",\"node_id\":" + detail::quote(node_id) + "}");
@@ -1155,11 +1225,13 @@ public:
             std::move(options));
     }
 
+    [[deprecated("Standalone Workflow Studio and Agent Test Studio pages are deprecated and disabled.")]]
     std::string open_workflow_studio(const std::string& options_json = "{}")
     {
         return invoke("studio.open_workflow", std::string("{\"options\":") + object_or_empty(options_json) + "}");
     }
 
+    [[deprecated("Standalone Workflow Studio and Agent Test Studio pages are deprecated and disabled.")]]
     std::string open_agent_test_studio(const std::string& options_json = "{}")
     {
         return invoke("studio.open_agent_test", std::string("{\"options\":") + object_or_empty(options_json) + "}");

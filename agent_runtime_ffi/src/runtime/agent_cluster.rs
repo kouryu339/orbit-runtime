@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeAgentCluster {
     pub id: String,
     pub description: String,
@@ -10,7 +10,7 @@ pub struct RuntimeAgentCluster {
     pub permissions: ai_assistant::ToolPermissionPolicy,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeAgentDefinition {
     pub id: String,
     pub profile_id: Option<String>,
@@ -36,7 +36,7 @@ pub(super) struct BuiltinClusterConfigs {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct AgentClusterRegistration {
     schema: String,
-    id: String,
+    pub(super) id: String,
     description: String,
     #[serde(alias = "focusAgentId")]
     focus_agent_id: Option<String>,

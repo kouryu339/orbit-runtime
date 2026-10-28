@@ -393,14 +393,50 @@ impl Runtime {
         )
     }
 
+    /// Register or replace a complete resource document; state and revision are in source.
+    pub fn register_workflow(&mut self, source: &str) -> Result<Value> {
+        self.invoke("workflow.register", json!({"source":source}))
+    }
+
+    /// Validate without saving or running nodes.
+    pub fn validate_workflow(&mut self, source: &str) -> Result<Value> {
+        self.invoke("workflow.validate", json!({"source":source}))
+    }
+
+    pub fn promote_workflow(&mut self, id: &str, expected_revision: u64) -> Result<Value> {
+        self.invoke(
+            "workflow.promote",
+            json!({"id":id,"expected_revision":expected_revision}),
+        )
+    }
+
+    pub fn remove_workflow(&mut self, id: &str, expected_revision: u64) -> Result<Value> {
+        self.invoke(
+            "workflow.remove",
+            json!({"id":id,"expected_revision":expected_revision}),
+        )
+    }
+
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn create_workflow_draft(&mut self, resource: Value) -> Result<Value> {
         self.invoke("workflow.create", json!({ "resource": resource }))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn read_workflow(&mut self, id: &str) -> Result<Value> {
         self.invoke("workflow.read", json!({ "id": id }))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn register_workflow_draft(
         &mut self,
         id: &str,
@@ -413,6 +449,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn update_workflow(
         &mut self,
         resource: Value,
@@ -424,10 +464,18 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn compile_workflow_draft(&mut self, id: &str) -> Result<Value> {
         self.invoke("workflow.compile", json!({ "id": id }))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn workflow_script_to_blueprint(&mut self, script: &str) -> Result<Value> {
         self.invoke(
             "workflow.convert.script_to_blueprint",
@@ -435,6 +483,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn workflow_blueprint_to_script(&mut self, blueprint: Value) -> Result<Value> {
         self.invoke(
             "workflow.convert.blueprint_to_script",
@@ -442,6 +494,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn delete_workflow(&mut self, id: &str, expected_revision: Option<u64>) -> Result<Value> {
         self.invoke(
             "workflow.delete",
@@ -460,6 +516,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn test_workflow_draft(&mut self, id: &str, inputs: Value, trace: bool) -> Result<Value> {
         self.invoke(
             "workflow.execute",
@@ -467,6 +527,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn execute_workflow_script(
         &mut self,
         script: &str,
@@ -493,6 +557,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn test_workflow_draft_in_context(
         &mut self,
         id: &str,
@@ -507,6 +575,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn execute_workflow_script_in_context(
         &mut self,
         script: &str,
@@ -521,10 +593,18 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn start_workflow_run(&mut self) -> Result<Value> {
         self.invoke("workflow.start", json!({}))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn run_workflow(
         &mut self,
         workflow_run_id: &str,
@@ -537,6 +617,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn run_workflow_draft_test(
         &mut self,
         workflow_run_id: &str,
@@ -549,6 +633,10 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn run_workflow_script(
         &mut self,
         workflow_run_id: &str,
@@ -561,10 +649,18 @@ impl Runtime {
         )
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn describe_workflow_inputs(&mut self, id: &str) -> Result<Value> {
         self.invoke("workflow.describe_inputs", json!({"id": id}))
     }
 
+    #[deprecated(
+        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
+    )]
+    #[doc(hidden)]
     pub fn describe_workflow_script_inputs(&mut self, script: &str) -> Result<Value> {
         self.invoke("workflow.describe_inputs", json!({"script": script}))
     }
@@ -587,6 +683,51 @@ impl Runtime {
         self.invoke(
             "runtime.register_agent_cluster",
             json!({ "registration": registration }),
+        )
+    }
+
+    /// Add a cluster after start. Its primary agent must reference a Role Skill.
+    pub fn add_agent_cluster(&mut self, registration: Value) -> Result<Value> {
+        self.invoke(
+            "runtime.add_agent_cluster",
+            json!({"registration": registration}),
+        )
+    }
+
+    pub fn read_skill(&mut self, name: &str) -> Result<Value> {
+        self.invoke("runtime.read_skill", json!({"name":name}))
+    }
+
+    pub fn validate_skill_transaction(&mut self, transaction: Value) -> Result<Value> {
+        self.invoke("runtime.validate_skill_transaction", transaction)
+    }
+
+    pub fn commit_skill_transaction(&mut self, transaction: Value) -> Result<Value> {
+        self.invoke("runtime.commit_skill_transaction", transaction)
+    }
+
+    /// Replace a cluster only when it has no live conversations.
+    pub fn update_agent_cluster(
+        &mut self,
+        registration: Value,
+        expected_version: &str,
+    ) -> Result<Value> {
+        self.update_agent_cluster_with_skills(registration, expected_version, &[])
+    }
+
+    /// Reload registered Skill files only if no live Agent still references them.
+    pub fn update_agent_cluster_with_skills(
+        &mut self,
+        registration: Value,
+        expected_version: &str,
+        reload_skills: &[String],
+    ) -> Result<Value> {
+        self.invoke(
+            "runtime.update_agent_cluster",
+            json!({
+                "registration": registration, "expected_version": expected_version,
+                "reload_skills": reload_skills
+            }),
         )
     }
 

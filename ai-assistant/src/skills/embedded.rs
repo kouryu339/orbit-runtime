@@ -98,109 +98,22 @@ mod tests {
     }
 
     #[test]
-    fn thinking_pro_only_grants_temporary_workflow_execution() {
+    fn thinking_pro_does_not_grant_legacy_script_tools() {
         let entries = embedded_system_entries();
-        let names = entries
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>();
-        let thinking_pro = entries
+        let skill = entries
             .iter()
             .find(|(name, _)| name == "thinking-pro")
             .and_then(|(_, entry)| entry.skill.as_ref())
-            .expect("thinking-pro should be embedded");
-
-        assert!(!names.contains(&"asking"));
-        assert!(!names.contains(&"executing"));
-        assert!(thinking_pro
-            .metadata
-            .tools
-            .contains(&"executeWorkflowScript".to_string()));
-        assert!(thinking_pro
-            .instructions
-            .contains("item(array:Array<Any>, index:num) -> Any"));
-        assert!(thinking_pro
-            .instructions
-            .contains("contains(value:String, pattern:String) -> bool"));
-        assert!(thinking_pro
-            .instructions
-            .contains("pow(base:num, exponent:num) -> num"));
-        assert!(thinking_pro
-            .instructions
-            .contains("div(dividend:num, divisor:num) -> num"));
-        assert!(thinking_pro
-            .instructions
-            .contains("mod(dividend:num, divisor:num) -> num"));
-        assert!(thinking_pro.instructions.contains("不产生步骤数据输出"));
-        assert!(!thinking_pro.instructions.contains("N.Value"));
-        assert!(thinking_pro.instructions.contains("GetVarNode"));
-        assert!(thinking_pro.instructions.contains("SetVarNode"));
-        assert!(thinking_pro
-            .instructions
-            .contains("首选在一条 `input` 中用空格声明全部字段"));
-        assert!(thinking_pro
-            .instructions
-            .contains("input a:num=1 b:String=\"a\" c:bool"));
-        assert!(thinking_pro
-            .instructions
-            .contains("输入类型仅支持 `num`、`String`、`bool`、`Any` 和递归数组 `Array<T>`"));
-        assert!(thinking_pro.instructions.contains("$outer_item"));
-        assert!(thinking_pro.instructions.contains("最内层循环"));
-        assert!(thinking_pro
-            .instructions
-            .contains("必须直接使用内置整数索引 `$index`"));
-        assert!(thinking_pro
-            .instructions
-            .contains("不得用 `add()` 和自定义变量手工累加索引"));
-        assert!(thinking_pro
-            .instructions
-            .contains("脚本内调用外部工具固定使用 `N: EXEC Tool ...`"));
-        assert!(thinking_pro
-            .instructions
-            .contains("不得写成 `N: result = EXEC ToolName ...`"));
-        assert!(thinking_pro
-            .instructions
-            .contains("不得在被执行的 Workflow 内递归调用"));
-        assert!(thinking_pro
-            .instructions
-            .contains("加引号的 `\"input.title\"`、`\"$name\"`、`\"1.page_id\"` 也只是固定文本"));
-        assert!(thinking_pro
-            .instructions
-            .contains("[input.path, $backup, 1.path]"));
-        assert!(thinking_pro
-            .instructions
-            .contains("正确：`--page_id 1.page_id`；错误：`--page_id \"1.page_id\"`"));
-        assert!(thinking_pro
-            .instructions
-            .contains("原生 FC 模式把脚本文本直接放入 `script` 字段"));
-        assert!(thinking_pro.instructions.contains("不要额外增加无关转义层"));
-        assert!(thinking_pro
-            .instructions
-            .contains("EXEC 兼容模式可把完整脚本声明为多行 `$script` 变量"));
-        assert!(thinking_pro
-            .instructions
-            .contains("不得写成 `name:String(=value)`"));
-        assert!(!thinking_pro.instructions.contains(":i64"));
-        assert!(!thinking_pro.instructions.contains(":f64"));
-        assert!(!thinking_pro.instructions.contains("first(array)"));
-        assert!(!thinking_pro.instructions.contains("last(array)"));
-
-        for catalog_tool in [
-            "listWorkflows",
-            "readWorkflow",
+            .unwrap();
+        assert!(skill.metadata.tools.contains(&"PlanWrite".to_string()));
+        for name in [
+            "executeWorkflowScript",
             "createWorkflowDraft",
             "updateWorkflow",
-            "compileWorkflow",
-            "testWorkflow",
-            "registerWorkflow",
-            "deleteWorkflow",
-            "executeWorkflow",
         ] {
-            assert!(!thinking_pro
-                .metadata
-                .tools
-                .contains(&catalog_tool.to_string()));
+            assert!(!skill.metadata.tools.contains(&name.to_string()));
         }
+        assert!(!skill.instructions.contains("N: EXEC"));
     }
 
     #[test]
@@ -240,19 +153,20 @@ mod tests {
     }
 
     #[test]
-    fn thinking_pro_documents_nested_numbering_and_string_literals() {
+    fn workflow_editor_does_not_grant_legacy_script_tools() {
         let entries = embedded_system_entries();
-        let thinking_pro = entries
+        let skill = entries
             .iter()
-            .find(|(name, _)| name == "thinking-pro")
+            .find(|(name, _)| name == "workflow_editor")
             .and_then(|(_, entry)| entry.skill.as_ref())
-            .expect("thinking-pro should be embedded");
-
-        assert!(thinking_pro.instructions.contains("1.1.1.1.1.1: EXEC"));
-        assert!(thinking_pro.instructions.contains("不能省略成 `1.1.1`"));
-        assert!(thinking_pro
-            .instructions
-            .contains("--value_column \"batch_id\""));
-        assert!(thinking_pro.instructions.contains("无法归类的裸 token"));
+            .unwrap();
+        assert!(skill.metadata.tools.contains(&"listWorkflows".to_string()));
+        for name in [
+            "executeWorkflowScript",
+            "createWorkflowDraft",
+            "updateWorkflow",
+        ] {
+            assert!(!skill.metadata.tools.contains(&name.to_string()));
+        }
     }
 }

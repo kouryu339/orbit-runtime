@@ -24,6 +24,7 @@ pub mod loader;
 pub mod prompt;
 pub mod systems;
 pub mod types;
+pub mod usage;
 
 pub use systems::{init_skill_manager, replace_skill_manager, system_names};
 pub use types::{Skill, SkillEntry, SkillGroup, SkillLoadState, SkillMetadata, SkillRegistry};
@@ -43,7 +44,10 @@ use std::path::{Path, PathBuf};
 /// - **main/**：Agent 身份定义（构建时确定，不可运行时切换）
 /// - **feature/**：功能技能（按需激活/卸载）
 /// 所有层的 entries 合并到同一个 HashMap 中，通过 `system_layer` 字段区分。
+#[derive(Clone)]
 pub struct SkillManager {
+    managed_root: Option<PathBuf>,
+    managed_names: std::collections::BTreeSet<String>,
     /// Skills 根目录（feature 层，兼容旧路径）
     skills_dir: PathBuf,
     system_dir: Option<PathBuf>,
@@ -59,6 +63,8 @@ impl SkillManager {
     /// 创建空的 SkillManager
     pub fn new(skills_dir: impl Into<PathBuf>) -> Self {
         Self {
+            managed_root: None,
+            managed_names: Default::default(),
             skills_dir: skills_dir.into(),
             system_dir: None,
             main_dir: None,
@@ -74,6 +80,8 @@ impl SkillManager {
             entries.insert(name, entry);
         }
         Self {
+            managed_root: None,
+            managed_names: Default::default(),
             skills_dir: skills_dir.into(),
             system_dir: None, // system 层已内嵌，不走文件系统
             main_dir: None,
@@ -214,6 +222,9 @@ impl SkillManager {
             let discovered = loader::discover_skills(main_dir).await?;
             tracing::debug!("基础层发现 {} 个 skills", discovered.len());
             for (dir_name, meta) in discovered {
+                if self.is_fully_loaded(&dir_name) {
+                    continue;
+                }
                 if let Some(ref reg) = main_registry {
                     if !reg.contains(&dir_name) {
                         continue;
@@ -240,6 +251,9 @@ impl SkillManager {
         tracing::debug!("功能层发现 {} 个 skills 目录", discovered.len());
 
         for (dir_name, meta) in discovered {
+            if self.is_fully_loaded(&dir_name) {
+                continue;
+            }
             // 如果有顶层 registry，仅加载已注册的
             if let Some(ref reg) = self.registry {
                 if !reg.contains(&dir_name) {
@@ -338,6 +352,99 @@ impl SkillManager {
             .ok_or_else(|| {
                 FrameworkError::InvalidData(format!("Skill '{}' 刚加载但无法获取", name))
             })
+    }
+
+    /// Stage explicit reloads on a cloned manager, then replace the live manager
+    /// only after dependency admission and all validation have succeeded.
+    pub async fn reload_registered(&mut self, names: &[String]) -> Result<()> {
+        for name in names {
+            let previous = self.get(name).ok_or_else(|| {
+                FrameworkError::InvalidData(format!("Skill '{name}' is not registered"))
+            })?;
+            if previous.metadata.system_layer || previous.base_path.is_none() {
+                return Err(FrameworkError::InvalidData(format!(
+                    "system/embedded Skill '{name}' cannot be reloaded"
+                )));
+            }
+            if self.managed_names.contains(name) {
+                return Err(FrameworkError::InvalidData(
+                    "Managed Skill content must be updated through a candidate transaction".into(),
+                ));
+            }
+            let path = previous.base_path.as_ref().unwrap().join("SKILL.md");
+            let next = loader::load_skill_file(&path).await?;
+            if next.metadata.name != previous.metadata.name
+                || next.metadata.kind != previous.metadata.kind
+                || next.metadata.system_layer
+                || next.instructions.trim().is_empty()
+                || !matches!(next.metadata.kind.as_deref(), Some("role" | "capability"))
+            {
+                return Err(FrameworkError::InvalidData(format!("Skill '{name}' reload must preserve name/kind and provide non-empty instructions")));
+            }
+            self.entries.insert(
+                name.clone(),
+                SkillEntry {
+                    name: name.clone(),
+                    state: SkillLoadState::FullyLoaded,
+                    skill: Some(next),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Install a fully validated candidate into an isolated catalog. The caller
+    /// owns admission and persistence before publishing this catalog.
+    pub fn stage_candidate(&mut self, skill: Skill) {
+        let name = skill.metadata.name.clone();
+        self.managed_names.insert(name.clone());
+        self.entries.insert(
+            name.clone(),
+            SkillEntry {
+                name,
+                state: SkillLoadState::FullyLoaded,
+                skill: Some(skill),
+            },
+        );
+    }
+
+    pub fn bind_managed_root(&mut self, root: PathBuf) {
+        self.managed_root = Some(root);
+    }
+    pub fn managed_root(&self) -> Option<&Path> {
+        self.managed_root.as_deref()
+    }
+
+    pub fn registered_source_path(&self, name: &str) -> Option<PathBuf> {
+        self.get(name)
+            .and_then(|skill| skill.base_path.as_ref())
+            .map(|path| path.join("SKILL.md"))
+    }
+
+    pub async fn content_versions(
+        &mut self,
+        names: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        use sha2::{Digest, Sha256};
+        let mut versions = std::collections::BTreeMap::new();
+        for name in names {
+            let skill = self.load(name).await?;
+            let bytes = serde_json::to_vec(&(&skill.metadata, &skill.instructions))
+                .map_err(|error| FrameworkError::InvalidData(error.to_string()))?;
+            versions.insert(name.clone(), format!("sha256:{:x}", Sha256::digest(bytes)));
+        }
+        Ok(versions)
+    }
+
+    /// Caller owns update admission and the live catalog write lock.
+    pub fn publish_reloaded(&mut self, staged: &Self, names: &[String]) {
+        for name in names {
+            if staged.managed_names.contains(name) {
+                self.managed_names.insert(name.clone());
+            }
+            self.entries
+                .insert(name.clone(), staged.entries[name].clone());
+        }
     }
 
     /// 在三层目录中查找并加载 Skill
@@ -734,13 +841,22 @@ mod tests {
     }
 
     #[test]
-    fn only_script_capable_thinking_skill_declares_workflow_script_tool() {
+    fn thinking_skills_do_not_grant_legacy_script_tools() {
         let mgr = SkillManager::new_with_embedded_system("/tmp/skills");
-
-        assert!(!mgr.system_skill_declares_tool("thinking", "executeWorkflowScript"));
-        assert!(!mgr.system_skill_declares_tool("thinking-fc", "executeWorkflowScript"));
-        assert!(mgr.system_skill_declares_tool("thinking-pro", "executeWorkflowScript"));
-        assert!(mgr.system_skill_declares_tool("thinking-pro-fc", "executeWorkflowScript"));
+        for skill in ["thinking", "thinking-fc", "thinking-pro", "thinking-pro-fc"] {
+            for tool in [
+                "executeWorkflowScript",
+                "createWorkflowDraft",
+                "compileWorkflow",
+                "updateWorkflow",
+                "testWorkflow",
+            ] {
+                assert!(
+                    !mgr.system_skill_declares_tool(skill, tool),
+                    "{skill}: {tool}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

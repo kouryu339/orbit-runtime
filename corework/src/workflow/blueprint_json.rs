@@ -67,6 +67,9 @@ impl Default for BlueprintVisibility {
 /// 蓝图元数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlueprintMetadata {
+    /// Host-owned namespaced metadata; compilation must preserve it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extensions: HashMap<String, JsonValue>,
     /// 工作流稳定 ID。工作流重命名时不改变。
     #[serde(default)]
     pub id: String,
@@ -325,6 +328,10 @@ pub struct BlueprintVariable {
     /// 变量名称
     pub name: String,
 
+    /// Optional user-facing name; variable identity remains `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
     /// 数据类型
     pub data_type: String,
 
@@ -408,6 +415,7 @@ impl BlueprintJson {
             schema_version: WORKFLOW_SCHEMA_VERSION.to_string(),
             min_runtime_version: current_runtime_version(),
             metadata: BlueprintMetadata {
+                extensions: HashMap::new(),
                 id: name.clone(),
                 name,
                 created: chrono::Utc::now().to_rfc3339(),

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orbit:runtime:skill-transaction:v1",
+  "title": "Skill candidate transaction payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["expected_store_revision", "skills"],
+  "properties": {
+    "expected_store_revision": {"type": "integer", "minimum": 0},
+    "skills": {
+      "type": "array", "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "kind", "source"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+          "kind": {"enum": ["role", "capability"]},
+          "source": {"type": "string", "minLength": 1},
+          "expected_version": {"type": ["string", "null"], "description": "null or omitted means create; replacements require the current content digest"}
+        }
+      }
+    },
+    "cluster": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["registration"],
+      "properties": {
+        "registration": {"type": "object", "description": "Complete agent-runtime-agent-cluster-registration/v1 definition"},
+        "expected_version": {"type": ["string", "null"], "description": "null or omitted means create; replacements require current cluster.version"}
+      }
+    }
+  },
+  "anyOf": [
+    {"properties": {"skills": {"minItems": 1}}},
+    {"required": ["cluster"], "properties": {"cluster": {"type": "object"}}}
+  ]
+}

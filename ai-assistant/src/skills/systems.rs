@@ -32,12 +32,28 @@ pub fn init_skill_manager(manager: SkillManager) {
     SKILL_MANAGER.set(Arc::new(RwLock::new(manager))).ok();
 }
 
-pub async fn replace_skill_manager(manager: SkillManager) {
+pub async fn replace_skill_manager(manager: SkillManager) -> corework::error::Result<()> {
+    let _admission = super::usage::SKILL_UPDATE_GATE.write().await;
+    if super::usage::CatalogAdmission::active() {
+        return Err(FrameworkError::InvalidData(
+            "Cannot replace the Skill catalog during Agent creation".into(),
+        ));
+    }
+    let dependencies = super::usage::dependencies(None)
+        .await
+        .map_err(|error| FrameworkError::InvalidData(error.to_string()))?;
+    if !dependencies.is_empty() {
+        return Err(FrameworkError::InvalidData(format!(
+            "cannot replace shared Skill catalog while live Agents reference it: {}",
+            serde_json::to_string(&dependencies).unwrap_or_default()
+        )));
+    }
     if let Some(existing) = SKILL_MANAGER.get() {
         *existing.write().await = manager;
-        return;
+        return Ok(());
     }
     SKILL_MANAGER.set(Arc::new(RwLock::new(manager))).ok();
+    Ok(())
 }
 
 pub(crate) fn mgr() -> &'static Arc<RwLock<SkillManager>> {
@@ -115,6 +131,7 @@ impl SystemOperation for DiscoverSkillsSystem {
         _input: DiscoverSkillsInput,
         _ctx: &Context,
     ) -> Result<DiscoverSkillsOutput, FrameworkError> {
+        let _admission = super::usage::SKILL_UPDATE_GATE.read().await;
         let mut m = mgr().write().await;
         m.discover().await?;
         let skills = m.feature_metadata().into_iter().cloned().collect();

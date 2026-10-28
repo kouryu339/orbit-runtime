@@ -17,7 +17,10 @@ pub(crate) struct ParentWorkflowEntry {
 }
 
 impl ParentWorkflowEntry {
-    fn from_blueprint_path(path: PathBuf, blueprint: &BlueprintJson) -> Result<Self, String> {
+    pub(super) fn from_blueprint_path(
+        path: PathBuf,
+        blueprint: &BlueprintJson,
+    ) -> Result<Self, String> {
         let file_name = path
             .file_name()
             .and_then(|value| value.to_str())
@@ -70,6 +73,7 @@ impl Default for ResourceRegistration {
 pub struct ResourceSkillsConfig {
     pub root_dir: PathBuf,
     pub builtin_system: bool,
+    pub managed_dir: Option<PathBuf>,
 }
 
 impl Default for ResourceSkillsConfig {
@@ -77,6 +81,7 @@ impl Default for ResourceSkillsConfig {
         Self {
             root_dir: PathBuf::from("skills"),
             builtin_system: true,
+            managed_dir: None,
         }
     }
 }
@@ -191,6 +196,9 @@ impl Default for ResourceRpcEndpointConfig {
 pub struct RuntimeResourceRegistry {
     pub id: String,
     pub skills_root_dir: PathBuf,
+    pub managed_skills_dir: PathBuf,
+    pub(super) managed_skill_revision: u64,
+    pub(super) managed_clusters: BTreeMap<String, RuntimeAgentCluster>,
     pub builtin_system_skills: bool,
     pub workflows_root_dir: Option<PathBuf>,
     pub workflow_registry_id: Option<String>,
@@ -260,7 +268,12 @@ pub(super) async fn build_resource_registry(
     );
 
     let skills_root_dir = normalize_resource_path(base_dir, registration.skills.root_dir);
-    let skill_manager = SkillManager::from_directory(&skills_root_dir)
+    let managed_skills_dir = registration
+        .skills
+        .managed_dir
+        .map(|path| normalize_resource_path(base_dir, path))
+        .unwrap_or_else(|| skills_root_dir.join(".orbit-managed"));
+    let mut skill_manager = SkillManager::from_directory(&skills_root_dir)
         .await
         .map_err(|error| {
             RuntimeError::InvalidConfig(format!(
@@ -268,13 +281,19 @@ pub(super) async fn build_resource_registry(
                 skills_root_dir.display()
             ))
         })?;
-    ai_assistant::skills::replace_skill_manager(skill_manager).await;
+    let managed =
+        super::skill_transactions::restore_managed_skills(&managed_skills_dir, &mut skill_manager)?;
+    ai_assistant::skills::replace_skill_manager(skill_manager)
+        .await
+        .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))?;
 
     let workflows_root_dir = registration
         .workflows
         .root_dir
         .map(|path| normalize_resource_path(base_dir, path));
-    let workflow_registry = scan_parent_workflow_registry(workflows_root_dir.as_deref())?;
+    // Build the catalog from accepted, compiled sources during startup, after
+    // tool contracts are installed. Registration must not parse legacy graphs.
+    let workflow_registry = Vec::new();
     let data_dir = registration
         .data
         .data_dir
@@ -327,6 +346,9 @@ pub(super) async fn build_resource_registry(
     Ok(RuntimeResourceRegistry {
         id: registration.id,
         skills_root_dir,
+        managed_skills_dir,
+        managed_skill_revision: managed.revision,
+        managed_clusters: managed.clusters,
         builtin_system_skills: registration.skills.builtin_system,
         workflows_root_dir,
         workflow_registry_id: registration.workflows.registry_id,
@@ -373,50 +395,6 @@ fn build_agent_profile_registry(
             profile.system_skills,
         )?;
         registry.insert(id, profile);
-    }
-    Ok(registry)
-}
-
-pub(super) fn scan_parent_workflow_registry(
-    workflows_root_dir: Option<&Path>,
-) -> Result<Vec<ParentWorkflowEntry>, RuntimeError> {
-    let Some(workflows_root_dir) = workflows_root_dir else {
-        return Ok(Vec::new());
-    };
-    let entries = match fs::read_dir(workflows_root_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "scan workflow registry failed from '{}': {error}",
-                workflows_root_dir.display()
-            )))
-        }
-    };
-
-    let mut registry: Vec<ParentWorkflowEntry> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !BlueprintJson::is_workflow_file_path(&path) {
-            continue;
-        }
-        let blueprint = match BlueprintJson::from_workflow_file(&path) {
-            Ok(blueprint) => blueprint,
-            Err(error) => {
-                return Err(RuntimeError::InvalidConfig(format!(
-                    "parse workflow registry entry failed from '{}': {error}",
-                    path.display()
-                )))
-            }
-        };
-        let entry = ParentWorkflowEntry::from_blueprint_path(path, &blueprint)
-            .map_err(RuntimeError::InvalidConfig)?;
-        registry.retain(|existing| {
-            existing.file_name != entry.file_name
-                && existing.name != entry.name
-                && (entry.id.is_empty() || existing.id != entry.id)
-        });
-        registry.push(entry);
     }
     Ok(registry)
 }
@@ -833,13 +811,32 @@ pub(super) fn install_workflow_runtime_from_config(
     let dir = auto_load_dir.unwrap_or_else(|| PathBuf::from("workflows"));
     let module = WorkflowsModule::new_with_event_bus(dir.clone(), event_bus)
         .map_err(|e| RuntimeError::Internal(format!("initialize workflow runtime failed: {e}")))?;
-    let count = module
-        .scan_local_dir()
-        .map_err(|e| RuntimeError::Internal(format!("read workflow registry failed: {e}")))?;
-    tracing::info!(
-        "workflow runtime initialized from {} with {} workflows",
-        dir.display(),
-        count
-    );
     Ok(Arc::new(module))
+}
+
+pub(super) fn compiled_parent_workflow_registry(
+    module: &WorkflowsModule,
+) -> Result<Vec<ParentWorkflowEntry>, RuntimeError> {
+    module
+        .registered_workflows()
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?
+        .into_iter()
+        .filter(|entry| {
+            module
+                .read_workflow_resource(&entry.id)
+                .ok()
+                .and_then(|view| view.blueprint)
+                .is_some_and(|blueprint| module.workflow_dependencies_ready(&blueprint).is_ok())
+        })
+        .map(|entry| {
+            let view = module
+                .read_workflow_resource(&entry.id)
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            let blueprint = view.blueprint.ok_or_else(|| {
+                RuntimeError::Internal("Registered workflow has no compiled graph".into())
+            })?;
+            ParentWorkflowEntry::from_blueprint_path(PathBuf::from(entry.file_path), &blueprint)
+                .map_err(RuntimeError::Internal)
+        })
+        .collect()
 }

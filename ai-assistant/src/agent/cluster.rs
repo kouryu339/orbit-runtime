@@ -392,6 +392,7 @@ impl AgentCluster {
                 if retiring_agents.lock().await.remove(&driver.id) {
                     let retired = agents.write().await.remove(&driver.id);
                     if let Some(retired) = retired {
+                        crate::skills::usage::untrack(&retired.sm.unit().cache());
                         if let Err(error) = event_bus
                             .publish(corework::event::BaseEvent::new(
                                 crate::events::types::AGENT_RETIRED,
@@ -438,7 +439,11 @@ impl AgentCluster {
             task.abort();
             let _ = task.await;
         }
-        self.agents.write().await.clear();
+        let mut agents = self.agents.write().await;
+        for agent in agents.values() {
+            crate::skills::usage::untrack(&agent.sm.unit().cache());
+        }
+        agents.clear();
         self.retiring_agents.lock().await.clear();
     }
 
@@ -470,6 +475,7 @@ impl AgentCluster {
             let retired = self.agents.write().await.remove(agent_id);
             self.retiring_agents.lock().await.remove(agent_id);
             if let Some(retired) = retired {
+                crate::skills::usage::untrack(&retired.sm.unit().cache());
                 self.event_bus
                     .publish(corework::event::BaseEvent::new(
                         crate::events::types::AGENT_RETIRED,

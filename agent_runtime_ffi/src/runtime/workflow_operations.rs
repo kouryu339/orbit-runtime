@@ -27,6 +27,21 @@ fn default_workflow_resource_schema() -> String {
 }
 
 impl RuntimeFacade {
+    pub fn register_logic_resource(
+        &mut self,
+        source: &str,
+        commit: bool,
+    ) -> Result<Value, RuntimeError> {
+        let module = self.workflow_module()?;
+        let result = self
+            .rt
+            .block_on(module.register_logic_resource(source, &self.runtime_tools, commit))
+            .map_err(workflow_input_error)?;
+        if commit {
+            self.sync_parent_workflow_registry()?;
+        }
+        Ok(result)
+    }
     pub fn revise_workflow(
         &mut self,
         payload: &serde_json::Map<String, Value>,
@@ -129,6 +144,7 @@ impl RuntimeFacade {
         }))
     }
 
+    #[allow(deprecated)]
     pub fn run_workflow(
         &mut self,
         workflow_run_id: String,
@@ -154,6 +170,11 @@ impl RuntimeFacade {
         } else {
             "catalog"
         };
+        let occupancy = workflow_id
+            .as_deref()
+            .map(|id| module.reserve_catalog_execution(id))
+            .transpose()
+            .map_err(workflow_input_error)?;
         self.workflow_runs
             .lock()
             .map_err(|_| RuntimeError::Internal("workflow run registry lock poisoned".to_string()))?
@@ -162,6 +183,7 @@ impl RuntimeFacade {
 
         let task_run_id = workflow_run_id.clone();
         self.rt.handle().spawn(async move {
+            let _occupancy = occupancy;
             let started = Instant::now();
             let execution = if let Some(script) = script {
                 let mut blueprint = match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
@@ -371,7 +393,8 @@ impl RuntimeFacade {
         }))
     }
 
-    pub fn workflow_script_to_blueprint(&self, script: &str) -> Result<Value, RuntimeError> {
+    #[deprecated(note = "Legacy script API is disabled externally; internal compatibility only.")]
+    pub(crate) fn workflow_script_to_blueprint(&self, script: &str) -> Result<Value, RuntimeError> {
         if !self.started {
             return Err(RuntimeError::NotStarted);
         }
@@ -411,7 +434,8 @@ impl RuntimeFacade {
         }
     }
 
-    pub fn workflow_blueprint_to_script(
+    #[deprecated(note = "Legacy script API is disabled externally; internal compatibility only.")]
+    pub(crate) fn workflow_blueprint_to_script(
         &self,
         blueprint_value: &Value,
     ) -> Result<Value, RuntimeError> {
@@ -468,7 +492,8 @@ impl RuntimeFacade {
         serde_json::to_value(workflow).map_err(|error| RuntimeError::Internal(error.to_string()))
     }
 
-    pub fn update_workflow_resource(
+    #[deprecated(note = "Legacy script API is disabled externally; internal compatibility only.")]
+    pub(crate) fn update_workflow_resource(
         &mut self,
         input: &Value,
         expected_revision: Option<u64>,
@@ -639,9 +664,9 @@ impl RuntimeFacade {
                 self.execute_registered_workflow(id, inputs, trace_enabled, execution_context)
             }
             corework::workflow::workflows::WorkflowResourceKind::Draft => {
-                if mode != Some("test") {
+                if mode.is_some_and(|mode| mode != "test") {
                     return Err(RuntimeError::InvalidConfig(
-                        "draft workflow execution requires payload.mode = 'test'".to_string(),
+                        "draft workflow mode must be 'test' when provided".to_string(),
                     ));
                 }
                 let blueprint = self
@@ -787,7 +812,8 @@ impl RuntimeFacade {
         Ok(response)
     }
 
-    pub fn execute_workflow_script(
+    #[deprecated(note = "Legacy script API is disabled externally; internal compatibility only.")]
+    pub(crate) fn execute_workflow_script(
         &mut self,
         script: &str,
         inputs: HashMap<String, Value>,
@@ -888,9 +914,9 @@ impl RuntimeFacade {
             .ok_or(RuntimeError::NotStarted)
     }
 
-    fn sync_parent_workflow_registry(&mut self) -> Result<(), RuntimeError> {
+    pub(super) fn sync_parent_workflow_registry(&mut self) -> Result<(), RuntimeError> {
         let module = self.workflow_module()?;
-        let registry = scan_parent_workflow_registry(Some(module.workflows_dir()))?;
+        let registry = compiled_parent_workflow_registry(&module)?;
         self.manager()?
             .unit()
             .world()

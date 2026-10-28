@@ -15,6 +15,18 @@ pub struct PureFunctionSpec {
 
 const SPECS: &[PureFunctionSpec] = &[
     PureFunctionSpec {
+        name: "json_literal",
+        node_type: "JsonLiteralNode",
+        input_pins: &["Json"],
+        default_output_pin: "Value",
+    },
+    PureFunctionSpec {
+        name: "make_object",
+        node_type: "MakeObjectNode",
+        input_pins: &["Keys", "Values"],
+        default_output_pin: "Object",
+    },
+    PureFunctionSpec {
         name: "split",
         node_type: "SplitNode",
         input_pins: &["Value", "Separators"],

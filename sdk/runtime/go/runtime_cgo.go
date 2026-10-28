@@ -202,14 +202,30 @@ func (r *Runtime) RegisterResourcesFile(ctx context.Context, path string) (json.
 	})
 }
 
+func (r *Runtime) RegisterWorkflow(ctx context.Context, source string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.register", map[string]any{"source": source})
+}
+func (r *Runtime) ValidateWorkflow(ctx context.Context, source string) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.validate", map[string]any{"source": source})
+}
+func (r *Runtime) PromoteWorkflow(ctx context.Context, id string, expectedRevision uint64) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.promote", map[string]any{"id": id, "expected_revision": expectedRevision})
+}
+func (r *Runtime) RemoveWorkflow(ctx context.Context, id string, expectedRevision uint64) (json.RawMessage, error) {
+	return r.invoke(ctx, "workflow.remove", map[string]any{"id": id, "expected_revision": expectedRevision})
+}
+
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) CreateWorkflowDraft(ctx context.Context, resource json.RawMessage) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.create", map[string]any{"resource": resource})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) ReadWorkflow(ctx context.Context, id string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.read", map[string]any{"id": id})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) RegisterWorkflowDraft(ctx context.Context, id string, expectedRevision *uint64, name string) (json.RawMessage, error) {
 	payload := map[string]any{"id": id, "expected_revision": expectedRevision}
 	if name != "" {
@@ -218,35 +234,42 @@ func (r *Runtime) RegisterWorkflowDraft(ctx context.Context, id string, expected
 	return r.invoke(ctx, "workflow.register", payload)
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) ReviseWorkflow(ctx context.Context, id string, expectedRevision uint64, change json.RawMessage, name *string, description *string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.revise", map[string]any{"id": id, "expected_revision": expectedRevision, "change": change, "name": name, "description": description})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) ValidateWorkflowRevision(ctx context.Context, id string, expectedRevision uint64, change json.RawMessage, name *string, description *string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.validate_revision", map[string]any{"id": id, "expected_revision": expectedRevision, "change": change, "name": name, "description": description})
 }
 
-// Deprecated: use ReviseWorkflow.
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) UpdateWorkflow(ctx context.Context, resource json.RawMessage, expectedRevision *uint64) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.update", map[string]any{"resource": resource, "expected_revision": expectedRevision})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) CompileWorkflowDraft(ctx context.Context, id string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.compile", map[string]any{"id": id})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) WorkflowScriptToBlueprint(ctx context.Context, script string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.convert.script_to_blueprint", map[string]any{"script": script})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) WorkflowBlueprintToScript(ctx context.Context, blueprint json.RawMessage) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.convert.blueprint_to_script", map[string]any{"blueprint": blueprint})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) DeleteWorkflow(ctx context.Context, id string, expectedRevision *uint64) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.delete", map[string]any{"id": id, "expected_revision": expectedRevision})
 }
 
+// ListWorkflows returns resource summaries, optionally filtered by kind.
 func (r *Runtime) ListWorkflows(ctx context.Context, kind string) (json.RawMessage, error) {
 	payload := map[string]any{}
 	if kind != "" {
@@ -263,14 +286,17 @@ func (r *Runtime) ExecuteWorkflowInContext(ctx context.Context, id string, input
 	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "inputs": inputs, "trace": trace, "conversation_id": conversationID, "agent_id": agentID})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) TestWorkflowDraft(ctx context.Context, id string, inputs map[string]any, trace bool) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "mode": "test", "inputs": inputs, "trace": trace})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) TestWorkflowDraftInContext(ctx context.Context, id string, inputs map[string]any, trace bool, conversationID string, agentID string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "mode": "test", "inputs": inputs, "trace": trace, "conversation_id": conversationID, "agent_id": agentID})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) ExecuteWorkflowScript(ctx context.Context, script string, inputs map[string]any, trace bool) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.execute_script", map[string]any{
 		"script": script,
@@ -279,6 +305,7 @@ func (r *Runtime) ExecuteWorkflowScript(ctx context.Context, script string, inpu
 	})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) ExecuteWorkflowScriptInContext(ctx context.Context, script string, inputs map[string]any, trace bool, conversationID string, agentID string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.execute_script", map[string]any{
 		"script":          script,
@@ -289,26 +316,32 @@ func (r *Runtime) ExecuteWorkflowScriptInContext(ctx context.Context, script str
 	})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) StartWorkflowRun(ctx context.Context) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.start", map[string]any{})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) RunWorkflow(ctx context.Context, workflowRunID string, id string, inputs map[string]any) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "id": id, "inputs": inputs})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) RunWorkflowDraftTest(ctx context.Context, workflowRunID string, id string, inputs map[string]any) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "id": id, "mode": "test", "inputs": inputs})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) RunWorkflowScript(ctx context.Context, workflowRunID string, script string, inputs map[string]any) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "script": script, "inputs": inputs})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) DescribeWorkflowInputs(ctx context.Context, id string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.describe_inputs", map[string]any{"id": id})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) DescribeWorkflowScriptInputs(ctx context.Context, script string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.describe_inputs", map[string]any{"script": script})
 }
@@ -322,6 +355,36 @@ func (r *Runtime) RegisterLlmFile(ctx context.Context, path string) (json.RawMes
 func (r *Runtime) RegisterAgentClusterFile(ctx context.Context, path string) (json.RawMessage, error) {
 	return r.invoke(ctx, "runtime.register_agent_cluster", map[string]any{
 		"input": path,
+	})
+}
+
+func (r *Runtime) AddAgentCluster(ctx context.Context, registration json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.add_agent_cluster", map[string]any{"registration": registration})
+}
+
+func (r *Runtime) ReadSkill(ctx context.Context, name string) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.read_skill", map[string]any{"name": name})
+}
+
+func (r *Runtime) ValidateSkillTransaction(ctx context.Context, transaction json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.validate_skill_transaction", transaction)
+}
+
+func (r *Runtime) CommitSkillTransaction(ctx context.Context, transaction json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.commit_skill_transaction", transaction)
+}
+
+func (r *Runtime) UpdateAgentCluster(ctx context.Context, registration json.RawMessage, expectedVersion string) (json.RawMessage, error) {
+	return r.UpdateAgentClusterWithSkills(ctx, registration, expectedVersion, []string{})
+}
+
+func (r *Runtime) UpdateAgentClusterWithSkills(ctx context.Context, registration json.RawMessage, expectedVersion string, reloadSkills []string) (json.RawMessage, error) {
+	if reloadSkills == nil {
+		reloadSkills = []string{}
+	}
+	return r.invoke(ctx, "runtime.update_agent_cluster", map[string]any{
+		"registration": registration, "expected_version": expectedVersion,
+		"reload_skills": reloadSkills,
 	})
 }
 
@@ -819,6 +882,7 @@ func (r *Runtime) WorkflowNodeDefinitions(ctx context.Context) (json.RawMessage,
 	return r.invoke(ctx, "runtime.get_workflow_node_definitions", map[string]any{})
 }
 
+// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
 func (r *Runtime) WorkflowReferenceNode(ctx context.Context, workflowID, nodeID string) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.get_reference_node", map[string]any{"workflow_id": workflowID, "node_id": nodeID})
 }

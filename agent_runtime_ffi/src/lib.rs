@@ -90,6 +90,7 @@ struct FfiError {
     code: c_int,
     kind: &'static str,
     message: String,
+    details: Option<Value>,
 }
 
 impl FfiError {
@@ -98,6 +99,7 @@ impl FfiError {
             code,
             kind,
             message: message.into(),
+            details: None,
         }
     }
 
@@ -138,19 +140,84 @@ impl FfiError {
     }
 
     fn to_json(&self) -> Value {
-        json!({
+        let mut value = json!({
             "schema": "agent-runtime-error/v1",
             "code": self.code,
             "kind": self.kind,
             "message": self.message,
-        })
+        });
+        if let Some(details) = &self.details {
+            value["details"] = details.clone();
+        }
+        value
     }
 }
 
 impl From<RuntimeError> for FfiError {
     fn from(error: RuntimeError) -> Self {
         match error {
-            RuntimeError::InvalidConfig(message) => Self::invalid_argument(message),
+            RuntimeError::SkillVersionConflict {
+                name,
+                expected,
+                actual,
+            } => {
+                let mut error = Self::bad_state("Skill content version conflict");
+                error.kind = "skill_version_conflict";
+                error.details = Some(json!({"name":name,"expected":expected,"actual":actual}));
+                error
+            }
+            RuntimeError::SkillStoreConflict { expected, actual } => {
+                let mut error = Self::bad_state(
+                    "Skill store revision conflict; reopen resources before retrying",
+                );
+                error.kind = "skill_store_conflict";
+                error.details = Some(json!({"expected":expected,"actual":actual}));
+                error
+            }
+            RuntimeError::InvalidConfig(message) => {
+                let mut error = Self::invalid_argument(message);
+                if error.message.contains("workflow_in_use:") {
+                    error.kind = "workflow_in_use";
+                }
+                error
+            }
+            RuntimeError::ClusterInUse {
+                cluster_id,
+                conversation_ids,
+            } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    "cluster_in_use",
+                    "cluster has live conversations",
+                );
+                error.details =
+                    Some(json!({"cluster_id": cluster_id, "conversation_ids": conversation_ids}));
+                error
+            }
+            RuntimeError::ClusterVersionConflict {
+                cluster_id,
+                expected,
+                actual,
+            } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    "cluster_version_conflict",
+                    "cluster definition version does not match",
+                );
+                error.details = Some(
+                    json!({"cluster_id": cluster_id, "expected_version": expected, "actual_version": actual}),
+                );
+                error
+            }
+            RuntimeError::SkillInUse { dependencies } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    "skill_in_use",
+                    "Skill is referenced by live Agent instances",
+                );
+                error.details = Some(json!({"dependencies": dependencies}));
+                error
+            }
             RuntimeError::NotStarted => Self::bad_state("runtime has not been started"),
             RuntimeError::Llm(message) => Self::new(
                 AGENT_RUNTIME_ERR_RUNTIME,
@@ -455,7 +522,195 @@ fn parse_json_or_string(value: String) -> Value {
     serde_json::from_str(&value).unwrap_or(Value::String(value))
 }
 
+// Deprecated external commands. Internal legacy compilation remains available for
+// loading existing resources; it must not re-open script authoring or execution.
+const DEPRECATED_WORKFLOW_COMMANDS: &[&str] = &[
+    "workflow.create",
+    "workflow.read",
+    "workflow.compile",
+    "workflow.delete",
+    "workflow.revise",
+    "workflow.validate_revision",
+    "workflow.describe_inputs",
+    "workflow.get_reference_node",
+    "workflow.start",
+    "workflow.run",
+    "workflow.update",
+    "workflow.convert.script_to_blueprint",
+    "workflow.convert.blueprint_to_script",
+    "workflow.execute_script",
+];
+
+const PUBLIC_WORKFLOW_COMMANDS: &[&str] = &[
+    "workflow.list",
+    "workflow.register",
+    "workflow.remove",
+    "workflow.validate",
+    "workflow.promote",
+    "workflow.execute",
+];
+
+const DEPRECATED_STUDIO_COMMANDS: &[&str] = &["studio.open_workflow", "studio.open_agent_test"];
+
+fn validate_public_workflow_command(
+    command: &str,
+    payload: &Map<String, Value>,
+) -> Result<(), FfiError> {
+    let deprecated = DEPRECATED_WORKFLOW_COMMANDS.contains(&command)
+        || (command.starts_with("workflow.") && !PUBLIC_WORKFLOW_COMMANDS.contains(&command))
+        || (command.starts_with("workflow.") && payload.contains_key("script"))
+        || (command == "workflow.create"
+            && payload.get("resource").is_some_and(|resource| {
+                resource
+                    .as_object()
+                    .is_some_and(|resource| resource.contains_key("script"))
+            }))
+        || (matches!(command, "workflow.revise" | "workflow.validate_revision")
+            && payload.get("change").and_then(|change| change.get("type"))
+                == Some(&Value::String("script".to_string())));
+    if deprecated {
+        return Err(FfiError::new(
+            AGENT_RUNTIME_ERR_INVALID_ARGUMENT,
+            "deprecated_api",
+            "Legacy Workflow APIs are deprecated and disabled. Use workflow.list, workflow.register, workflow.remove, workflow.validate, workflow.promote or workflow.execute.",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod workflow_api_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_commands_and_script_payloads_are_closed() {
+        let mut cases = DEPRECATED_WORKFLOW_COMMANDS
+            .iter()
+            .map(|command| (*command, json!({})))
+            .collect::<Vec<_>>();
+        cases.extend([
+            ("workflow.create", json!({"script": "return"})),
+            ("workflow.create", json!({"resource": {"script": "return"}})),
+            (
+                "workflow.compile",
+                json!({"id": "existing", "script": "return"}),
+            ),
+            (
+                "workflow.describe_inputs",
+                json!({"id": "existing", "script": "return"}),
+            ),
+            (
+                "workflow.run",
+                json!({"id": "existing", "script": "return"}),
+            ),
+            (
+                "workflow.execute",
+                json!({"id": "existing", "script": null}),
+            ),
+            (
+                "workflow.revise",
+                json!({"change": {"type": "script", "value": "return"}}),
+            ),
+            (
+                "workflow.validate_revision",
+                json!({"change": {"type": "script", "value": "return"}}),
+            ),
+        ]);
+        for (command, payload) in cases {
+            let error = validate_public_workflow_command(command, payload.as_object().unwrap())
+                .unwrap_err();
+            assert_eq!(error.kind, "deprecated_api", "{command}: {payload}");
+            assert_eq!(error.code, AGENT_RUNTIME_ERR_INVALID_ARGUMENT);
+        }
+        for command in PUBLIC_WORKFLOW_COMMANDS {
+            validate_public_workflow_command(command, &Map::new()).unwrap();
+        }
+    }
+}
+
 fn invoke_command(
+    facade: &mut RuntimeFacade,
+    command_type: &str,
+    payload: &Map<String, Value>,
+    command_id: &str,
+) -> Result<Value, FfiError> {
+    if DEPRECATED_STUDIO_COMMANDS.contains(&command_type) {
+        return Err(FfiError::new(AGENT_RUNTIME_ERR_INVALID_ARGUMENT, "deprecated_api",
+            "The standalone Workflow Studio and Agent Test Studio pages are deprecated and unavailable. Use the Workflow resource API or an embedded host UI."));
+    }
+    validate_public_workflow_command(command_type, payload)?;
+    if command_type.starts_with("workflow.") {
+        let allowed: &[&str] = match command_type {
+            "workflow.register" | "workflow.validate" => &["source"],
+            "workflow.list" => &["kind"],
+            "workflow.remove" | "workflow.promote" => &["id", "expected_revision"],
+            "workflow.execute" => &[
+                "id",
+                "inputs",
+                "trace",
+                "conversation_id",
+                "agent_id",
+                "turn_id",
+            ],
+            _ => unreachable!("public Workflow commands were checked above"),
+        };
+        if let Some(field) = payload
+            .keys()
+            .find(|field| !allowed.contains(&field.as_str()))
+        {
+            return Err(FfiError::invalid_argument(format!(
+                "Unsupported payload field: {field}"
+            )));
+        }
+    }
+    match command_type {
+        "workflow.register" | "workflow.validate" => {
+            return Ok(facade.register_logic_resource(
+                &required_string(payload, "source")?,
+                command_type == "workflow.register",
+            )?);
+        }
+        "workflow.promote" => {
+            return Ok(facade.register_workflow_draft(
+                &required_string(payload, "id")?,
+                Some(
+                    optional_u64(payload, "expected_revision")?.ok_or_else(|| {
+                        FfiError::invalid_argument("expected_revision is required")
+                    })?,
+                ),
+                None,
+            )?);
+        }
+        "workflow.remove" => {
+            return Ok(facade.delete_workflow_resource(
+                &required_string(payload, "id")?,
+                Some(
+                    optional_u64(payload, "expected_revision")?.ok_or_else(|| {
+                        FfiError::invalid_argument("expected_revision is required")
+                    })?,
+                ),
+            )?);
+        }
+        "workflow.execute" => {
+            let id = required_string(payload, "id")?;
+            let context = optional_workflow_execution_context(payload)?;
+            return Ok(facade.execute_workflow_resource(
+                &id,
+                None,
+                optional_inputs(payload)?,
+                optional_bool(payload, "trace")?,
+                &context,
+            )?);
+        }
+        _ => {}
+    }
+    invoke_command_inner(facade, command_type, payload, command_id)
+}
+
+// Private compatibility dispatcher: every external transport must use
+// invoke_command above. Legacy resources still share the unchanged execution path.
+#[allow(deprecated)]
+fn invoke_command_inner(
     facade: &mut RuntimeFacade,
     command_type: &str,
     payload: &Map<String, Value>,
@@ -477,6 +732,45 @@ fn invoke_command(
         "runtime.register_agent_cluster" => {
             facade.register_agent_cluster_input(&registration_input(payload)?)?;
             json!({})
+        }
+        "runtime.read_skill" => facade.read_skill(&required_string(payload, "name")?)?,
+        "runtime.validate_skill_transaction" | "runtime.commit_skill_transaction" => facade
+            .skill_transaction(
+                &Value::Object(payload.clone()),
+                command_type == "runtime.commit_skill_transaction",
+            )?,
+        "runtime.add_agent_cluster" | "runtime.update_agent_cluster" => {
+            for key in payload.keys() {
+                if key != "registration"
+                    && !(command_type == "runtime.update_agent_cluster"
+                        && matches!(key.as_str(), "expected_version" | "reload_skills"))
+                {
+                    return Err(FfiError::invalid_argument(format!(
+                        "unsupported payload field '{key}'"
+                    )));
+                }
+            }
+            let registration = payload
+                .get("registration")
+                .filter(|value| value.is_object())
+                .ok_or_else(|| {
+                    FfiError::invalid_argument("payload.registration must be an object")
+                })?;
+            if command_type == "runtime.add_agent_cluster" {
+                facade.add_agent_cluster(registration)?
+            } else {
+                let reload_skills: Vec<String> = match payload.get("reload_skills") {
+                    Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
+                        FfiError::invalid_argument("reload_skills must be an array of Skill names")
+                    })?,
+                    None => Vec::new(),
+                };
+                facade.update_agent_cluster_with_skills(
+                    registration,
+                    &required_string(payload, "expected_version")?,
+                    &reload_skills,
+                )?
+            }
         }
         "runtime.set_auth_context" => {
             let context = payload
@@ -576,15 +870,18 @@ fn invoke_command(
             optional_u64(payload, "expected_revision")?,
         )?,
         "workflow.list" => {
-            let kind = match payload.get("kind").and_then(Value::as_str) {
-                None => None,
-                Some("draft") => Some(corework::workflow::workflows::WorkflowResourceKind::Draft),
-                Some("registered") => {
+            let kind = match payload.get("kind") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) if value == "all" => None,
+                Some(Value::String(value)) if value == "draft" => {
+                    Some(corework::workflow::workflows::WorkflowResourceKind::Draft)
+                }
+                Some(Value::String(value)) if value == "registered" => {
                     Some(corework::workflow::workflows::WorkflowResourceKind::Registered)
                 }
                 Some(other) => {
                     return Err(FfiError::invalid_argument(format!(
-                        "payload.kind '{}' is invalid; use 'draft' or 'registered'",
+                        "payload.kind '{}' is invalid; use 'all', 'draft' or 'registered'",
                         other
                     )))
                 }
@@ -959,10 +1256,12 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
             let commands = capabilities["commands"]
                 .as_array_mut()
                 .expect("capabilities commands must be an array");
-            commands.push(Value::String("workflow.describe_inputs".to_string()));
-            for command in ["jev.configure", "jev.register", "jev.list", "jev.run"] {
+            commands.retain(|command| !command.as_str().is_some_and(|command| command.starts_with("workflow.") || DEPRECATED_STUDIO_COMMANDS.contains(&command)));
+            commands.extend(PUBLIC_WORKFLOW_COMMANDS.iter().map(|command| Value::String((*command).into())));
+            for command in ["jev.configure", "jev.register", "jev.list", "jev.run", "runtime.add_agent_cluster", "runtime.update_agent_cluster", "runtime.read_skill", "runtime.validate_skill_transaction", "runtime.commit_skill_transaction"] {
                 commands.push(Value::String(command.to_string()));
             }
+            capabilities["features"] = json!({"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"skill_candidate_transactions":1});
             let event_types = capabilities["events"]["types"]
                 .as_array_mut()
                 .expect("capabilities event types must be an array");
@@ -1414,6 +1713,13 @@ mod abi_tests {
             .iter()
             .any(|event| event == "tool:permission-resolved"));
         assert_eq!(value["threading"]["callbacks"], false);
+        for command in DEPRECATED_STUDIO_COMMANDS {
+            assert!(!value["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == command));
+        }
         assert!(value["commands"]
             .as_array()
             .unwrap()
@@ -1444,28 +1750,20 @@ mod abi_tests {
             .unwrap()
             .iter()
             .any(|command| command == "conversation.agent_tasks"));
-        for command in [
-            "workflow.create",
-            "workflow.read",
-            "workflow.register",
-            "workflow.update",
-            "workflow.revise",
-            "workflow.validate_revision",
-            "workflow.compile",
-            "workflow.delete",
-            "workflow.list",
-            "workflow.convert.script_to_blueprint",
-            "workflow.convert.blueprint_to_script",
-            "workflow.execute",
-            "workflow.execute_script",
-            "workflow.start",
-            "workflow.run",
-        ] {
-            assert!(value["commands"]
+        let actual = value["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|command| command.starts_with("workflow."))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, PUBLIC_WORKFLOW_COMMANDS);
+        for command in DEPRECATED_WORKFLOW_COMMANDS {
+            assert!(!value["commands"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|candidate| candidate == command));
+                .any(|name| name == command));
         }
     }
 

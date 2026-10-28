@@ -2754,6 +2754,7 @@ impl ChainCompiler {
             schema_version: WORKFLOW_SCHEMA_VERSION.to_string(),
             min_runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             metadata: crate::workflow::blueprint_json::BlueprintMetadata {
+                extensions: HashMap::new(),
                 id: String::new(),
                 name: String::new(),
                 created: String::new(),
@@ -2874,6 +2875,7 @@ impl ChainCompiler {
             variable.data_type = data_type;
         } else {
             self.variables.push(BlueprintVariable {
+                display_name: None,
                 name: name.to_string(),
                 data_type,
                 default_value,

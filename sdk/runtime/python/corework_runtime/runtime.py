@@ -4,7 +4,7 @@ import ctypes
 import json
 import queue
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -651,10 +651,26 @@ class Runtime:
     def register_resources(self, registration: Mapping[str, Any]) -> Any:
         return self.invoke("runtime.register_resources", {"registration": registration})
 
+    def register_workflow(self, source: str) -> Any:
+        """Register a complete resource document with state and revision in source."""
+        return self.invoke("workflow.register", {"source": source})
+
+    def validate_workflow(self, source: str) -> Any:
+        """Validate without saving or executing nodes."""
+        return self.invoke("workflow.validate", {"source": source})
+
+    def promote_workflow(self, workflow_id: str, expected_revision: int) -> Any:
+        return self.invoke("workflow.promote", {"id": workflow_id, "expected_revision": expected_revision})
+
+    def remove_workflow(self, workflow_id: str, expected_revision: int) -> Any:
+        return self.invoke("workflow.remove", {"id": workflow_id, "expected_revision": expected_revision})
+
     def create_workflow_draft(self, resource: Mapping[str, Any]) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke("workflow.create", {"resource": dict(resource)})
 
     def read_workflow(self, workflow_id: str) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke("workflow.read", {"id": workflow_id})
 
     def register_workflow_draft(
@@ -664,6 +680,7 @@ class Runtime:
         expected_revision: int | None = None,
         name: str | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.register",
             {
@@ -677,6 +694,7 @@ class Runtime:
         self, workflow_id: str, expected_revision: int, change: Mapping[str, Any],
         *, name: str | None = None, description: str | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         """Validate and commit exactly one script or blueprint change."""
         return self.invoke("workflow.revise", {
             "id": workflow_id, "expected_revision": expected_revision,
@@ -687,6 +705,7 @@ class Runtime:
         self, workflow_id: str, expected_revision: int, change: Mapping[str, Any],
         *, name: str | None = None, description: str | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         """Prepare the same complete resource without saving a new revision."""
         return self.invoke("workflow.validate_revision", {
             "id": workflow_id, "expected_revision": expected_revision,
@@ -699,21 +718,24 @@ class Runtime:
         *,
         expected_revision: int | None = None,
     ) -> Any:
-        """Deprecated: use revise_workflow."""
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.update",
             {"resource": dict(resource), "expected_revision": expected_revision},
         )
 
     def compile_workflow_draft(self, workflow_id: str) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke("workflow.compile", {"id": workflow_id})
 
     def workflow_script_to_blueprint(self, script: str) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.convert.script_to_blueprint", {"script": script}
         )
 
     def workflow_blueprint_to_script(self, blueprint: Mapping[str, Any]) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.convert.blueprint_to_script",
             {"blueprint": dict(blueprint)},
@@ -722,12 +744,14 @@ class Runtime:
     def delete_workflow(
         self, workflow_id: str, *, expected_revision: int | None = None
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.delete",
             {"id": workflow_id, "expected_revision": expected_revision},
         )
 
     def list_workflows(self, *, kind: str | None = None) -> Any:
+        """List resource summaries; kind may be all, draft, or registered."""
         return self.invoke("workflow.list", {"kind": kind})
 
     def execute_workflow(
@@ -759,6 +783,7 @@ class Runtime:
         conversation_id: str | None = None,
         agent_id: str | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.execute",
             {
@@ -780,6 +805,7 @@ class Runtime:
         conversation_id: str | None = None,
         agent_id: str | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.execute_script",
             {
@@ -792,6 +818,7 @@ class Runtime:
         )
 
     def start_workflow_run(self) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke("workflow.start", {})
 
     def run_workflow(
@@ -800,6 +827,7 @@ class Runtime:
         workflow_id: str,
         inputs: Mapping[str, Any] | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.run",
             {
@@ -815,6 +843,7 @@ class Runtime:
         workflow_id: str,
         inputs: Mapping[str, Any] | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.run",
             {
@@ -831,6 +860,7 @@ class Runtime:
         script: str,
         inputs: Mapping[str, Any] | None = None,
     ) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke(
             "workflow.run",
             {
@@ -841,9 +871,11 @@ class Runtime:
         )
 
     def describe_workflow_inputs(self, workflow_id: str) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke("workflow.describe_inputs", {"id": workflow_id})
 
     def describe_workflow_script_inputs(self, script: str) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         return self.invoke("workflow.describe_inputs", {"script": script})
 
     def register_llm_file(self, path: str | Path) -> Any:
@@ -870,6 +902,29 @@ class Runtime:
     def set_current_model(self, model_uid: int) -> Any:
         return self.invoke("runtime.set_current_model", {"model_uid": model_uid})
 
+    def add_agent_cluster(self, registration: Mapping[str, Any]) -> Any:
+        """Add a cluster after start; its primary agent must reference a Role Skill."""
+        return self.invoke("runtime.add_agent_cluster", {"registration": registration})
+
+    def read_skill(self, name: str) -> Any:
+        return self.invoke("runtime.read_skill", {"name": name})
+
+    def validate_skill_transaction(self, transaction: Mapping[str, Any]) -> Any:
+        return self.invoke("runtime.validate_skill_transaction", transaction)
+
+    def commit_skill_transaction(self, transaction: Mapping[str, Any]) -> Any:
+        return self.invoke("runtime.commit_skill_transaction", transaction)
+
+    def update_agent_cluster(self, registration: Mapping[str, Any], expected_version: str,
+                             *, reload_skills: Sequence[str] | None = None) -> Any:
+        """Replace an unused cluster; optionally reload Skills without live dependents."""
+        payload: dict[str, Any] = {
+            "registration": registration, "expected_version": expected_version,
+        }
+        if reload_skills is not None:
+            payload["reload_skills"] = list(reload_skills)
+        return self.invoke("runtime.update_agent_cluster", payload)
+
     def provider_definitions(self) -> Any:
         return self.invoke("runtime.get_provider_definitions")
 
@@ -882,6 +937,7 @@ class Runtime:
         return self.invoke("runtime.get_workflow_node_definitions")
 
     def workflow_reference_node(self, workflow_id: str, node_id: str) -> Any:
+        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
         """Return a compiler-ready reference node for a registered workflow."""
         return self.invoke("workflow.get_reference_node", {"workflow_id": workflow_id, "node_id": node_id})
 

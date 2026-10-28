@@ -1,5 +1,9 @@
 # 11 Runtime Workflow Catalog and Execution Contract
 
+> Workflow resources now expose list, register, remove, validate, promote and execute. Legacy API descriptions below are historical. See [the current contract](12-workflow-resource-api.md).
+
+
+
 ABI revision 1.2 exposes a dynamic workflow catalog through
 `agent_runtime_invoke_v1`. Resource/LLM/cluster registration remains frozen
 after `start`; workflow resources are the intentional mutable exception.
@@ -11,17 +15,15 @@ after `start`; workflow resources are the intentional mutable exception.
 | `workflow.create` | `resource` | Create an untrusted Draft. |
 | `workflow.read` | `id` | Read a Draft or Registered resource. |
 | `workflow.register` | `id`, `expected_revision?`, `name?` | Promote a valid Draft to Registered. |
-| `workflow.update` | `resource`, `expected_revision?` | Update an existing resource. |
+| `workflow.revise` | `id`, `expected_revision`, `change` | Compile and save logic_source / logic. |
+| `workflow.validate_revision` | `id`, `expected_revision`, `change` | Validate without committing a revision. |
 | `workflow.compile` | `id` | Return Draft validation and blueprint. |
 | `workflow.delete` | `id`, `expected_revision?` | Delete either kind. |
 | `workflow.list` | `kind?` | `{ "workflows": [...] }`; kind is `draft` or `registered`. |
-| `workflow.convert.script_to_blueprint` | `script` | Compile to Blueprint JSON without changing the catalog. |
-| `workflow.convert.blueprint_to_script` | `blueprint` | Validate and decompile without changing the catalog. |
 | `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Execute Registered, or Draft with `mode=test`. |
-| `workflow.execute_script` | `script`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Compile and execute temporary text without registration. |
-| `workflow.describe_inputs` | `id` or `script` | Return structured input metadata for host-generated forms. |
+| `workflow.describe_inputs` | `id` | Return structured input metadata for host-generated forms. |
 | `workflow.start` | none | Create an execution channel and return `workflow_run_id` without running a workflow. |
-| `workflow.run` | `workflow_run_id`, `id` or `script`, `mode?`, `inputs?`, optional caller identity | Start work on a previously created and observed channel; each id is one-shot. |
+| `workflow.run` | `workflow_run_id`, `id`, `mode?`, `inputs?`, optional caller identity | Start work on a previously created and observed channel; each id is one-shot. |
 
 Catalog commands require a started Runtime. Only Draft can be created. A Draft
 may preserve invalid script for editing, but it cannot be promoted until

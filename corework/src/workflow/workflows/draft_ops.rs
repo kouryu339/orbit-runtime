@@ -1725,6 +1725,7 @@ impl SystemOperation for DraftAddVariableSystem {
             return Ok(DraftOpOutput::err(format!("变量已存在: {}", input.name)));
         }
         draft.blueprint.variables.push(BlueprintVariable {
+            display_name: None,
             name: input.name.clone(),
             data_type: input.data_type,
             default_value: input.default_value,
@@ -2034,6 +2035,7 @@ impl SystemOperation for DraftDeclareVarSystem {
             )));
         }
         draft.blueprint.variables.push(BlueprintVariable {
+            display_name: None,
             name: input.name.clone(),
             data_type: input.data_type,
             default_value: input.default_value,

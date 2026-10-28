@@ -15,6 +15,7 @@ pub mod array;
 pub mod convert;
 pub mod divmod;
 pub mod logic;
+pub mod make_object;
 pub mod math;
 pub mod placeholder;
 pub mod string;

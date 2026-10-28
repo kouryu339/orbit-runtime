@@ -276,7 +276,31 @@ impl RuntimeFacade {
         snapshot_json: &str,
     ) -> Result<ConversationInfo, RuntimeError> {
         let mut snapshot = parse_conversation_snapshot(snapshot_json)?;
+        let request = parse_conversation_spawn_request(spawn_json)?;
+        self.check_snapshot_cluster_version(
+            &request.cluster_id,
+            snapshot.cluster_definition.as_ref(),
+        )?;
+        {
+            let _admission = self
+                .rt
+                .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.read());
+            self.check_snapshot_skill_versions(
+                Some(&request.cluster_id),
+                snapshot.skill_versions.as_ref(),
+            )?;
+        }
         let info = self.spawn_conversation(spawn_json)?;
+        let _skill_admission = self
+            .rt
+            .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.read());
+        if let Err(error) = self.check_snapshot_skill_versions(
+            Some(&request.cluster_id),
+            snapshot.skill_versions.as_ref(),
+        ) {
+            let _ = self.close_conversation(&info.conversation_id);
+            return Err(error);
+        }
         if let Err(error) =
             self.normalize_snapshot_images(&info.conversation_id, &mut snapshot.ledger)
         {
@@ -305,6 +329,7 @@ impl RuntimeFacade {
             let _ = self.close_conversation(&info.conversation_id);
             return Err(error);
         }
+        drop(_skill_admission);
         if let Err(error) = self.apply_conversation_recovery(&info.conversation_id, recovery) {
             let _ = self.close_conversation(&info.conversation_id);
             return Err(error);
@@ -396,6 +421,26 @@ impl RuntimeFacade {
         skills: Vec<String>,
         init: ConversationInitPlan,
     ) -> Result<ConversationInfo, RuntimeError> {
+        let _catalog_admission = if let Some(resources) = &self.registries.resources {
+            Some(self.rt.block_on(async {
+                let _gate = ai_assistant::skills::usage::SKILL_UPDATE_GATE.read().await;
+                let catalog = ai_assistant::skills::systems::SKILL_MANAGER
+                    .get()
+                    .ok_or_else(|| {
+                        RuntimeError::InvalidConfig("Skill catalog is not initialized".into())
+                    })?
+                    .read()
+                    .await;
+                if catalog.managed_root() != Some(resources.managed_skills_dir.as_path()) {
+                    return Err(RuntimeError::InvalidConfig(
+                        "Skill catalog belongs to another resource root".into(),
+                    ));
+                }
+                Ok(ai_assistant::skills::usage::CatalogAdmission::begin())
+            })?)
+        } else {
+            None
+        };
         let manager = self.manager()?;
         let assistant_config = self.assistant_config_for_agent(agent);
         let mut init = init;

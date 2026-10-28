@@ -262,6 +262,8 @@ impl AssistantContext {
     }
 
     pub async fn add_imported_skill(cache: &Arc<dyn Cache>, skill_name: String) -> Result<()> {
+        let _admission = crate::skills::usage::SKILL_UPDATE_GATE.read().await;
+        crate::skills::usage::track(cache);
         let mut skills = Self::get_imported_skills(cache).await?;
         if !skills.contains(&skill_name) {
             skills.push(skill_name);

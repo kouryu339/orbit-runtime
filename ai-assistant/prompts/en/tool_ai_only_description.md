@@ -1,1 +1,1 @@
-[AI only] This tool cannot be written into or used as a node in a scripted Workflow.
+[AI only] This tool cannot be used by call operations in Workflow steps or as a Workflow node.

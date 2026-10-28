@@ -140,6 +140,14 @@ impl WorkflowValidation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DraftWorkflowEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resource_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resource_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) logic_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) logic: Option<crate::workflow::logic::LogicDocument>,
     #[serde(default)]
     pub(crate) source: Option<String>,
     #[serde(default)]
@@ -169,6 +177,14 @@ pub struct WorkflowResourceSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowResourceView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logic_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logic: Option<crate::workflow::logic::LogicDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_script: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +271,10 @@ impl WorkflowsModule {
             }
             let mut drafts = self.get_draft_registry()?;
             let entry = DraftWorkflowEntry {
+                resource_source: None,
+                resource_path: None,
+                logic_source: None,
+                logic: None,
                 source: None,
                 validator_version: None,
                 id,
@@ -287,6 +307,7 @@ impl WorkflowsModule {
         let (view, previous_revision) = {
             let _guard = self.reference_lock.lock();
             let id = Self::validate_resource_id(id)?;
+            self.ensure_not_running_unlocked(&id)?;
             let name = self.validate_resource_name(name)?;
             let mut drafts = self.get_draft_registry()?;
             let position = drafts
@@ -294,6 +315,11 @@ impl WorkflowsModule {
                 .position(|entry| entry.id == id)
                 .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
             let previous_revision = drafts[position].revision;
+            if drafts[position].logic.is_some() {
+                return Err(FrameworkError::InvalidOperation(
+                    "Logic-owned drafts require revise_workflow".into(),
+                ));
+            }
             ensure_revision(&id, previous_revision, expected_revision)?;
             self.ensure_name_available(&name, Some(&id))?;
 
@@ -304,6 +330,10 @@ impl WorkflowsModule {
                 }
             }
             let entry = DraftWorkflowEntry {
+                resource_source: None,
+                resource_path: None,
+                logic_source: None,
+                logic: None,
                 source: None,
                 validator_version: None,
                 id,
@@ -361,6 +391,7 @@ impl WorkflowsModule {
                 .position(|entry| entry.id == id)
                 .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Draft))?;
             let draft = drafts[position].clone();
+            self.ensure_not_running_unlocked(&id)?;
             ensure_revision(&id, draft.revision, expected_revision)?;
             if !draft.validation.valid {
                 return Err(FrameworkError::InvalidOperation(format!(
@@ -395,6 +426,10 @@ impl WorkflowsModule {
                     .map_err(|error| FrameworkError::InvalidOperation(error.to_string()))?,
             };
             let prepared = super::revision::PreparedRevision {
+                resource_source: draft.resource_source.clone(),
+                resource_path: draft.resource_path.clone(),
+                logic_source: draft.logic_source.clone(),
+                logic: draft.logic.clone(),
                 blueprint: blueprint.clone(),
                 script,
                 source: draft.source.clone().unwrap_or_else(|| "legacy".into()),
@@ -447,39 +482,48 @@ impl WorkflowsModule {
         id: &str,
         expected_revision: Option<u64>,
     ) -> Result<WorkflowResourceSummary> {
-        let id = Self::validate_resource_id(id)?;
-        let mut drafts = self.get_draft_registry()?;
-        if let Some(position) = drafts.iter().position(|entry| entry.id == id) {
-            let entry = drafts[position].clone();
-            ensure_revision(&id, entry.revision, expected_revision)?;
-            drafts.remove(position);
-            self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
-            let summary = Self::draft_summary(&entry);
-            self.publish_deleted(&summary).await;
-            return Ok(summary);
-        }
-        let registry = self.get_registry()?;
-        let entry = registry
-            .iter()
-            .find(|entry| entry.metadata.id == id)
-            .cloned()
-            .ok_or_else(|| {
-                FrameworkError::InvalidOperation(format!(
-                    "workflow resource '{}' does not exist",
-                    id
-                ))
-            })?;
-        ensure_revision(&id, entry.revision, expected_revision)?;
-        let deleted = self.delete_resource(&id)?;
-        let summary = WorkflowResourceSummary {
-            id: deleted.id,
-            name: deleted.name,
-            description: deleted.description,
-            kind: WorkflowResourceKind::Registered,
-            revision: deleted.revision,
-            trusted: true,
-            production_executable: true,
-            validation: WorkflowValidation::valid(),
+        let summary = {
+            let _guard = self.reference_lock.lock();
+            let id = Self::validate_resource_id(id)?;
+            self.ensure_not_running_unlocked(&id)?;
+            let mut drafts = self.get_draft_registry()?;
+            if let Some(position) = drafts.iter().position(|entry| entry.id == id) {
+                let entry = drafts[position].clone();
+                ensure_revision(&id, entry.revision, expected_revision)?;
+                self.ensure_reference_unused_unlocked(&id)?;
+                if let Some(path) = &entry.resource_path {
+                    self.ensure_owned_resource_path(std::path::Path::new(path))?;
+                }
+                drafts.remove(position);
+                self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
+                if let Some(path) = &entry.resource_path {
+                    let path = std::path::Path::new(path);
+                    if let Err(error) = std::fs::remove_file(path) {
+                        drafts.insert(position, entry.clone());
+                        self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
+                        return Err(FrameworkError::SystemError(error.to_string()));
+                    }
+                }
+                Self::draft_summary(&entry)
+            } else {
+                let entry = self
+                    .get_registry()?
+                    .into_iter()
+                    .find(|entry| entry.metadata.id == id)
+                    .ok_or_else(|| missing_resource(&id, WorkflowResourceKind::Registered))?;
+                ensure_revision(&id, entry.revision, expected_revision)?;
+                let deleted = self.delete_resource_unlocked(&id)?;
+                WorkflowResourceSummary {
+                    id: deleted.id,
+                    name: deleted.name,
+                    description: deleted.description,
+                    kind: WorkflowResourceKind::Registered,
+                    revision: deleted.revision,
+                    trusted: true,
+                    production_executable: true,
+                    validation: WorkflowValidation::valid(),
+                }
+            }
         };
         self.publish_deleted(&summary).await;
         Ok(summary)
@@ -504,7 +548,15 @@ impl WorkflowsModule {
                     id
                 ))
             })?;
-        Self::registered_view(entry)
+        let mut view = Self::registered_view(entry)?;
+        if let Some(blueprint) = &view.blueprint {
+            if let Err(error) = self.workflow_dependencies_ready_unlocked(blueprint) {
+                view.summary.production_executable = false;
+                view.summary.validation = WorkflowValidation::invalid(error.to_string());
+                view.reference_script = None;
+            }
+        }
+        Ok(view)
     }
 
     pub fn list_workflow_catalog(
@@ -517,6 +569,8 @@ impl WorkflowsModule {
         }
         if kind != Some(WorkflowResourceKind::Draft) {
             resources.extend(self.get_registry()?.into_iter().map(|entry| {
+                let validation = Self::accepted_blueprint(&entry)
+                    .and_then(|blueprint| self.workflow_dependencies_ready_unlocked(&blueprint));
                 WorkflowResourceSummary {
                     id: entry.metadata.id,
                     name: entry.metadata.name,
@@ -524,8 +578,11 @@ impl WorkflowsModule {
                     kind: WorkflowResourceKind::Registered,
                     revision: entry.revision,
                     trusted: true,
-                    production_executable: true,
-                    validation: WorkflowValidation::valid(),
+                    production_executable: validation.is_ok(),
+                    validation: validation
+                        .err()
+                        .map(|error| WorkflowValidation::invalid(error.to_string()))
+                        .unwrap_or_else(WorkflowValidation::valid),
                 }
             }));
         }
@@ -687,6 +744,10 @@ impl WorkflowsModule {
 
     fn draft_view(entry: DraftWorkflowEntry) -> WorkflowResourceView {
         WorkflowResourceView {
+            resource_source: entry.resource_source.clone(),
+            resource_path: entry.resource_path.clone(),
+            logic_source: entry.logic_source.clone(),
+            logic: entry.logic.clone(),
             reference_script: None,
             source: entry.source.clone(),
             validator_version: entry.validator_version.clone(),
@@ -697,6 +758,30 @@ impl WorkflowsModule {
     }
 
     fn registered_view(entry: BlueprintEntry) -> Result<WorkflowResourceView> {
+        if let Some(accepted) = entry.accepted {
+            return Ok(WorkflowResourceView {
+                resource_source: accepted.resource_source,
+                resource_path: Some(entry.file_path),
+                logic_source: accepted.logic_source,
+                logic: accepted.logic,
+                reference_script: Some(super::reference::reference_script(&accepted.blueprint)?),
+                source: Some(accepted.source),
+                validator_version: Some(accepted.validator_version),
+                summary: WorkflowResourceSummary {
+                    id: entry.metadata.id,
+                    name: entry.metadata.name,
+                    description: entry.metadata.description,
+                    kind: WorkflowResourceKind::Registered,
+                    revision: entry.revision,
+                    trusted: true,
+                    production_executable: true,
+                    validation: WorkflowValidation::valid(),
+                },
+                script: Some(accepted.script),
+                blueprint: Some(accepted.blueprint),
+            });
+        }
+
         let document: Value = serde_json::from_slice(
             &std::fs::read(&entry.file_path)
                 .map_err(|e| FrameworkError::SystemError(e.to_string()))?,
@@ -711,6 +796,18 @@ impl WorkflowsModule {
             ),
         };
         Ok(WorkflowResourceView {
+            resource_source: None,
+            resource_path: None,
+            logic_source: document
+                .get("logic_source")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            logic: document
+                .get("logic")
+                .filter(|v| !v.is_null())
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?,
             reference_script: Some(super::reference::reference_script(&blueprint)?),
             source: document
                 .get("source")

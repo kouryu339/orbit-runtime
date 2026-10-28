@@ -1,5 +1,9 @@
 # Corework Runtime Host SDK
 
+> Workflow resources now expose list, register, remove, validate, promote and execute. Legacy API descriptions below are historical. See [the current contract](../../agent_runtime_ffi/docs/en/12-workflow-resource-api.md).
+
+
+
 The Runtime Host SDK is for applications that embed the native Agent Runtime:
 desktop apps, servers, service hosts, and test harnesses. It wraps the stable C
 ABI and exposes lifecycle, command invocation, and event polling.
@@ -233,7 +237,35 @@ then calls the language SDK's `resolve_tool_permission` /
 `ResolveToolPermission` method with the conversation id, tool call id, and
 `allow` or `deny`. A stale or duplicate response returns `resolved: false`.
 
+## Dynamic Agent Cluster Configuration
+
+After start, `runtime.add_agent_cluster` accepts the existing cluster registration
+object in `registration`. The primary member must bind a valid Role Skill.
+`runtime.update_agent_cluster` additionally requires `expected_version` and
+replaces configuration only when the cluster has **no live conversations**.
+Waiting, paused, approval-blocked and background conversations all count.
+Both commands share the existing FFI serialization with conversation spawn/close.
+The effective catalog and change results expose a content-based `version`.
+Updates optionally accept `reload_skills` to reload registered Skill files after
+the host saves them. Any live Agent depending on a selected Skill blocks reload,
+including Agents in other clusters, children and dynamically imported Features.
+Errors identify both conversation and Agent. All selected content and cluster
+configuration commit together; snapshots check independent Skill content versions.
+See [the dynamic cluster contract](../../agent_runtime_ffi/docs/en/13-dynamic-agent-clusters.md)
+for snapshot version checks, persistence ownership and SDK methods.
+
 ## Dynamic Workflow ABI
+
+Skill candidates can be saved directly with `runtime.commit_skill_transaction`
+after reading `runtime.read_skill`; use `runtime.validate_skill_transaction` for
+validation without writes or execution. The payload includes content versions,
+`expected_store_revision`, full SKILL.md sources and optional cluster configuration.
+Runtime atomically publishes a managed manifest and restores it on restart.
+See [the candidate transaction contract](../../agent_runtime_ffi/docs/en/14-skill-candidate-transactions.md).
+
+Existing Workflow resource edits now become drafts. Active runs reserve the root
+and all recursive references, and reject edits with `workflow_in_use` until release.
+Formal callers of a draft are visible but blocked until dependencies are promoted.
 
 ABI 1.3 keeps initialization registration frozen after `start`, but exposes a
 separate dynamic workflow catalog through `agent_runtime_invoke_v1`. A resource
