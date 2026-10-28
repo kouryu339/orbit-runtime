@@ -25,7 +25,9 @@ const TOOL_LINE = /^\[tool:status\s*\|\s*call_id="([^"]+)"\]$/;
 const WIDGET_LINE =
   /^\[(input:path|input:text|select:single|select:multi|confirm)\s*(?:\|\s*(.*))?\]$/;
 
-export function parseConversationContent(content: string): ConversationContentPart[] {
+export function parseConversationContent(
+  content: string,
+): ConversationContentPart[] {
   const parts: ConversationContentPart[] = [];
   const markdown: string[] = [];
   const widgets: WidgetDefinition[] = [];
@@ -128,4 +130,47 @@ export function toolCallForId(
       toolName: '',
     }
   );
+}
+
+export function toolStatusLabel(
+  status: ToolCallView['status'],
+  locale: string,
+): string {
+  const labels = {
+    placeholder: ['请求执行', 'Requested'],
+    running: ['执行中', 'Running'],
+    waiting_permission: ['等待批准', 'Waiting for approval'],
+    finished: ['成功', 'Succeeded'],
+    failed: ['失败', 'Failed'],
+    uncertain: ['结果待确认', 'Result unknown'],
+  };
+  return labels[status][locale === 'zh-CN' ? 0 : 1];
+}
+
+/** No raw-result, raw-error or command fallback, including for legacy callers. */
+export function toolDisplaySummary(call: ToolCallView, locale: string): string {
+  const summary = call.userSummary?.trim();
+  // This field is for short prose, never serialized payloads or code blocks.
+  if (
+    summary &&
+    summary.length <= 280 &&
+    !/[\r\n]/.test(summary) &&
+    !/^[\[{"`]/.test(summary)
+  )
+    return summary;
+  const messages: Record<ToolCallView['status'], [string, string]> = {
+    placeholder: ['正在准备工具调用。', 'Preparing the tool call.'],
+    running: ['工具正在执行，请稍候。', 'The tool is running.'],
+    waiting_permission: ['等待你的批准后执行。', 'Waiting for your approval.'],
+    finished: ['工具已执行完成。', 'The tool completed.'],
+    failed: [
+      '工具执行失败，请检查后重试。',
+      'The tool failed. Check the task before retrying.',
+    ],
+    uncertain: [
+      '执行结果尚未确认，请先核实任务状态。',
+      'The result is unconfirmed. Check the task state first.',
+    ],
+  };
+  return messages[call.status][locale.startsWith('zh') ? 0 : 1];
 }

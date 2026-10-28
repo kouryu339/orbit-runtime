@@ -255,7 +255,7 @@ describe('AgentRuntimeConversationElement', () => {
     const bubbles = element.shadowRoot?.querySelectorAll('.user-bubble');
     expect(bubbles?.[0].textContent).toBe('See image@图片1');
     expect(bubbles?.[1].textContent).toBe('@图片1@图片2');
-    expect(Array.from(element.shadowRoot?.querySelectorAll('.at-reference') ?? [], (item) => item.textContent))
+    expect(Array.from(element.shadowRoot?.querySelectorAll('agent-runtime-image-reference') ?? [], (item) => item.textContent))
       .toEqual(['@图片1', '@图片1', '@图片2']);
     expect(element.shadowRoot?.textContent).not.toContain('private');
     expect(element.shadowRoot?.textContent).not.toContain('bbbbbbbbbbbb');
@@ -828,6 +828,7 @@ describe('AgentRuntimeConversationElement', () => {
 
   it('enables the composer after a revision-zero waiting snapshot', async () => {
     const element = new AgentRuntimeConversationElement();
+    element.state = conversationReducer(element.state, {type:'connection',state:'connected'});
     element.state = conversationReducer(element.state, {
       type: 'conversation-created',
       conversationId: 'conversation-1',
@@ -1123,6 +1124,7 @@ describe('AgentRuntimeConversationElement', () => {
     element.state = {
       ...element.state,
       conversationId: 'conversation-model-test',
+      connection:'connected',initialized:true,snapshotReceived:true,
       model: 'deepseek-v4-flash',
       modelUid: 1002,
     };
@@ -1133,53 +1135,20 @@ describe('AgentRuntimeConversationElement', () => {
       expect(controller.getProviderDefinitions).toHaveBeenCalled();
     });
 
-    const modelButton = Array.from(
-      element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
-    ).find((button) => button.dataset.tone === 'model');
-    expect(modelButton?.textContent?.trim()).toBe('deepseek-v4-flash / OpenAI compatible');
-    modelButton?.click();
+    const modelButton = element.shadowRoot!.querySelector<HTMLButtonElement>('[data-tone="model"]')!;
+    expect(modelButton.querySelector('.model-name')?.textContent).toBe('deepseek-v4-flash');
+    modelButton.click();
     await element.updateComplete;
-
-    const select = element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select');
-    expect(select?.textContent).toContain('deepseek-v4-flash');
-    expect(select?.value).toBe('1002');
-    select!.value = '1001';
-    select!.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => {
-      expect(controller.setConversationModel).toHaveBeenCalledWith({
-        conversationId: 'conversation-model-test',
-        modelUid: 1001,
-      });
-    });
-    await vi.waitFor(() => {
-      expect(
-        Array.from(
-          element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
-        ).find((button) => button.textContent?.trim() === 'Add provider')?.disabled,
-      ).toBe(false);
-    });
-    expect(modelButton?.textContent?.trim()).toBe('gpt-5.1 / OpenAI compatible');
-    modelButton?.click();
+    const choices = () => Array.from(element.shadowRoot!.querySelectorAll<HTMLButtonElement>('.composer-menu [role="menuitemradio"]'));
+    expect(choices().find(button=>button.getAttribute('aria-checked')==='true')?.textContent).toContain('deepseek-v4-flash');
+    choices().find(button=>button.textContent?.includes('gpt-5.1'))!.click();
+    await vi.waitFor(()=>expect(controller.setConversationModel).toHaveBeenCalledWith({conversationId:'conversation-model-test',modelUid:1001}));
+    await vi.waitFor(()=>expect(modelButton.querySelector('.model-name')?.textContent).toBe('gpt-5.1'));
+    expect(choices().find(button=>button.getAttribute('aria-checked')==='true')?.textContent).toContain('gpt-5.1');
+    element.state={...element.state,model:'deepseek-v4-flash',modelUid:1002};
     await element.updateComplete;
-    modelButton?.click();
-    await element.updateComplete;
-    expect(
-      element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select')?.value,
-    ).toBe('1001');
-
-    // A later Runtime snapshot may change the session model while the same
-    // native select element is retained. The select must follow session state,
-    // rather than keeping its previously selected/global provider value.
-    element.state = {
-      ...element.state,
-      model: 'deepseek-v4-flash',
-      modelUid: 1002,
-    };
-    await element.updateComplete;
-    expect(
-      element.shadowRoot?.querySelector<HTMLSelectElement>('.provider-select')?.value,
-    ).toBe('1002');
-    expect(modelButton?.textContent?.trim()).toBe('deepseek-v4-flash / OpenAI compatible');
+    expect(choices().find(button=>button.getAttribute('aria-checked')==='true')?.textContent).toContain('deepseek-v4-flash');
+    expect(modelButton.querySelector('.model-name')?.textContent).toBe('deepseek-v4-flash');
 
     const addButton = Array.from(
       element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
@@ -1187,7 +1156,7 @@ describe('AgentRuntimeConversationElement', () => {
     addButton?.click();
     await element.updateComplete;
 
-    const editor = element.shadowRoot?.querySelector<HTMLFormElement>('.provider-editor');
+    const editor = element.shadowRoot?.querySelector<HTMLFormElement>('.provider-editor form');
     expect(editor).not.toBeNull();
     await vi.waitFor(() => {
       expect(controller.getBuiltinProviderCatalog).toHaveBeenCalled();
@@ -1263,7 +1232,7 @@ describe('AgentRuntimeConversationElement', () => {
       element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.header-action') ?? [],
     ).map((button) => button.textContent?.trim());
     expect(actions).toContain('New chat');
-    expect(actions).toContain('Switch');
+    expect(actions).toContain('History');
     expect(actions).not.toContain('Save');
 
     await element.saveConversation();

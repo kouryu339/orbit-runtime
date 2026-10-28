@@ -137,6 +137,7 @@ export interface ConversationTransport {
         importImage(request: ImportImageRequest): Promise<ImportedImage>;
     };
     pause?(request: ConversationCommandRequest): Promise<CommandResult>;
+    resume?(request: ConversationCommandRequest): Promise<CommandResult>;
     close?(request: ConversationCommandRequest): Promise<CommandResult>;
     requestSnapshot?(request: ConversationCommandRequest): Promise<void>;
     resolveToolPermission?(request: ResolveToolPermissionRequest): Promise<CommandResult>;
@@ -166,6 +167,14 @@ export type DownloadRequest = {
     metadata?: Record<string, unknown>;
 };
 export type ConversationHostCapabilities = {
+    resolveImage?(request: {
+        imageId: string;
+        conversationId?: string;
+        signal?: AbortSignal;
+    }): Promise<{
+        source: string;
+        alt?: string;
+    } | null>;
     openLink?(request: OpenLinkRequest): Promise<void>;
     openImage?(request: OpenImageRequest): Promise<void>;
     pickPath?(request: PickPathRequest): Promise<PickPathResult | null>;
@@ -193,6 +202,32 @@ export type ModelReasoningConfig = {
     thinking?: 'disabled' | 'enabled' | 'adaptive';
     budget_tokens?: number;
 };
+export type ReasoningEffort = NonNullable<ModelReasoningConfig['effort']>;
+export type ConversationComposerSettings = {
+    /** null means use the registered model's default. */
+    effort?: ReasoningEffort | null;
+    supportedEfforts?: ReasoningEffort[];
+    permissionMode?: string;
+    permissionModes?: Array<{
+        id: string;
+        label: string;
+        description?: string;
+    }>;
+    canResume?: boolean;
+};
+export type ComposerSettingsRequest = ConversationCommandRequest & {
+    modelUid?: number;
+};
+/** Per-conversation settings. Implementations must not rewrite shared model definitions. */
+export interface ConversationComposerController {
+    getSettings(request: ComposerSettingsRequest): Promise<ConversationComposerSettings>;
+    setEffort?(request: ComposerSettingsRequest & {
+        effort: ReasoningEffort | null;
+    }): Promise<CommandResult>;
+    setPermissionMode?(request: ComposerSettingsRequest & {
+        mode: string;
+    }): Promise<CommandResult>;
+}
 export type ProviderModelDefinition = {
     reasoning?: ModelReasoningConfig;
     uid: number;
@@ -293,7 +328,7 @@ export type PresetMarkdown = {
     scope?: string;
 };
 export type ConversationColorScheme = 'light' | 'dark' | 'system';
-export type ConversationThemeName = ExtensibleString<'studio' | 'paper' | 'soft' | 'midnight' | 'neutral' | 'blue' | 'green' | 'amber'>;
+export type ConversationThemeName = ExtensibleString<'studio' | 'white' | 'paper' | 'soft' | 'midnight' | 'neutral' | 'blue' | 'green' | 'amber'>;
 export type ConversationDensity = 'compact' | 'comfortable';
 export declare const PERSISTENCE_CONTRACT: "agent-conversation-persistence/v1";
 export type PersistedConversationStatus = 'sealed' | 'running' | 'saving' | 'restoring' | 'error';
@@ -399,6 +434,7 @@ export interface AgentRuntimeConversationPublicApi {
     density: ConversationDensity;
     persistence: ConversationPersistencePolicy;
     providerControls: ConversationProviderControlsPolicy;
+    composerController?: ConversationComposerController | null;
     readonly state: ConversationState;
     connect(): Promise<void>;
     disconnect(): void;
@@ -406,6 +442,7 @@ export interface AgentRuntimeConversationPublicApi {
     createConversation(): Promise<void>;
     send(content: string, options?: SendOptions): Promise<SendResult>;
     pause(): Promise<CommandResult>;
+    resume(): Promise<CommandResult>;
     resolveToolPermission(toolCallId: string, decision: 'allow' | 'deny'): Promise<CommandResult>;
     closeConversation(): Promise<void>;
     saveConversation(): Promise<PersistedConversation | null>;
@@ -435,6 +472,10 @@ export type ConversationPublicEventMap = {
         result: SendResult;
     };
     'agent-conversation-pause': {
+        conversationId: string;
+        result: CommandResult;
+    };
+    'agent-conversation-resume': {
         conversationId: string;
         result: CommandResult;
     };

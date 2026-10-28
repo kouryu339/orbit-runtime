@@ -68,9 +68,7 @@ export type ConversationTransportError = {
 
 export type ConversationTransportHandlers = {
   event(event: ConversationTransportEvent): void;
-  connection(
-    state: Exclude<ConversationConnectionState, 'connecting'>,
-  ): void;
+  connection(state: Exclude<ConversationConnectionState, 'connecting'>): void;
   error(error: ConversationTransportError): void;
 };
 
@@ -124,7 +122,9 @@ export type ConversationCommandRequest = {
 export type SendMessageRequest = ConversationCommandRequest & {
   content: string;
   clientMessageId: string;
-  parts?: Array<{ type: 'text'; text: string } | { type: 'image'; image_id: string }>;
+  parts?: Array<
+    { type: 'text'; text: string } | { type: 'image'; image_id: string }
+  >;
 };
 
 export type ImportImageRequest = ConversationCommandRequest & { file: File };
@@ -162,6 +162,7 @@ export interface ConversationTransport {
     importImage(request: ImportImageRequest): Promise<ImportedImage>;
   };
   pause?(request: ConversationCommandRequest): Promise<CommandResult>;
+  resume?(request: ConversationCommandRequest): Promise<CommandResult>;
   close?(request: ConversationCommandRequest): Promise<CommandResult>;
   requestSnapshot?(request: ConversationCommandRequest): Promise<void>;
   resolveToolPermission?(
@@ -199,6 +200,11 @@ export type DownloadRequest = {
 };
 
 export type ConversationHostCapabilities = {
+  resolveImage?(request: {
+    imageId: string;
+    conversationId?: string;
+    signal?: AbortSignal;
+  }): Promise<{ source: string; alt?: string } | null>;
   openLink?(request: OpenLinkRequest): Promise<void>;
   openImage?(request: OpenImageRequest): Promise<void>;
   pickPath?(request: PickPathRequest): Promise<PickPathResult | null>;
@@ -228,6 +234,31 @@ export type ModelReasoningConfig = {
   thinking?: 'disabled' | 'enabled' | 'adaptive';
   budget_tokens?: number;
 };
+
+export type ReasoningEffort = NonNullable<ModelReasoningConfig['effort']>;
+export type ConversationComposerSettings = {
+  /** null means use the registered model's default. */
+  effort?: ReasoningEffort | null;
+  supportedEfforts?: ReasoningEffort[];
+  permissionMode?: string;
+  permissionModes?: Array<{ id: string; label: string; description?: string }>;
+  canResume?: boolean;
+};
+export type ComposerSettingsRequest = ConversationCommandRequest & {
+  modelUid?: number;
+};
+/** Per-conversation settings. Implementations must not rewrite shared model definitions. */
+export interface ConversationComposerController {
+  getSettings(
+    request: ComposerSettingsRequest,
+  ): Promise<ConversationComposerSettings>;
+  setEffort?(
+    request: ComposerSettingsRequest & { effort: ReasoningEffort | null },
+  ): Promise<CommandResult>;
+  setPermissionMode?(
+    request: ComposerSettingsRequest & { mode: string },
+  ): Promise<CommandResult>;
+}
 
 export type ProviderModelDefinition = {
   reasoning?: ModelReasoningConfig;
@@ -292,8 +323,12 @@ export type SetConversationModelRequest = {
 export interface ConversationProviderController {
   getProviderDefinitions(): Promise<ProviderDefinitionsResult>;
   getBuiltinProviderCatalog?(): Promise<BuiltinProviderCatalog>;
-  configureProviders(request: ConfigureProvidersRequest): Promise<CommandResult>;
-  setConversationModel(request: SetConversationModelRequest): Promise<CommandResult>;
+  configureProviders(
+    request: ConfigureProvidersRequest,
+  ): Promise<CommandResult>;
+  setConversationModel(
+    request: SetConversationModelRequest,
+  ): Promise<CommandResult>;
 }
 
 export type ConversationProviderControlsPolicy =
@@ -340,6 +375,7 @@ export type PresetMarkdown = {
 export type ConversationColorScheme = 'light' | 'dark' | 'system';
 export type ConversationThemeName = ExtensibleString<
   | 'studio'
+  | 'white'
   | 'paper'
   | 'soft'
   | 'midnight'
@@ -360,10 +396,7 @@ export type PersistedConversationStatus =
   | 'restoring'
   | 'error';
 
-export type ConversationInstanceState =
-  | 'current'
-  | 'background'
-  | 'data_only';
+export type ConversationInstanceState = 'current' | 'background' | 'data_only';
 
 export type PersistedConversation = {
   archiveId: string;
@@ -467,6 +500,7 @@ export interface AgentRuntimeConversationPublicApi {
   density: ConversationDensity;
   persistence: ConversationPersistencePolicy;
   providerControls: ConversationProviderControlsPolicy;
+  composerController?: ConversationComposerController | null;
   readonly state: ConversationState;
   connect(): Promise<void>;
   disconnect(): void;
@@ -474,6 +508,7 @@ export interface AgentRuntimeConversationPublicApi {
   createConversation(): Promise<void>;
   send(content: string, options?: SendOptions): Promise<SendResult>;
   pause(): Promise<CommandResult>;
+  resume(): Promise<CommandResult>;
   resolveToolPermission(
     toolCallId: string,
     decision: 'allow' | 'deny',
@@ -507,6 +542,10 @@ export type ConversationPublicEventMap = {
     result: SendResult;
   };
   'agent-conversation-pause': {
+    conversationId: string;
+    result: CommandResult;
+  };
+  'agent-conversation-resume': {
     conversationId: string;
     result: CommandResult;
   };

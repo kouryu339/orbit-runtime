@@ -74,7 +74,11 @@ export type ExecutionPlan = {
   summary?: string;
   content?: string;
   status: 'active' | 'finished' | 'canceled';
-  steps?: Array<{ id: string; text: string; status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'canceled' }>;
+  steps?: Array<{
+    id: string;
+    text: string;
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'canceled';
+  }>;
   created_at?: string;
   updated_at?: string;
 };
@@ -120,15 +124,21 @@ export type ToolCallView = {
   id: string;
   title: string;
   status: ToolCallStatus;
+  /** @deprecated Raw tool details are never rendered in the conversation UI. */
   detail: string;
+  /** Explicit user-facing text supplied by the host; never inferred from tool output. */
+  userSummary?: string;
   toolName: string;
+  /** @deprecated Execution commands are not displayed to users. */
   command?: string;
 };
 
 export type PendingUserMessage = {
   id: string;
   content: string;
-  parts?: Array<{ type: 'text'; text: string } | { type: 'image'; image_id: string }>;
+  parts?: Array<
+    { type: 'text'; text: string } | { type: 'image'; image_id: string }
+  >;
   createdAt: string;
   state: 'sending' | 'accepted' | 'failed';
   error?: string;

@@ -10,6 +10,10 @@
     "conversation.send.defer_until_snapshot",
     "conversation.send.abort",
     "conversation.pause",
+    "conversation.resume",
+    "conversation.composer.state_machine",
+    "conversation.composer.reasoning",
+    "conversation.composer.permissions",
     "conversation.close",
     "conversation.stream",
     "conversation.focus_composer",
@@ -19,10 +23,20 @@
     "conversation.model.select",
     "conversation.provider.configure",
     "conversation.provider.edit",
+    "conversation.provider.reasoning",
+    "conversation.image.select",
+    "conversation.image.paste",
+    "conversation.image.ordered_parts",
+    "conversation.image.failed_send_retains_input",
     "tool.exec.status",
     "tool.native_fc.status",
+    "tool.display.user_summary_only",
     "tool.permission.resolve",
     "tool.permission.safe_summary",
+    "tool.permission.terminal_event",
+    "conversation.plan",
+    "conversation.gateway_errors",
+    "content.references",
     "content.markdown",
     "content.katex",
     "content.mermaid",
@@ -39,13 +53,13 @@
   ],
   "public_api": [
     "connect", "disconnect", "openConversation", "createConversation", "send",
-    "pause", "resolveToolPermission", "closeConversation", "saveConversation",
+    "pause", "resume", "resolveToolPermission", "closeConversation", "saveConversation",
     "restoreConversation", "refreshConversationHistory", "focusComposer",
     "insertPresetMarkdown", "insertPresentationItem", "updatePresentationItem",
     "removePresentationItem", "clearPresentationItems"
   ],
   "verification": {
     "lit": ["npm test", "npm run check", "npm run build"],
-    "svelte": ["npm test", "npm run check", "npm run build"]
+    "svelte": ["npm test", "npm run check", "npm run check:styles", "npm run build"]
   }
 }

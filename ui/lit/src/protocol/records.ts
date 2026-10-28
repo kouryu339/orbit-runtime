@@ -43,7 +43,9 @@ export function displayTextWithToolAnchors(record: LedgerRecord): string {
   return [content, ...anchors].filter(Boolean).join('\n');
 }
 
-export function snapshotRecords(payload: FrontendSnapshotPayload): LedgerRecord[] {
+export function snapshotRecords(
+  payload: FrontendSnapshotPayload,
+): LedgerRecord[] {
   if (payload.ledger_records) return payload.ledger_records;
   if (payload.ledger) return payload.ledger;
   if (payload.ledger_delta?.records) return payload.ledger_delta.records;
@@ -71,7 +73,14 @@ export function toolCallIdsFromRecord(record: LedgerRecord): string[] {
   const declarations = record.metadata?.extra?.tool_calls;
   if (Array.isArray(declarations)) {
     for (const call of declarations) {
-      if (call && typeof call === 'object' && 'id' in call && typeof call.id === 'string' && !ids.includes(call.id)) ids.push(call.id);
+      if (
+        call &&
+        typeof call === 'object' &&
+        'id' in call &&
+        typeof call.id === 'string' &&
+        !ids.includes(call.id)
+      )
+        ids.push(call.id);
     }
   }
   return ids;
@@ -82,31 +91,33 @@ export function toolCallFromRecord(record: LedgerRecord): ToolCallView | null {
   if (!subtype?.startsWith('tool_call_')) return null;
 
   const extra = record.metadata?.extra ?? {};
-  const id = String(extra.call_id ?? record.metadata?.call_id ?? recordKey(record));
-  const toolName = String(record.metadata?.tool_name ?? extra.tool_name ?? '');
-  const title = String(
-    record.metadata?.title ?? (toolName || recordText(record) || 'Tool call'),
+  const id = String(
+    extra.call_id ?? record.metadata?.call_id ?? recordKey(record),
   );
-  const status = subtype === 'tool_call_interrupted_unknown' ||
-      extra.status === 'interrupted_unknown' ||
-      extra.status === 'recovery_interrupted'
-    ? 'uncertain'
-    : subtype === 'tool_call_failed'
-      ? 'failed'
-    : subtype === 'tool_call_finished'
-      ? 'finished'
-      : subtype === 'tool_call_permission_requested' ||
-          extra.status === 'waiting_permission'
-        ? 'waiting_permission'
-          : 'running';
+  const toolName = String(record.metadata?.tool_name ?? extra.tool_name ?? '');
+  const title = String(record.metadata?.title ?? (toolName || 'Tool call'));
+  const status =
+    subtype === 'tool_call_interrupted_unknown' ||
+    extra.status === 'interrupted_unknown' ||
+    extra.status === 'recovery_interrupted'
+      ? 'uncertain'
+      : subtype === 'tool_call_failed'
+        ? 'failed'
+        : subtype === 'tool_call_finished'
+          ? 'finished'
+          : subtype === 'tool_call_permission_requested' ||
+              extra.status === 'waiting_permission'
+            ? 'waiting_permission'
+            : 'running';
 
   return {
     id,
     title,
     status,
     toolName,
-    command: record.metadata?.tool_command,
-    detail: recordText(record),
+    detail: '',
+    userSummary:
+      typeof extra.user_summary === 'string' ? extra.user_summary : undefined,
   };
 }
 
@@ -124,9 +135,10 @@ export function collectToolCalls(
           if (!declaration || typeof declaration !== 'object') continue;
           const value = declaration as Record<string, unknown>;
           const id = typeof value.id === 'string' ? value.id : '';
-          const fn = value.function && typeof value.function === 'object'
-            ? value.function as Record<string, unknown>
-            : undefined;
+          const fn =
+            value.function && typeof value.function === 'object'
+              ? (value.function as Record<string, unknown>)
+              : undefined;
           const toolName = typeof fn?.name === 'string' ? fn.name : '';
           if (!id || calls.has(id)) continue;
           calls.set(id, {

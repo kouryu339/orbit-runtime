@@ -1,7 +1,19 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { visiblePresentationItems } from '../content/presentation.js';
+import {
+  createDisplayItems,
+  latestWidgetRecordKey,
+  latestAssistantKey,
+  type DisplayItem,
+} from '../content/conversation-view.js';
+import {
+  bindProviderModal,
+  providerPresetModels,
+  providerEditorValidation,
+  providerTabKey,
+} from '../content/provider-editor.js';
 import { referenceColor } from '../content/references.js';
+import { ComposerSession, effortLabel } from '../content/composer.js';
 import type {
   AgentRuntimeConversationPublicApi,
   CommandResult,
@@ -9,6 +21,7 @@ import type {
   ConversationDensity,
   ConversationExtension,
   ConversationHostCapabilities,
+  ConversationComposerController,
   PresetMarkdown,
   BuiltinProviderCatalog,
   BuiltinProviderCatalogModel,
@@ -44,19 +57,12 @@ import {
 } from '../protocol/index.js';
 import './rich-content.js';
 import './plan-card.js';
-
-type DisplayItem =
-  | { kind: 'record'; key: string; record: LedgerRecord }
-  | { kind: 'presentation'; key: string; item: ConversationPresentationItem };
+import './image-reference.js';
 
 type PendingImage = { file: File; previewUrl: string; number: number };
-type MessagePart = { type: 'text'; text: string } | { type: 'image'; image_id: string };
-
-function isVisibleGatewayRecord(record: LedgerRecord): boolean {
-  if (record.role !== 'gateway_message') return false;
-  const subtype = record.metadata?.subtype;
-  return subtype === 'llm_error' || subtype === 'interrupted';
-}
+type MessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; image_id: string };
 
 type ProviderEditorModelRow = {
   key: string;
@@ -91,6 +97,9 @@ export class AgentRuntimeConversationElement
   static properties = {
     transport: { attribute: false },
     capabilities: { attribute: false },
+    composerController: { attribute: false },
+    composerPanel: { state: true },
+    composerPanelPosition: { state: true },
     presentationItems: { attribute: false },
     extensions: { attribute: false },
     conversationId: { type: String, attribute: 'conversation-id' },
@@ -110,6 +119,9 @@ export class AgentRuntimeConversationElement
     persistenceOperation: { state: true },
     providerPanelOpen: { state: true },
     providerEditorOpen: { state: true },
+    providerEditorMode: { state: true },
+    providerImportJson: { state: true },
+    providerEditorError: { state: true },
     providerDefinitions: { state: true },
     builtinProviderCatalog: { state: true },
     providerEditorProviderUid: { state: true },
@@ -142,15 +154,22 @@ export class AgentRuntimeConversationElement
       --conversation-tool-running: #b8862f;
       --conversation-tool-success: #4e8865;
       --conversation-tool-error: #bd5858;
-      --conversation-font-display: "Aptos Display", "Segoe UI Variable Display", sans-serif;
-      --conversation-font-body: "Aptos", "Segoe UI Variable Text", sans-serif;
-      --conversation-font-mono: "Cascadia Code", "SFMono-Regular", monospace;
+      --conversation-font-display:
+        'Aptos Display', 'Segoe UI Variable Display', sans-serif;
+      --conversation-font-body: 'Aptos', 'Segoe UI Variable Text', sans-serif;
+      --conversation-font-mono: 'Cascadia Code', 'SFMono-Regular', monospace;
       --conversation-shell-radius: 10px;
       --conversation-shell-shadow: none;
       --conversation-composer-radius: 16px;
-      --conversation-composer-shadow: 0 10px 24px color-mix(in srgb, #24342f 8%, transparent);
+      --conversation-composer-shadow: 0 10px 24px
+        color-mix(in srgb, #24342f 8%, transparent);
       --conversation-message-radius: 14px 14px 5px 14px;
-      --conversation-assistant-rule: 2px solid color-mix(in srgb, var(--conversation-accent) 44%, var(--conversation-border));
+      --conversation-assistant-rule: 2px solid
+        color-mix(
+          in srgb,
+          var(--conversation-accent) 44%,
+          var(--conversation-border)
+        );
       display: block;
       min-width: 0;
       max-width: 100%;
@@ -159,8 +178,8 @@ export class AgentRuntimeConversationElement
       color: var(--conversation-text);
     }
 
-    :host([theme="studio"]),
-    :host([theme="green"]) {
+    :host([theme='studio']),
+    :host([theme='green']) {
       --conversation-accent: #167d71;
       --conversation-accent-contrast: #ffffff;
       --conversation-surface: #fbfaf5;
@@ -177,8 +196,27 @@ export class AgentRuntimeConversationElement
       --conversation-message-radius: 12px 12px 4px 12px;
     }
 
-    :host([theme="paper"]),
-    :host([theme="amber"]) {
+    :host([theme='white']) {
+      --conversation-accent: #202020;
+      --conversation-accent-contrast: #ffffff;
+      --conversation-surface: #ffffff;
+      --conversation-surface-raised: #ffffff;
+      --conversation-text: #242424;
+      --conversation-text-strong: #111111;
+      --conversation-text-muted: #666666;
+      --conversation-user-background: #f1f1f1;
+      --conversation-user-text: #242424;
+      --conversation-border: #e5e5e5;
+      --conversation-code-background: #f6f6f6;
+      --conversation-composer-radius: 20px;
+      --conversation-composer-shadow: none;
+    }
+    :host([theme='white']) .shell {
+      background: var(--conversation-surface);
+    }
+
+    :host([theme='paper']),
+    :host([theme='amber']) {
       --conversation-accent: #a64b2a;
       --conversation-accent-contrast: #fffaf3;
       --conversation-surface: #f4f0e7;
@@ -196,9 +234,11 @@ export class AgentRuntimeConversationElement
       --conversation-assistant-rule: 3px solid var(--conversation-accent);
     }
 
-    :host([theme="soft"]),
-    :host([theme="blue"]) { --conversation-accent: #3d72c5; }
-    :host([theme="soft"]) {
+    :host([theme='soft']),
+    :host([theme='blue']) {
+      --conversation-accent: #3d72c5;
+    }
+    :host([theme='soft']) {
       --conversation-accent: #5d63d6;
       --conversation-accent-contrast: #ffffff;
       --conversation-surface: #f4f5fb;
@@ -217,7 +257,7 @@ export class AgentRuntimeConversationElement
       --conversation-assistant-rule: 0 solid transparent;
     }
 
-    :host([theme="midnight"]) {
+    :host([theme='midnight']) {
       --conversation-accent: #73d7c7;
       --conversation-accent-contrast: #09201d;
       --conversation-surface: #101518;
@@ -232,12 +272,13 @@ export class AgentRuntimeConversationElement
       --conversation-shell-radius: 12px;
       --conversation-shell-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
       --conversation-composer-radius: 10px;
-      --conversation-composer-shadow: 0 0 0 1px rgba(115, 215, 199, 0.04), 0 12px 28px rgba(0, 0, 0, 0.26);
+      --conversation-composer-shadow:
+        0 0 0 1px rgba(115, 215, 199, 0.04), 0 12px 28px rgba(0, 0, 0, 0.26);
       --conversation-message-radius: 8px;
       --conversation-assistant-rule: 1px solid #38504f;
     }
 
-    :host([color-scheme="dark"]) {
+    :host([color-scheme='dark']) {
       --conversation-surface: #171715;
       --conversation-surface-raised: #20201d;
       --conversation-text: #e9e6df;
@@ -250,7 +291,7 @@ export class AgentRuntimeConversationElement
     }
 
     @media (prefers-color-scheme: dark) {
-      :host([color-scheme="system"]) {
+      :host([color-scheme='system']) {
         --conversation-surface: #171715;
         --conversation-surface-raised: #20201d;
         --conversation-text: #e9e6df;
@@ -263,7 +304,9 @@ export class AgentRuntimeConversationElement
       }
     }
 
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
     .shell {
       position: relative;
       display: grid;
@@ -276,7 +319,11 @@ export class AgentRuntimeConversationElement
       border: 1px solid var(--conversation-border);
       border-radius: var(--conversation-shell-radius);
       background:
-        linear-gradient(180deg, color-mix(in srgb, var(--conversation-accent) 3%, transparent), transparent 120px),
+        linear-gradient(
+          180deg,
+          color-mix(in srgb, var(--conversation-accent) 3%, transparent),
+          transparent 120px
+        ),
         var(--conversation-surface);
       box-shadow: var(--conversation-shell-shadow);
     }
@@ -308,32 +355,35 @@ export class AgentRuntimeConversationElement
       gap: 7px;
       min-width: 0;
     }
-    .header-actions[part="provider-actions"] {
+    .header-actions[part='provider-actions'] {
       flex: 1 1 auto;
       justify-content: flex-end;
     }
-    .header-actions[part="persistence-actions"] {
+    .header-actions[part='persistence-actions'] {
       flex: 0 0 auto;
     }
     .header-action {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      justify-content: center;
+      gap: 7px;
       flex: 0 0 auto;
       min-width: 0;
       width: auto;
       max-width: 190px;
-      height: 32px;
+      height: 34px;
       padding: 0 10px;
-      border: 1px solid var(--conversation-border);
+      border: 0;
       border-radius: 8px;
-      background: var(--conversation-surface-raised);
-      color: var(--conversation-text);
-      font: 600 11px var(--conversation-font-body);
+      background: transparent;
+      color: var(--conversation-text-muted);
+      font: 500 13px/1.4 var(--conversation-font-body);
     }
-    .header-action[data-tone="model"] {
-      flex: 1 1 auto;
-      max-width: min(260px, 100%);
+    .header .header-action:hover:not(:disabled),
+    .header .header-action[data-active='true'] {
+      background: var(--conversation-code-background);
+      color: var(--conversation-text-strong);
+      transform: none;
     }
     .header-action span {
       min-width: 0;
@@ -341,27 +391,35 @@ export class AgentRuntimeConversationElement
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .header-action[data-active="true"] {
-      border-color: color-mix(in srgb, var(--conversation-accent) 45%, var(--conversation-border));
-      background: color-mix(in srgb, var(--conversation-accent) 9%, var(--conversation-surface-raised));
+    .header .header-action svg {
+      width: 17px;
+      height: 17px;
+      flex: none;
+    }
+    .header .header-action[data-tone='new'] {
       color: var(--conversation-text-strong);
     }
-    .header-action[data-tone="saved"]::before,
-    .header-action[data-tone="model"]::before,
-    .header-action[data-tone="history"]::before,
-    .header-action[data-tone="add"]::before {
-      display: block;
-      width: 6px;
-      height: 6px;
-      flex: 0 0 auto;
-      border-radius: 50%;
-      background: var(--conversation-text-muted);
-      content: "";
+    .header-title {
+      color: var(--conversation-text-strong);
+      font: 600 15px/1.4 var(--conversation-font-body);
     }
-    .header-action[data-tone="saved"]::before { background: var(--conversation-tool-success); }
-    .header-action[data-tone="model"]::before { background: var(--conversation-accent); }
-    .header-action[data-tone="history"]::before { background: var(--conversation-tool-running); }
-    .header-action[data-tone="add"]::before { background: var(--conversation-text-muted); }
+    .connection-label {
+      color: var(--conversation-text-muted);
+      font: 400 12px/1.4 var(--conversation-font-body);
+    }
+    @media (max-width: 480px) {
+      .header .header-action {
+        padding: 0 7px;
+        gap: 5px;
+      }
+      .connection-label {
+        display: none;
+      }
+      .header-control-strip,
+      .header-actions {
+        gap: 2px;
+      }
+    }
     .provider-panel {
       position: absolute;
       z-index: 6;
@@ -417,9 +475,14 @@ export class AgentRuntimeConversationElement
       gap: 8px;
       align-items: center;
       padding: 8px;
-      border: 1px solid color-mix(in srgb, var(--conversation-border) 70%, transparent);
+      border: 1px solid
+        color-mix(in srgb, var(--conversation-border) 70%, transparent);
       border-radius: 8px;
-      background: color-mix(in srgb, var(--conversation-surface) 84%, transparent);
+      background: color-mix(
+        in srgb,
+        var(--conversation-surface) 84%,
+        transparent
+      );
     }
     .provider-list-main {
       display: grid;
@@ -452,40 +515,136 @@ export class AgentRuntimeConversationElement
       color: var(--conversation-text-muted);
       font: 12px var(--conversation-font-body);
     }
-    .provider-file-input { display: none; }
+    .provider-file-input {
+      display: none;
+    }
     .provider-editor-backdrop {
       position: absolute;
-      z-index: 13;
-      inset: 48px 0 0;
+      z-index: 30;
+      inset: 0;
       display: grid;
       place-items: center;
-      padding: 18px;
-      background: color-mix(in srgb, var(--conversation-surface) 74%, transparent);
-      backdrop-filter: blur(3px);
+      padding: 16px;
+      background: color-mix(in srgb, #000 28%, transparent);
     }
     .provider-editor {
-      width: min(100%, 520px);
-      max-height: min(620px, calc(100% - 24px));
-      overflow: auto;
-      padding: 18px;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+      box-sizing: border-box;
+      width: min(100%, 600px);
+      max-height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      padding: 0;
       border: 1px solid var(--conversation-border);
-      border-radius: 8px;
+      border-radius: 16px;
       background: var(--conversation-surface-raised);
-      box-shadow: 0 22px 60px color-mix(in srgb, #000 20%, transparent);
+      box-shadow: 0 18px 48px #0003;
+      color: var(--conversation-text);
+      font: 13px/1.5 var(--conversation-font-body);
+    }
+    .provider-editor-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 22px 12px;
     }
     .provider-editor h2 {
       margin: 0;
       color: var(--conversation-text-strong);
-      font: 650 16px/1.35 var(--conversation-font-display);
+      font: 600 18px/1.4 var(--conversation-font-body);
+    }
+    .provider-editor .provider-editor-close {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--conversation-text-muted);
+      border-radius: 8px;
+      font-size: 22px;
+    }
+    .provider-editor-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 0 22px 12px;
+      border-bottom: 1px solid var(--conversation-border);
+    }
+    .provider-editor .provider-editor-tab {
+      width: auto;
+      height: 32px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--conversation-text-muted);
+      font: 500 13px var(--conversation-font-body);
+    }
+    .provider-editor .provider-editor-tab[aria-selected='true'] {
+      color: var(--conversation-text-strong);
+      background: var(--conversation-code-background);
+    }
+    .provider-editor-body {
+      display: block;
+      min-height: 0;
+      overflow: auto;
+      padding: 18px 22px;
+      margin: 0;
+      border: 0;
+      min-width: 0;
+    }
+    .provider-editor [hidden] {
+      display: none !important;
+    }
+    .provider-editor-form {
+      display: contents;
+    }
+    .provider-editor-import {
+      display: grid;
+      gap: 14px;
+    }
+    .provider-editor-import textarea {
+      box-sizing: border-box;
+      width: 100%;
+      height: 220px;
+      max-height: none;
+      min-height: 140px;
+      resize: vertical;
+      padding: 12px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 8px;
+      background: var(--conversation-surface);
+      color: var(--conversation-text);
+      font: 12px/1.6 var(--conversation-font-mono);
+    }
+    .provider-editor .provider-import-file {
+      width: auto;
+      justify-self: start;
+      height: 34px;
+      padding: 0 12px;
+    }
+    .provider-editor-error {
+      margin: 0;
+      padding: 10px 22px;
+      color: var(--conversation-tool-error);
+      font: 13px/1.5 var(--conversation-font-body);
     }
     .provider-editor-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 12px;
-      margin-top: 16px;
+      margin-top: 0;
     }
-    .provider-editor-field { display: grid; gap: 6px; min-width: 0; }
-    .provider-editor-field.wide { grid-column: 1 / -1; }
+    .provider-editor-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .provider-editor-field.wide {
+      grid-column: 1 / -1;
+    }
     .provider-editor-field span {
       color: var(--conversation-text-muted);
       font: 650 11px var(--conversation-font-body);
@@ -506,7 +665,7 @@ export class AgentRuntimeConversationElement
       grid-column: 1 / -1;
       display: grid;
       gap: 8px;
-      margin-top: 2px;
+      margin-top: 8px;
     }
     .provider-editor-models-title {
       color: var(--conversation-text-muted);
@@ -517,9 +676,19 @@ export class AgentRuntimeConversationElement
       grid-template-columns: minmax(0, 1fr) 132px 34px;
       gap: 8px;
       align-items: end;
+      padding: 12px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 10px;
     }
-    .provider-reasoning-settings { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-    .provider-reasoning-settings > span { grid-column: 1 / -1; }
+    .provider-reasoning-settings {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+    }
+    .provider-reasoning-settings > span {
+      grid-column: 1 / -1;
+    }
     .provider-editor-icon-button {
       width: 34px;
       min-width: 34px;
@@ -538,21 +707,49 @@ export class AgentRuntimeConversationElement
     .provider-editor-actions {
       display: flex;
       justify-content: flex-end;
+      align-items: center;
       gap: 8px;
-      margin-top: 18px;
+      padding: 14px 22px;
+      border-top: 1px solid var(--conversation-border);
+      background: var(--conversation-surface-raised);
     }
-    .provider-editor-actions button {
+    .provider-editor .provider-editor-actions button {
       width: auto;
-      min-width: 82px;
+      min-width: 90px;
       height: 36px;
       padding: 0 14px;
+      border-radius: 8px;
+      font: 500 13px var(--conversation-font-body);
+    }
+    .provider-editor .provider-editor-actions .secondary {
+      background: transparent;
+      color: var(--conversation-text);
+      border: 1px solid var(--conversation-border);
+    }
+    .provider-editor .provider-editor-add-model {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
     @media (max-width: 560px) {
-      .provider-editor-grid { grid-template-columns: 1fr; }
-      .provider-editor-field.wide { grid-column: auto; }
-      .provider-editor-models { grid-column: auto; }
-      .provider-editor-model-row { grid-template-columns: minmax(0, 1fr); }
-      .provider-editor-icon-button { width: 100%; }
+      .provider-editor-grid {
+        grid-template-columns: 1fr;
+      }
+      .provider-editor-field.wide {
+        grid-column: auto;
+      }
+      .provider-editor-models {
+        grid-column: auto;
+      }
+      .provider-editor-model-row {
+        grid-template-columns: minmax(0, 1fr) 34px;
+      }
+      .provider-editor-model-row > .provider-editor-field:first-child {
+        grid-column: 1 / -1;
+      }
+      .provider-editor-icon-button {
+        width: 34px;
+      }
     }
     .history-panel {
       position: absolute;
@@ -584,11 +781,21 @@ export class AgentRuntimeConversationElement
       border: 1px solid transparent;
       border-radius: 8px;
     }
-    .history-item[data-current="true"] {
-      border-color: color-mix(in srgb, var(--conversation-accent) 28%, var(--conversation-border));
-      background: color-mix(in srgb, var(--conversation-accent) 7%, transparent);
+    .history-item[data-current='true'] {
+      border-color: color-mix(
+        in srgb,
+        var(--conversation-accent) 28%,
+        var(--conversation-border)
+      );
+      background: color-mix(
+        in srgb,
+        var(--conversation-accent) 7%,
+        transparent
+      );
     }
-    .history-copy { min-width: 0; }
+    .history-copy {
+      min-width: 0;
+    }
     .history-title {
       overflow: hidden;
       color: var(--conversation-text-strong);
@@ -617,22 +824,9 @@ export class AgentRuntimeConversationElement
     }
     .status {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--conversation-text-muted);
-      font: 600 11px var(--conversation-font-body);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--conversation-text-muted);
-    }
-    .status-dot[data-connected="true"] {
-      background: var(--conversation-tool-success);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--conversation-tool-success) 16%, transparent);
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
     }
     .messages {
       min-width: 0;
@@ -670,7 +864,9 @@ export class AgentRuntimeConversationElement
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
-    .pending { opacity: 0.62; }
+    .pending {
+      opacity: 0.62;
+    }
     .assistant {
       min-width: 0;
       max-width: 100%;
@@ -695,7 +891,12 @@ export class AgentRuntimeConversationElement
       width: min(100%, 760px);
       margin: 0 auto 16px;
       padding: 10px 12px;
-      border: 1px solid color-mix(in srgb, var(--conversation-tool-error) 48%, var(--conversation-border));
+      border: 1px solid
+        color-mix(
+          in srgb,
+          var(--conversation-tool-error) 48%,
+          var(--conversation-border)
+        );
       border-radius: 10px;
       color: var(--conversation-tool-error);
       font: 12px/1.5 var(--conversation-font-body);
@@ -715,7 +916,12 @@ export class AgentRuntimeConversationElement
       max-width: 100%;
       margin: 0 auto;
       overflow: hidden;
-      border: 1px solid color-mix(in srgb, var(--conversation-accent) 38%, var(--conversation-border));
+      border: 1px solid
+        color-mix(
+          in srgb,
+          var(--conversation-accent) 38%,
+          var(--conversation-border)
+        );
       border-radius: 8px 8px 0 0;
       background: var(--conversation-surface-raised);
       box-shadow: 0 -8px 24px color-mix(in srgb, #000 10%, transparent);
@@ -736,7 +942,8 @@ export class AgentRuntimeConversationElement
       height: 7px;
       border-radius: 50%;
       background: var(--conversation-accent);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--conversation-accent) 15%, transparent);
+      box-shadow: 0 0 0 3px
+        color-mix(in srgb, var(--conversation-accent) 15%, transparent);
     }
     .permission-tools {
       display: grid;
@@ -827,28 +1034,39 @@ export class AgentRuntimeConversationElement
     }
     .composer-wrap {
       padding: 8px 12px 12px;
-      background:
-        linear-gradient(180deg, transparent, color-mix(in srgb, var(--conversation-surface-raised) 74%, transparent) 24%);
+      background: linear-gradient(
+        180deg,
+        transparent,
+        color-mix(in srgb, var(--conversation-surface-raised) 74%, transparent)
+          24%
+      );
     }
     .composer {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
       align-items: center;
       gap: 10px;
       max-width: 800px;
       margin: 0 auto;
       min-height: 54px;
-      padding: 6px 7px 6px 16px;
+      padding: 10px 12px 8px 16px;
       border: 1px solid var(--conversation-border);
       border-radius: var(--conversation-composer-radius);
       background: var(--conversation-surface-raised);
       box-shadow: var(--conversation-composer-shadow);
-      transition: border-color 140ms ease, box-shadow 140ms ease;
+      transition:
+        border-color 140ms ease,
+        box-shadow 140ms ease;
     }
     .composer:focus-within {
-      border-color: color-mix(in srgb, var(--conversation-accent) 74%, var(--conversation-border));
+      border-color: color-mix(
+        in srgb,
+        var(--conversation-accent) 74%,
+        var(--conversation-border)
+      );
       box-shadow:
-        0 0 0 3px color-mix(in srgb, var(--conversation-accent) 14%, transparent),
+        0 0 0 3px
+          color-mix(in srgb, var(--conversation-accent) 14%, transparent),
         var(--conversation-composer-shadow);
     }
     textarea {
@@ -863,17 +1081,43 @@ export class AgentRuntimeConversationElement
       color: var(--conversation-text);
       font: 14px/1.5 var(--conversation-font-body);
     }
-    textarea::placeholder { color: var(--conversation-text-muted); }
-    .image-input { display: none; }
-    .image-attachments { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
-    .image-attachment {
-      display: inline-flex; align-items: center; gap: 7px;
-      max-width: 220px; padding: 5px 8px; border-radius: 9px;
-      border: 1px solid var(--conversation-border); font: 12px/1.3 var(--conversation-font-body);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    textarea::placeholder {
+      color: var(--conversation-text-muted);
     }
-    .image-attachment img { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
-    .image-attachment .remove-image { width: 22px; height: 22px; flex: none; }
+    .image-input {
+      display: none;
+    }
+    .image-attachments {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 0;
+    }
+    .image-attachment {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      max-width: 220px;
+      padding: 5px 8px;
+      border-radius: 9px;
+      border: 1px solid var(--conversation-border);
+      font: 12px/1.3 var(--conversation-font-body);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .image-attachment img {
+      width: 28px;
+      height: 28px;
+      object-fit: cover;
+      border-radius: 5px;
+    }
+    .image-attachment .remove-image {
+      width: 22px;
+      height: 22px;
+      flex: none;
+    }
     .at-reference {
       display: inline;
       padding: 2px 5px;
@@ -885,7 +1129,169 @@ export class AgentRuntimeConversationElement
       white-space: nowrap;
       box-decoration-break: clone;
     }
-    .actions { display: flex; align-items: center; gap: 5px; }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .composer-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+    }
+    .composer-left,
+    .composer-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .composer-right {
+      margin-left: auto;
+    }
+    .composer-toolbar .icon-button {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--conversation-text);
+    }
+    .composer-toolbar .primary-action {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      flex: none;
+    }
+    .composer-toolbar .text-button {
+      display: inline-flex;
+      gap: 5px;
+      width: auto;
+      max-width: 100%;
+      height: 32px;
+      padding: 0 7px;
+      background: transparent;
+      color: var(--conversation-text);
+      border-radius: 8px;
+      font: 500 12px/1.4 var(--conversation-font-body);
+    }
+    .composer-toolbar .model-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 190px;
+    }
+    .composer-toolbar .effort-value {
+      color: var(--conversation-text-muted);
+      white-space: nowrap;
+    }
+    .composer-toolbar .text-button svg {
+      width: 14px;
+      height: 14px;
+      flex: none;
+    }
+    .composer-state {
+      max-width: 800px;
+      width: 100%;
+      margin: 0 auto;
+      color: var(--conversation-text-muted);
+      font: 11px/1.4 var(--conversation-font-body);
+    }
+    .composer-menu {
+      position: fixed;
+      z-index: 30;
+      box-sizing: border-box;
+      width: 300px;
+      max-width: calc(100vw - 24px);
+      overflow-y: auto;
+      padding: 10px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 14px;
+      background: var(--conversation-surface-raised);
+      color: var(--conversation-text);
+      box-shadow: 0 8px 24px #0002;
+      font: 13px/1.5 var(--conversation-font-body);
+    }
+    .composer-menu-title {
+      margin: 3px 6px 8px;
+      color: var(--conversation-text-muted);
+      font-size: 12px;
+    }
+    .composer-menu .menu-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      text-align: left;
+      width: 100%;
+      height: auto;
+      min-height: 36px;
+      padding: 8px;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+    }
+    .composer-menu .menu-item[aria-checked='true'] {
+      background: var(--conversation-code-background);
+    }
+    .composer-menu .menu-item:hover:not(:disabled) {
+      background: var(--conversation-code-background);
+      transform: none;
+    }
+    .composer-menu .menu-item small {
+      display: block;
+      color: var(--conversation-text-muted);
+      font-size: 12px;
+    }
+    .reasoning-control {
+      padding: 6px 6px 12px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid var(--conversation-border);
+    }
+    .reasoning-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .reasoning-control input[type='range'] {
+      width: 100%;
+      accent-color: var(--conversation-accent);
+      cursor: pointer;
+    }
+    .reasoning-control button {
+      width: auto;
+      height: 26px;
+      padding: 0 6px;
+      font: inherit;
+      background: transparent;
+      color: var(--conversation-text-muted);
+    }
+    .action-spinner {
+      animation: composer-spin 900ms linear infinite;
+    }
+    @keyframes composer-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .action-spinner {
+        animation: none;
+      }
+    }
+    @media (max-width: 480px) {
+      .composer-toolbar .model-name {
+        max-width: 120px;
+      }
+      .composer-toolbar {
+        gap: 4px;
+      }
+      .composer-toolbar .text-button {
+        padding: 0 3px;
+      }
+    }
     button {
       display: inline-grid;
       place-items: center;
@@ -897,20 +1303,30 @@ export class AgentRuntimeConversationElement
       background: var(--conversation-accent);
       color: var(--conversation-accent-contrast);
       cursor: pointer;
-      transition: transform 120ms ease, filter 120ms ease;
+      transition:
+        transform 120ms ease,
+        filter 120ms ease;
     }
     button.secondary {
       border: 1px solid var(--conversation-border);
       background: transparent;
       color: var(--conversation-text);
     }
-    button:hover:not(:disabled) { filter: brightness(1.04); transform: translateY(-1px); }
-    button:active:not(:disabled) { transform: translateY(0); }
+    button:hover:not(:disabled) {
+      filter: brightness(1.04);
+      transform: translateY(-1px);
+    }
+    button:active:not(:disabled) {
+      transform: translateY(0);
+    }
     button:focus-visible {
       outline: 2px solid var(--conversation-accent);
       outline-offset: 2px;
     }
-    button:disabled { opacity: 0.42; cursor: not-allowed; }
+    button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+    }
     button svg {
       width: 18px;
       height: 18px;
@@ -920,22 +1336,74 @@ export class AgentRuntimeConversationElement
       stroke-linejoin: round;
       stroke-width: 1.8;
     }
-    :host([density="compact"]) .messages { padding-top: 14px; }
-    :host([density="compact"]) .message { margin-bottom: 13px; }
-    @media (max-width: 560px) {
-      .permission-tool { grid-template-columns: minmax(0, 1fr); }
-      .permission-actions { justify-content: stretch; }
-      .permission-actions button { flex: 1 1 0; }
+    :host([density='compact']) .messages {
+      padding-top: 14px;
     }
-    @keyframes pulse { 50% { opacity: 0.28; transform: scale(0.76); } }
+    :host([density='compact']) .message {
+      margin-bottom: 13px;
+    }
+    @media (max-width: 560px) {
+      .permission-tool {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .permission-actions {
+        justify-content: stretch;
+      }
+      .permission-actions button {
+        flex: 1 1 0;
+      }
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.28;
+        transform: scale(0.76);
+      }
+    }
     @media (prefers-reduced-motion: reduce) {
-      .messages { scroll-behavior: auto; }
-      .pulse { animation: none; }
+      .messages {
+        scroll-behavior: auto;
+      }
+      .pulse {
+        animation: none;
+      }
     }
   `;
 
   declare transport: ConversationTransport | null;
   declare capabilities: ConversationHostCapabilities;
+  declare composerController: ConversationComposerController | null;
+  declare private composerPanel: 'model' | 'permissions' | null;
+  declare private composerPanelPosition: string;
+  private composerSession = new ComposerSession(
+    () => this.requestUpdate(),
+    (message) =>
+      this.emit('agent-conversation-error', {
+        code: 'composer-action-failed',
+        message,
+        recoverable: true,
+      }),
+  );
+  private dismissComposerMenu = (event: Event) => {
+    if (
+      !event
+        .composedPath()
+        .some(
+          (node) =>
+            node instanceof Element &&
+            (node.classList.contains('composer-menu') ||
+              node.matches(
+                '[aria-label="Permissions"],[aria-label="Model and reasoning"]',
+              )),
+        )
+    )
+      this.composerPanel = null;
+  };
+  private escapeComposerMenu = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') this.composerPanel = null;
+  };
+  private closeComposerMenu = () => {
+    this.composerPanel = null;
+  };
   declare presentationItems: readonly ConversationPresentationItem[];
   declare extensions: readonly ConversationExtension[];
   declare conversationId: string | null;
@@ -955,6 +1423,12 @@ export class AgentRuntimeConversationElement
   declare private persistenceOperation: string | null;
   declare private providerPanelOpen: boolean;
   declare private providerEditorOpen: boolean;
+  declare private providerEditorMode: 'manual' | 'import';
+  declare private providerImportJson: string;
+  declare private providerEditorError: string;
+  private providerModalNode: HTMLElement | null = null;
+  private providerEditorEpoch = 0;
+  private releaseProviderModal: (() => void) | null = null;
   declare private providerDefinitions: ProviderDefinitionsResult | null;
   declare private builtinProviderCatalog: BuiltinProviderCatalog | null;
   declare private providerEditorProviderUid: number | null;
@@ -966,7 +1440,10 @@ export class AgentRuntimeConversationElement
   declare private providerEditorModels: ProviderEditorModelRow[];
   declare private providerOperation: string | null;
   declare private permissionOperation: string | null;
-  declare private permissionError: { toolCallId: string; message: string } | null;
+  declare private permissionError: {
+    toolCallId: string;
+    message: string;
+  } | null;
   declare private pendingImages: PendingImage[];
   declare private imageSending: boolean;
   private connection: ConversationConnection | null = null;
@@ -1003,6 +1480,9 @@ export class AgentRuntimeConversationElement
     this.persistenceOperation = null;
     this.providerPanelOpen = false;
     this.providerEditorOpen = false;
+    this.providerEditorMode = 'manual';
+    this.providerImportJson = '';
+    this.providerEditorError = '';
     this.providerDefinitions = null;
     this.builtinProviderCatalog = null;
     this.providerEditorProviderUid = null;
@@ -1017,10 +1497,25 @@ export class AgentRuntimeConversationElement
     this.permissionError = null;
     this.pendingImages = [];
     this.imageSending = false;
+    this.composerController = null;
+    this.composerPanel = null;
+    this.composerPanelPosition = '';
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('pointerdown', this.dismissComposerMenu);
+    window.addEventListener('keydown', this.escapeComposerMenu);
+    window.addEventListener('resize', this.closeComposerMenu);
+  }
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.removeEventListener('pointerdown', this.dismissComposerMenu);
+    window.removeEventListener('keydown', this.escapeComposerMenu);
+    window.removeEventListener('resize', this.closeComposerMenu);
+    this.releaseProviderModal?.();
+    this.releaseProviderModal = null;
+    this.providerModalNode = null;
     this.clearPendingImages();
     this.persistenceUnsubscribe?.();
     this.persistenceUnsubscribe = null;
@@ -1028,7 +1523,8 @@ export class AgentRuntimeConversationElement
   }
 
   async connect(): Promise<void> {
-    if (!this.transport) throw new Error('Conversation transport is not configured.');
+    if (!this.transport)
+      throw new Error('Conversation transport is not configured.');
     this.disconnect();
     // A reconnect to the same conversation must not carry transient running
     // flags from the previous connection into the new authoritative snapshot.
@@ -1067,6 +1563,8 @@ export class AgentRuntimeConversationElement
   }
 
   disconnect(): void {
+    this.composerSession.dispose();
+    this.composerPanel = null;
     this.connectAbort?.abort();
     this.connectAbort = null;
     const connection = this.connection;
@@ -1092,7 +1590,8 @@ export class AgentRuntimeConversationElement
     if (!this.persistence.controller.create) {
       this.emit('agent-conversation-diagnostic', {
         code: 'conversation-create-unsupported',
-        message: 'The host persistence controller does not support creating conversations.',
+        message:
+          'The host persistence controller does not support creating conversations.',
       });
       return;
     }
@@ -1128,7 +1627,8 @@ export class AgentRuntimeConversationElement
         ...this.persistence,
         binding: {
           archiveId: archive.archiveId,
-          runtimeConversationId: archive.runtimeConversationId ?? this.state.conversationId,
+          runtimeConversationId:
+            archive.runtimeConversationId ?? this.state.conversationId,
         },
       };
       this.upsertPersistedConversation(archive);
@@ -1162,7 +1662,10 @@ export class AgentRuntimeConversationElement
     this.persistenceOperation = 'list';
     try {
       const page = await controller.list();
-      if (this.persistence.enabled && this.persistence.controller === controller) {
+      if (
+        this.persistence.enabled &&
+        this.persistence.controller === controller
+      ) {
         this.persistedConversations = page.items;
       }
     } catch (error) {
@@ -1175,11 +1678,17 @@ export class AgentRuntimeConversationElement
   async send(content: string, options: SendOptions = {}): Promise<SendResult> {
     const images = [...this.pendingImages];
     const draft = (content || (images.length ? this.draft : content)).trim();
-    if (!draft && !images.length) return { accepted: false, rejectReason: 'Message is empty.' };
-    if (!this.transport) return { accepted: false, rejectReason: 'Transport is not configured.' };
-    if (!this.state.conversationId) return { accepted: false, rejectReason: 'Conversation is not ready.' };
+    if (!draft && !images.length)
+      return { accepted: false, rejectReason: 'Message is empty.' };
+    if (!this.transport)
+      return { accepted: false, rejectReason: 'Transport is not configured.' };
+    if (!this.state.conversationId)
+      return { accepted: false, rejectReason: 'Conversation is not ready.' };
     if (!this.canCompose() || this.imageSending) {
-      return { accepted: false, rejectReason: 'Conversation is still running.' };
+      return {
+        accepted: false,
+        rejectReason: 'Conversation is still running.',
+      };
     }
 
     const conversationId = this.state.conversationId;
@@ -1189,11 +1698,16 @@ export class AgentRuntimeConversationElement
     try {
       if (images.length) {
         const importer = this.transport.imageInput;
-        if (!importer) throw new Error('Image input is not supported by this host.');
+        if (!importer)
+          throw new Error('Image input is not supported by this host.');
         const importedImages = new Map<number, string>();
         for (const image of images) {
-          const imported = await importer.importImage({ conversationId, file: image.file });
-          if (!imported.imageId) throw new Error(`Image import returned no ID: ${image.file.name}`);
+          const imported = await importer.importImage({
+            conversationId,
+            file: image.file,
+          });
+          if (!imported.imageId)
+            throw new Error(`Image import returned no ID: ${image.file.name}`);
           importedImages.set(image.number, imported.imageId);
         }
         parts = [];
@@ -1206,40 +1720,64 @@ export class AgentRuntimeConversationElement
           const number = Number(match[1]);
           const imageId = importedImages.get(number);
           if (!imageId) continue;
-          if (index > cursor) parts.push({ type: 'text', text: draft.slice(cursor, index) });
+          if (index > cursor)
+            parts.push({ type: 'text', text: draft.slice(cursor, index) });
           parts.push({ type: 'image', image_id: imageId });
           imageParts += 1;
           used.add(number);
           cursor = index + match[0].length;
         }
-        if (cursor < draft.length) parts.push({ type: 'text', text: draft.slice(cursor) });
+        if (cursor < draft.length)
+          parts.push({ type: 'text', text: draft.slice(cursor) });
         for (const image of images) {
           if (!used.has(image.number)) {
-            parts.push({ type: 'image', image_id: importedImages.get(image.number)! });
+            parts.push({
+              type: 'image',
+              image_id: importedImages.get(image.number)!,
+            });
             imageParts += 1;
           }
         }
-        if (imageParts > 8) throw new Error('At most 8 image references can be sent in one message.');
-        value = parts.filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
-          .map((part) => part.text).join('\n');
+        if (imageParts > 8)
+          throw new Error(
+            'At most 8 image references can be sent in one message.',
+          );
+        value = parts
+          .filter(
+            (part): part is Extract<MessagePart, { type: 'text' }> =>
+              part.type === 'text',
+          )
+          .map((part) => part.text)
+          .join('\n');
         if (!value.trim()) value = '[Image]';
       }
     } catch (error) {
       this.imageSending = false;
       const message = error instanceof Error ? error.message : String(error);
-      this.emit('agent-conversation-error', { code: 'image-import-failed', message, recoverable: true });
+      this.emit('agent-conversation-error', {
+        code: 'image-import-failed',
+        message,
+        recoverable: true,
+      });
       return { accepted: false, rejectReason: message };
     }
     if (this.state.conversationId !== conversationId || !this.canCompose()) {
       this.imageSending = false;
-      return { accepted: false, rejectReason: 'Conversation changed while importing images.' };
+      return {
+        accepted: false,
+        rejectReason: 'Conversation changed while importing images.',
+      };
     }
 
-    const clientMessageId =
-      `local-user-${Date.now()}-${++this.localMessageSequence}`;
+    const clientMessageId = `local-user-${Date.now()}-${++this.localMessageSequence}`;
     this.dispatch({
       type: 'local-message-added',
-      message: createPendingUserMessage(clientMessageId, value, undefined, parts),
+      message: createPendingUserMessage(
+        clientMessageId,
+        value,
+        undefined,
+        parts,
+      ),
     });
     this.resetComposerHeight();
     this.stickToBottom = true;
@@ -1263,6 +1801,7 @@ export class AgentRuntimeConversationElement
             },
       );
       if (result.accepted) {
+        this.composerSession.sent();
         this.draft = '';
         this.clearPendingImages();
         this.resetComposerHeight();
@@ -1277,7 +1816,11 @@ export class AgentRuntimeConversationElement
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.dispatch({ type: 'local-message-failed', id: clientMessageId, error: message });
+      this.dispatch({
+        type: 'local-message-failed',
+        id: clientMessageId,
+        error: message,
+      });
       const result = { accepted: false, rejectReason: message };
       this.emit('agent-conversation-send', {
         conversationId: this.state.conversationId,
@@ -1294,11 +1837,25 @@ export class AgentRuntimeConversationElement
 
   async pause(): Promise<CommandResult> {
     const conversationId = this.state.conversationId;
-    if (!conversationId || !this.transport?.pause) {
+    if (
+      !conversationId ||
+      !this.transport?.pause ||
+      this.permissionOperation !== null ||
+      this.imageSending
+    ) {
       return { accepted: false, rejectReason: 'Pause is not supported.' };
     }
-    const result = await this.transport.pause({ conversationId });
+    const result = await this.composerSession.command('pause');
     this.emit('agent-conversation-pause', { conversationId, result });
+    return result;
+  }
+
+  async resume(): Promise<CommandResult> {
+    const conversationId = this.state.conversationId;
+    if (!conversationId)
+      return { accepted: false, rejectReason: 'Conversation is not ready.' };
+    const result = await this.composerSession.command('resume');
+    this.emit('agent-conversation-resume', { conversationId, result });
     return result;
   }
 
@@ -1307,8 +1864,22 @@ export class AgentRuntimeConversationElement
     decision: 'allow' | 'deny',
   ): Promise<CommandResult> {
     const conversationId = this.state.conversationId;
+    if (
+      this.permissionOperation !== null ||
+      this.state.connection !== 'connected' ||
+      this.composerSession.awaiting ||
+      !this.state.pendingPermissions.some((p) => p.tool_call_id === toolCallId)
+    )
+      return {
+        accepted: false,
+        rejectReason:
+          'Permission response is unavailable in the current state.',
+      };
     if (!conversationId || !this.transport?.resolveToolPermission) {
-      return { accepted: false, rejectReason: 'Tool permission response is not supported.' };
+      return {
+        accepted: false,
+        rejectReason: 'Tool permission response is not supported.',
+      };
     }
     this.permissionOperation = toolCallId;
     this.permissionError = null;
@@ -1330,7 +1901,8 @@ export class AgentRuntimeConversationElement
       } else {
         this.permissionError = {
           toolCallId,
-          message: result.rejectReason ?? 'Tool permission response was rejected.',
+          message:
+            result.rejectReason ?? 'Tool permission response was rejected.',
         };
       }
       this.emit('agent-conversation-tool-permission', {
@@ -1361,7 +1933,10 @@ export class AgentRuntimeConversationElement
     if (conversationId && this.transport?.close) {
       await this.transport.close({ conversationId });
     }
-    this.dispatch({ type: 'conversation-closed', conversationId: conversationId ?? undefined });
+    this.dispatch({
+      type: 'conversation-closed',
+      conversationId: conversationId ?? undefined,
+    });
   }
 
   focusComposer(): void {
@@ -1404,7 +1979,9 @@ export class AgentRuntimeConversationElement
   }
 
   removePresentationItem(id: string): void {
-    this.presentationItems = this.presentationItems.filter((item) => item.id !== id);
+    this.presentationItems = this.presentationItems.filter(
+      (item) => item.id !== id,
+    );
   }
 
   clearPresentationItems(scope?: string): void {
@@ -1414,6 +1991,13 @@ export class AgentRuntimeConversationElement
   }
 
   protected override willUpdate(changed: Map<PropertyKey, unknown>): void {
+    this.composerSession.sync(
+      this.state,
+      this.transport,
+      this.composerController,
+      this.state.modelUid,
+      this.providerOperation === 'model',
+    );
     if (
       changed.has('conversationId') &&
       this.conversationId !== null &&
@@ -1433,14 +2017,33 @@ export class AgentRuntimeConversationElement
   }
 
   protected override updated(changed: Map<PropertyKey, unknown>): void {
-    if (this.stickToBottom && (changed.has('state') || changed.has('presentationItems'))) {
+    const modal =
+      this.renderRoot.querySelector<HTMLElement>('.provider-editor');
+    if (modal !== this.providerModalNode) {
+      this.releaseProviderModal?.();
+      this.releaseProviderModal = null;
+      this.providerModalNode = modal;
+      if (modal)
+        this.releaseProviderModal = bindProviderModal(modal, {
+          close: () => this.closeProviderEditor(),
+          busy: () => this.providerOperation !== null,
+        });
+    }
+
+    if (
+      this.stickToBottom &&
+      (changed.has('state') || changed.has('presentationItems'))
+    ) {
       requestAnimationFrame(() => {
-        const messages = this.renderRoot.querySelector<HTMLElement>('.messages');
+        const messages =
+          this.renderRoot.querySelector<HTMLElement>('.messages');
         if (messages) messages.scrollTop = messages.scrollHeight;
       });
     }
     if (changed.has('presentationItems')) {
-      const ids = new Set(this.presentationItems.map((item) => `presentation:${item.id}`));
+      const ids = new Set(
+        this.presentationItems.map((item) => `presentation:${item.id}`),
+      );
       for (const key of this.completedRevealKeys) {
         if (key.startsWith('presentation:') && !ids.has(key)) {
           this.completedRevealKeys.delete(key);
@@ -1462,33 +2065,44 @@ export class AgentRuntimeConversationElement
       <header class="header" part="header">
         <slot name="header">
           <div class="status">
-            <span
-              class="status-dot"
-              data-connected=${String(this.state.connection === 'connected')}
-            ></span>
-            <span>${this.statusLabel()}</span>
+            <span class="header-title"
+              >${this.locale.startsWith('zh') ? '对话' : 'Chat'}</span
+            ><span class="connection-label" role="status"
+              >${this.statusLabel()}</span
+            >
           </div>
         </slot>
         <div class="header-control-strip">
-          ${this.renderProviderActions()}
-          ${this.renderPersistenceActions()}
+          ${this.renderProviderActions()} ${this.renderPersistenceActions()}
         </div>
       </header>
-      ${this.renderProviderPanel()}
-      ${this.renderProviderEditor()}
+      ${this.renderProviderPanel()} ${this.renderProviderEditor()}
       ${this.renderHistoryPanel()}
       <main
         class="messages"
         part="message-list"
         aria-live="polite"
         @scroll=${this.onScroll}
-        @wheel=${() => { this.stickToBottom = false; }}
+        @wheel=${() => {
+          this.stickToBottom = false;
+        }}
       >
         ${displayItems.length === 0
-          ? html`<div class="empty"><slot name="empty-state">Start a conversation</slot></div>`
-          : repeat(displayItems, (item) => item.key, (item, index) =>
-              this.renderDisplayItem(item, index, displayItems, scheme))}
-        ${this.state.plan ? html`<agent-runtime-plan-card .plan=${this.state.plan} .locale=${this.locale}></agent-runtime-plan-card>` : nothing}
+          ? html`<div class="empty">
+              <slot name="empty-state">Start a conversation</slot>
+            </div>`
+          : repeat(
+              displayItems,
+              (item) => item.key,
+              (item, index) =>
+                this.renderDisplayItem(item, index, displayItems, scheme),
+            )}
+        ${this.state.plan
+          ? html`<agent-runtime-plan-card
+              .plan=${this.state.plan}
+              .locale=${this.locale}
+            ></agent-runtime-plan-card>`
+          : nothing}
         ${activityLabel
           ? html`<div class="message assistant waiting">
               <span class="pulse"></span><span>${activityLabel}</span>
@@ -1504,80 +2118,410 @@ export class AgentRuntimeConversationElement
       <footer class="composer-wrap" part="composer">
         <div class="composer">
           <slot name="composer-prefix"></slot>
-          ${this.pendingImages.length ? html`<div class="image-attachments" aria-label="Selected images">
-            ${this.pendingImages.map((image) => html`<span class="image-attachment">
-              ${image.previewUrl ? html`<img src=${image.previewUrl} alt="" />` : nothing}
-              <span title=${image.file.name}>${image.file.name}</span>
-              <button class="secondary remove-image" type="button" aria-label=${`Remove ${image.file.name}`}
-                ?disabled=${this.imageSending} @click=${() => this.removePendingImage(image)}>×</button>
-            </span>`)}
-          </div>` : nothing}
+          ${this.pendingImages.length
+            ? html`<div class="image-attachments" aria-label="Selected images">
+                ${this.pendingImages.map(
+                  (image) =>
+                    html`<span class="image-attachment">
+                      ${image.previewUrl
+                        ? html`<img src=${image.previewUrl} alt="" />`
+                        : nothing}
+                      <span title=${image.file.name}>${image.file.name}</span>
+                      <button
+                        class="secondary remove-image"
+                        type="button"
+                        aria-label=${`Remove ${image.file.name}`}
+                        ?disabled=${this.imageSending}
+                        @click=${() => this.removePendingImage(image)}
+                      >
+                        ×
+                      </button>
+                    </span>`,
+                )}
+              </div>`
+            : nothing}
           <textarea
             rows="1"
             aria-label="Message"
-            placeholder=${this.state.initialized ? 'Message the agent' : 'Waiting for conversation'}
+            placeholder=${this.state.initialized
+              ? 'Message the agent'
+              : 'Waiting for conversation'}
             .value=${this.draft}
             ?disabled=${!this.canCompose() || this.imageSending}
             @input=${this.onDraftInput}
             @keydown=${this.onComposerKeydown}
             @paste=${this.onComposerPaste}
           ></textarea>
-          <div class="actions">
-            <slot name="composer-suffix"></slot>
-            ${this.transport?.imageInput ? html`
-              <input class="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple @change=${this.onImageInput} />
-              <button class="secondary" type="button" aria-label="Attach images" title="Attach images"
-                ?disabled=${!this.canCompose() || this.imageSending || this.pendingImages.length >= 8}
-                @click=${() => this.renderRoot.querySelector<HTMLInputElement>('.image-input')?.click()}
-              ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l2-2h4l2 2h4v12H4z"></path><circle cx="12" cy="13" r="3"></circle></svg></button>
-            ` : nothing}
-            ${this.state.runtimeState === 'thinking' ||
-            this.state.runtimeState === 'executing'
-              ? html`<button
-                  class="secondary"
-                  type="button"
-                  aria-label="Pause response"
-                  title="Pause response"
-                  @click=${() => void this.pause()}
-                ><svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M8 6v12M16 6v12"></path>
-                </svg></button>`
-              : nothing}
-            <button
-              type="button"
-              aria-label="Send message"
-              title="Send message"
-              ?disabled=${!this.canCompose() || this.imageSending || (!this.draft.trim() && !this.pendingImages.length)}
-              @click=${() => void this.send(this.draft)}
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m5 12 14-7-4.5 14-3-5.5L5 12Z"></path>
-              <path d="m11.5 13.5 3-3"></path>
-            </svg></button>
-          </div>
+          ${this.renderComposerControls()}
         </div>
       </footer>
     </section>`;
+  }
+
+  private renderComposerControls() {
+    const zh = this.locale.startsWith('zh'),
+      session = this.composerSession;
+    const phase = this.imageSending ? 'sending' : session.phase;
+    const busy = [
+      'thinking',
+      'executing',
+      'approval',
+      'pausing',
+      'resuming',
+      'compacting',
+      'sending',
+    ].includes(phase);
+    const resume =
+      phase === 'paused' && !this.draft.trim() && !this.pendingImages.length;
+    const label = busy
+      ? 'Pause response'
+      : resume
+        ? 'Continue response'
+        : 'Send message';
+    const disabled =
+      this.permissionOperation !== null ||
+      (busy
+        ? !session.canPause || this.imageSending
+        : resume
+          ? !session.canResume
+          : !this.canCompose() ||
+            (!this.draft.trim() && !this.pendingImages.length));
+    const model = this.providerModels().find(
+      (m) => m.uid === this.currentConversationModelUid(),
+    );
+    const effort = session.settings.effort ?? model?.reasoning?.effort;
+    const permission = session.settings.permissionModes?.find(
+      (m) => m.id === session.settings.permissionMode,
+    );
+    const stateLabels: Record<string, [string, string]> = {
+      offline: ['未连接', 'Offline'],
+      initializing: ['正在连接会话', 'Initializing'],
+      sending: ['正在发送', 'Sending'],
+      thinking: ['正在思考', 'Thinking'],
+      executing: ['正在执行', 'Executing'],
+      approval: ['等待批准', 'Waiting for approval'],
+      pausing: ['正在暂停', 'Pausing'],
+      resuming: ['正在继续', 'Resuming'],
+      compacting: ['正在整理上下文', 'Compacting'],
+      paused: ['已暂停', 'Paused'],
+    };
+    return html`${stateLabels[phase]
+        ? html`<div class="composer-state" role="status">
+            ${stateLabels[phase][zh ? 0 : 1]}
+          </div>`
+        : nothing}
+      <div class="composer-toolbar" data-state=${phase}>
+        <div class="composer-left">
+          ${this.transport?.imageInput
+            ? html`<input
+                  class="image-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  multiple
+                  @change=${this.onImageInput}
+                />
+                <button
+                  class="icon-button"
+                  type="button"
+                  aria-label="Attach images"
+                  title=${zh ? '添加图片' : 'Attach images'}
+                  ?disabled=${!this.canCompose() ||
+                  this.imageSending ||
+                  this.pendingImages.length >= 8}
+                  @click=${() =>
+                    this.renderRoot
+                      .querySelector<HTMLInputElement>('.image-input')
+                      ?.click()}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                </button>`
+            : nothing}
+          <button
+            class="text-button"
+            type="button"
+            aria-label="Permissions"
+            aria-expanded=${String(this.composerPanel === 'permissions')}
+            title=${zh ? '工具权限' : 'Tool permissions'}
+            @click=${(event: Event) =>
+              this.toggleComposerPanel('permissions', event)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m12 3 8 4v5c0 4-3 7-8 9-5-2-8-5-8-9V7z" />
+              <path d="m8 12 3 3 5-6" />
+            </svg>
+            <span
+              >${permission?.label ?? (zh ? '权限' : 'Permissions')}${this.state
+                .pendingPermissions.length
+                ? ` · ${this.state.pendingPermissions.length}`
+                : ''}</span
+            >
+          </button>
+        </div>
+        <div class="composer-right">
+          <slot name="composer-suffix"></slot>
+          ${this.providerControls.enabled &&
+          this.providerControls.showModelSwitcher !== false
+            ? html`<button
+                class="text-button"
+                data-tone="model"
+                type="button"
+                aria-label="Model and reasoning"
+                aria-expanded=${String(this.composerPanel === 'model')}
+                ?disabled=${!session.canConfigure ||
+                this.providerOperation !== null ||
+                this.imageSending}
+                title=${this.currentProviderModelLabel() ?? ''}
+                @click=${(event: Event) =>
+                  this.toggleComposerPanel('model', event)}
+              >
+                <span class="model-name"
+                  >${model
+                    ? this.providerModelName(model)
+                    : zh
+                      ? '选择模型'
+                      : 'Select model'}</span
+                ><span class="effort-value">${effortLabel(effort, zh)}</span
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m8 10 4 4 4-4" />
+                </svg>
+              </button>`
+            : nothing}
+          <button
+            class="primary-action"
+            type="button"
+            data-state=${phase}
+            aria-label=${label}
+            title=${label}
+            ?disabled=${disabled}
+            @click=${() =>
+              void (busy
+                ? this.pause()
+                : resume
+                  ? this.resume()
+                  : this.send(this.draft))}
+          >
+            <svg
+              class=${['pausing', 'resuming', 'sending', 'compacting'].includes(
+                phase,
+              )
+                ? 'action-spinner'
+                : ''}
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              ${['pausing', 'resuming', 'sending', 'compacting'].includes(phase)
+                ? html`<path d="M20 12a8 8 0 1 1-8-8" />`
+                : busy
+                  ? html`<rect
+                      x="7"
+                      y="7"
+                      width="10"
+                      height="10"
+                      rx="1"
+                      fill="currentColor"
+                      stroke="none"
+                    />`
+                  : resume
+                    ? html`<path
+                        d="m9 5 11 7-11 7z"
+                        fill="currentColor"
+                        stroke="none"
+                      />`
+                    : html`<path d="M12 19V5m-6 6 6-6 6 6" />`}
+            </svg>
+          </button>
+        </div>
+      </div>
+      ${this.renderComposerMenu(model)}`;
+  }
+
+  private toggleComposerPanel(panel: 'model' | 'permissions', event: Event) {
+    this.composerSession.clearEffortPreview();
+    if (this.composerPanel === panel) {
+      this.composerPanel = null;
+      return;
+    }
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    this.composerPanelPosition = `left:${Math.max(12, Math.min(rect.right - 300, window.innerWidth - 312))}px;bottom:${Math.max(12, window.innerHeight - rect.top + 8)}px;max-height:${Math.max(120, rect.top - 24)}px`;
+    this.composerPanel = panel;
+  }
+  private renderComposerMenu(model: ProviderModelDefinition | undefined) {
+    if (!this.composerPanel) return nothing;
+    const zh = this.locale.startsWith('zh'),
+      session = this.composerSession,
+      settings = session.settings;
+    const efforts = settings.supportedEfforts ?? [];
+    const displayedEffort = session.displayedEffort;
+    const index = displayedEffort ? efforts.indexOf(displayedEffort) : -1;
+    return html`<aside
+      class="composer-menu"
+      style=${this.composerPanelPosition}
+      aria-label=${this.composerPanel === 'model'
+        ? 'Model settings'
+        : 'Permission settings'}
+      @keydown=${(event: KeyboardEvent) => {
+        if (event.key === 'Escape') this.composerPanel = null;
+      }}
+    >
+      ${this.composerPanel === 'model'
+        ? html` <div class="reasoning-control">
+              <div class="reasoning-label">
+                <span
+                  >${zh ? '推理强度' : 'Reasoning effort'} ·
+                  ${effortLabel(displayedEffort, zh)}</span
+                ><button
+                  type="button"
+                  aria-label="Reset reasoning"
+                  ?disabled=${!session.canConfigure ||
+                  !this.composerController?.setEffort}
+                  @click=${() => {
+                    session.clearEffortPreview();
+                    void session.configure('effort', null);
+                  }}
+                >
+                  ${zh ? '重置' : 'Reset'}
+                </button>
+              </div>
+              <input
+                type="range"
+                aria-label="Reasoning effort"
+                aria-valuetext=${effortLabel(displayedEffort, zh)}
+                min="-1"
+                max=${Math.max(-1, efforts.length - 1)}
+                step="1"
+                .value=${String(index)}
+                ?disabled=${!session.canConfigure ||
+                !efforts.length ||
+                !this.composerController?.setEffort}
+                @input=${(event: Event) =>
+                  session.previewEffort(
+                    efforts[Number((event.target as HTMLInputElement).value)] ??
+                      null,
+                  )}
+                @change=${(event: Event) =>
+                  void session.configure(
+                    'effort',
+                    efforts[Number((event.target as HTMLInputElement).value)] ??
+                      null,
+                  )}
+              />
+            </div>
+            <div class="composer-menu-title">
+              ${zh ? '选择模型' : 'Select model'}
+            </div>
+            <div role="menu" aria-label="Models">
+              ${this.providerModels().map(
+                (m) =>
+                  html`<button
+                    class="menu-item"
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked=${String(
+                      m.uid === this.currentConversationModelUid(),
+                    )}
+                    ?disabled=${!session.canConfigure ||
+                    this.providerOperation !== null}
+                    @click=${() => void this.selectProviderModel(String(m.uid))}
+                  >
+                    <span>${this.providerModelName(m)}</span>${m.uid ===
+                    this.currentConversationModelUid()
+                      ? html`<span aria-hidden="true">✓</span>`
+                      : nothing}
+                  </button>`,
+              )}
+            </div>
+            ${this.providerControls.enabled &&
+            this.providerControls.showImport !== false
+              ? html`<button
+                  class="menu-item"
+                  type="button"
+                  @click=${() => {
+                    this.composerPanel = null;
+                    this.providerPanelOpen = true;
+                    this.historyOpen = false;
+                  }}
+                >
+                  ${zh ? '管理厂商' : 'Manage providers'}
+                </button>`
+              : nothing}`
+        : html`<div class="composer-menu-title">
+              ${zh ? '工具权限' : 'Tool permissions'}
+            </div>
+            <div role="menu">
+              ${settings.permissionModes?.length
+                ? settings.permissionModes.map(
+                    (mode) =>
+                      html`<button
+                        class="menu-item"
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked=${String(
+                          mode.id === settings.permissionMode,
+                        )}
+                        ?disabled=${!session.canConfigure ||
+                        !this.composerController?.setPermissionMode}
+                        @click=${() =>
+                          void session.configure('permission', mode.id)}
+                      >
+                        <span
+                          >${mode.label}${mode.description
+                            ? html`<small>${mode.description}</small>`
+                            : nothing}</span
+                        >${mode.id === settings.permissionMode
+                          ? html`<span aria-hidden="true">✓</span>`
+                          : nothing}
+                      </button>`,
+                  )
+                : html`<div class="composer-menu-title">
+                    ${zh ? '由宿主管理权限' : 'Permissions managed by host'}
+                  </div>`}
+            </div>
+            ${this.state.pendingPermissions.length
+              ? html`<button
+                  class="menu-item"
+                  type="button"
+                  @click=${() => {
+                    this.composerPanel = null;
+                    this.renderRoot
+                      .querySelector<HTMLElement>('.permission-shelf')
+                      ?.scrollIntoView?.({ block: 'nearest' });
+                  }}
+                >
+                  ${zh ? '查看待批准请求' : 'View pending approvals'} ·
+                  ${this.state.pendingPermissions.length}
+                </button>`
+              : nothing}`}
+    </aside>`;
   }
 
   private renderPersistenceActions() {
     if (!this.persistence.enabled) return nothing;
     const zh = this.locale.toLowerCase().startsWith('zh');
     const newLabel = zh ? '新会话' : 'New chat';
-    const switchLabel = zh ? '切换' : 'Switch';
-    const createDisabled = this.persistenceOperation !== null ||
-      (Boolean(this.state.conversationId) && !this.persistence.binding?.archiveId);
+    const switchLabel = zh ? '历史会话' : 'History';
+    const createDisabled =
+      this.persistenceOperation !== null || !this.persistence.controller.create;
     return html`<div class="header-actions" part="persistence-actions">
       <button
         class="header-action"
-        data-tone="add"
+        data-tone="new"
         type="button"
         ?disabled=${createDisabled}
         title=${newLabel}
         @click=${() => void this.createConversation()}
-      ><span>${this.persistenceOperation === 'create'
-        ? (zh ? '创建中' : 'Creating')
-        : newLabel}</span></button>
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" /></svg
+        ><span
+          >${this.persistenceOperation === 'create'
+            ? zh
+              ? '创建中'
+              : 'Creating'
+            : newLabel}</span
+        >
+      </button>
       ${this.persistence.showHistory !== false
         ? html`<button
             class="header-action"
@@ -1593,58 +2537,48 @@ export class AgentRuntimeConversationElement
                 void this.refreshConversationHistory();
               }
             }}
-          ><span>${switchLabel}</span></button>`
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 11a9 9 0 1 1 2.6 7M3 5v6h6M12 7v5l3 2" /></svg
+            ><span>${switchLabel}</span>
+          </button>`
         : nothing}
     </div>`;
   }
 
   private renderProviderActions() {
-    if (!this.providerControls.enabled) return nothing;
-    const showModelSwitcher = this.providerControls.showModelSwitcher !== false;
-    const showImport = this.providerControls.showImport !== false;
-    const zh = this.locale.toLowerCase().startsWith('zh');
-    if (!showModelSwitcher && !showImport) return nothing;
-    const modelLabel = this.currentProviderModelLabel() ??
-      (zh ? '未配置模型' : 'No model');
-    const modelActionLabel = this.providerOperation === 'load'
-      ? (zh ? '加载中' : 'Loading')
-      : modelLabel;
+    if (
+      !this.providerControls.enabled ||
+      this.providerControls.showImport === false
+    )
+      return nothing;
+    const zh = this.locale.startsWith('zh');
     return html`<div class="header-actions" part="provider-actions">
-      ${showModelSwitcher
-        ? html`<button
-            class="header-action"
-            data-tone="model"
-            data-active=${String(this.providerPanelOpen)}
-            type="button"
-            aria-expanded=${String(this.providerPanelOpen)}
-            ?disabled=${this.providerOperation !== null}
-            title=${zh ? `当前模型：${modelLabel}` : `Current model: ${modelLabel}`}
-            @click=${() => {
-              this.providerPanelOpen = !this.providerPanelOpen;
-              if (this.providerPanelOpen) {
-                this.historyOpen = false;
-                if (!this.providerDefinitions) void this.refreshProviderDefinitions();
-              }
-            }}
-          ><span>${modelActionLabel}</span></button>`
-        : nothing}
-      ${showImport
-        ? html`<button
-            class="header-action"
-            data-tone="add"
-            type="button"
-            ?disabled=${this.providerOperation !== null}
-            title=${zh ? '添加厂商' : 'Add provider'}
-            @click=${() => void this.openProviderEditor()}
-          ><span>${this.providerOperation === 'import'
-            ? (zh ? '添加中' : 'Adding')
-            : (zh ? '添加厂商' : 'Add provider')}</span></button>`
-        : nothing}
+      <button
+        class="header-action"
+        data-tone="add"
+        type="button"
+        ?disabled=${this.providerOperation !== null}
+        @click=${() => void this.openProviderEditor()}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m12 3 8 4-8 4-8-4zM4 12l8 4 8-4M4 17l8 4 8-4" /></svg
+        ><span
+          >${this.providerOperation === 'import'
+            ? zh
+              ? '添加中'
+              : 'Adding'
+            : zh
+              ? '添加厂商'
+              : 'Add provider'}</span
+        >
+      </button>
     </div>`;
   }
 
   private renderProviderPanel() {
-    if (!this.providerControls.enabled || !this.providerPanelOpen) return nothing;
+    if (!this.providerControls.enabled || !this.providerPanelOpen)
+      return nothing;
     const zh = this.locale.toLowerCase().startsWith('zh');
     const models = this.providerModels();
     const providers = this.providerDefinitions?.providers ?? [];
@@ -1652,287 +2586,593 @@ export class AgentRuntimeConversationElement
     return html`<aside class="provider-panel" part="provider-panel">
       ${models.length
         ? html`<label class="provider-field">
-            <span class="provider-label">${zh ? '当前模型' : 'Current model'}</span>
-            <select
-              class="provider-select"
-              .value=${current === null ? '' : String(current)}
-              ?disabled=${this.providerOperation !== null}
-              @change=${(event: Event) =>
-                void this.selectProviderModel((event.target as HTMLSelectElement).value)}
-            >
-              ${models.map((model) => html`<option
-                value=${String(model.uid)}
-                ?selected=${model.uid === current}
+              <span class="provider-label"
+                >${zh ? '当前模型' : 'Current model'}</span
               >
-                ${this.providerModelLabel(model)}
-              </option>`)}
-            </select>
-          </label>
-          ${providers.length
-            ? html`<div class="provider-list">
-                ${providers.map((provider) => html`
-                  <div class="provider-list-item">
-                    <div class="provider-list-main">
-                      <strong>${provider.name ?? `Provider ${provider.uid}`}</strong>
-                      <span>${this.providerModelsForProvider(provider.uid).length}
-                        ${zh ? '个模型' : 'models'}</span>
-                    </div>
-                    <button
-                      class="secondary"
-                      type="button"
-                      ?disabled=${this.providerOperation !== null}
-                      @click=${() => void this.openProviderEditor(provider.uid)}
-                    >${zh ? '编辑' : 'Edit'}</button>
-                  </div>
-                `)}
-              </div>`
-            : nothing}
-          <div class="provider-panel-actions">
-            <button
-              class="secondary"
-              type="button"
-              ?disabled=${this.providerOperation !== null}
-              @click=${() => void this.openProviderEditor()}
-            >${zh ? '添加厂商' : 'Add provider'}</button>
-            <button
-              class="secondary"
-              type="button"
-              ?disabled=${this.providerOperation !== null}
-              @click=${() => void this.refreshProviderDefinitions()}
-            >${zh ? '刷新' : 'Refresh'}</button>
-          </div>`
-        : html`<div class="provider-empty">
-            ${this.providerOperation === 'load'
-              ? (zh ? '正在加载模型' : 'Loading models')
-              : (zh ? '未配置厂商模型' : 'No provider models configured')}
+              <select
+                class="provider-select"
+                .value=${current === null ? '' : String(current)}
+                ?disabled=${this.providerOperation !== null ||
+                !this.composerSession.canConfigure}
+                @change=${(event: Event) =>
+                  void this.selectProviderModel(
+                    (event.target as HTMLSelectElement).value,
+                  )}
+              >
+                ${models.map(
+                  (model) =>
+                    html`<option
+                      value=${String(model.uid)}
+                      ?selected=${model.uid === current}
+                    >
+                      ${this.providerModelLabel(model)}
+                    </option>`,
+                )}
+              </select>
+            </label>
+            ${providers.length
+              ? html`<div class="provider-list">
+                  ${providers.map(
+                    (provider) => html`
+                      <div class="provider-list-item">
+                        <div class="provider-list-main">
+                          <strong
+                            >${provider.name ??
+                            `Provider ${provider.uid}`}</strong
+                          >
+                          <span
+                            >${this.providerModelsForProvider(provider.uid)
+                              .length}
+                            ${zh ? '个模型' : 'models'}</span
+                          >
+                        </div>
+                        <button
+                          class="secondary"
+                          type="button"
+                          ?disabled=${this.providerOperation !== null}
+                          @click=${() =>
+                            void this.openProviderEditor(provider.uid)}
+                        >
+                          ${zh ? '编辑' : 'Edit'}
+                        </button>
+                      </div>
+                    `,
+                  )}
+                </div>`
+              : nothing}
             <div class="provider-panel-actions">
               <button
                 class="secondary"
                 type="button"
                 ?disabled=${this.providerOperation !== null}
                 @click=${() => void this.openProviderEditor()}
-              >${zh ? '添加厂商' : 'Add provider'}</button>
+              >
+                ${zh ? '添加厂商' : 'Add provider'}
+              </button>
+              <button
+                class="secondary"
+                type="button"
+                ?disabled=${this.providerOperation !== null}
+                @click=${() => void this.refreshProviderDefinitions()}
+              >
+                ${zh ? '刷新' : 'Refresh'}
+              </button>
+            </div>`
+        : html`<div class="provider-empty">
+            ${this.providerOperation === 'load'
+              ? zh
+                ? '正在加载模型'
+                : 'Loading models'
+              : zh
+                ? '未配置厂商模型'
+                : 'No provider models configured'}
+            <div class="provider-panel-actions">
+              <button
+                class="secondary"
+                type="button"
+                ?disabled=${this.providerOperation !== null}
+                @click=${() => void this.openProviderEditor()}
+              >
+                ${zh ? '添加厂商' : 'Add provider'}
+              </button>
             </div>
           </div>`}
     </aside>`;
   }
 
   private renderProviderEditor() {
-    if (!this.providerControls.enabled || !this.providerEditorOpen) return nothing;
+    if (!this.providerControls.enabled || !this.providerEditorOpen)
+      return nothing;
     const zh = this.locale.toLowerCase().startsWith('zh');
     const providers = this.builtinProviderCatalog?.providers ?? [];
     const models = this.providerEditorBuiltinModels();
     const editing = this.providerEditorProviderUid !== null;
     const editingProvider = editing
-      ? this.providerDefinitions?.providers?.find((provider) => provider.uid === this.providerEditorProviderUid)
+      ? this.providerDefinitions?.providers?.find(
+          (provider) => provider.uid === this.providerEditorProviderUid,
+        )
       : null;
-    const apiKeyAlreadySet = Boolean(editingProvider?.api_key_set ?? editingProvider?.apiKeySet);
+    const apiKeyAlreadySet = Boolean(
+      editingProvider?.api_key_set ?? editingProvider?.apiKeySet,
+    );
     return html`<div class="provider-editor-backdrop">
-      <form
+      <div
         class="provider-editor"
         part="provider-editor"
         role="dialog"
         aria-modal="true"
         aria-labelledby="provider-editor-title"
-        @submit=${this.submitProviderEditor}
+        tabindex="-1"
+        aria-busy=${String(this.providerOperation !== null)}
       >
-        <h2 id="provider-editor-title">${editing
-          ? (zh ? '编辑模型厂商' : 'Edit model provider')
-          : (zh ? '添加模型厂商' : 'Add model provider')}</h2>
-        <div class="provider-editor-grid">
-          <label class="provider-editor-field wide">
-            <span>${zh ? '内置预设' : 'Built-in preset'}</span>
-            <select
-              name="builtin-provider"
-              .value=${this.providerEditorBuiltinProviderId}
-              @change=${this.selectProviderPreset}
-            >
-              <option value="">${zh ? '自定义厂商' : 'Custom provider'}</option>
-              ${providers.map((provider) => html`<option value=${provider.id}>
-                ${provider.name}
-              </option>`)}
-            </select>
-          </label>
-          <label class="provider-editor-field">
-            <span>${zh ? '厂商名称' : 'Provider name'}</span>
-            <input
-              name="provider-name"
-              required
-              autocomplete="off"
-              placeholder="OpenAI Compatible"
-              .value=${this.providerEditorProviderName}
-              @input=${(event: Event) => {
-                this.providerEditorProviderName = (event.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-          <label class="provider-editor-field">
-            <span>${zh ? '接口协议' : 'API protocol'}</span>
-            <select
-              name="api-paradigm"
-              .value=${this.providerEditorApiParadigm}
-              @change=${(event: Event) => {
-                this.providerEditorApiParadigm = (event.target as HTMLSelectElement).value;
-              }}
-            >
-              <option value="openai_chat_completions">OpenAI Chat Completions</option>
-              <option value="anthropic_messages">Anthropic Messages</option>
-            </select>
-          </label>
-          <label class="provider-editor-field wide">
-            <span>API Endpoint</span>
-            <input
-              name="base-url"
-              type="url"
-              required
-              autocomplete="url"
-              placeholder="https://api.example.com/v1"
-              .value=${this.providerEditorBaseUrl}
-              @input=${(event: Event) => {
-                this.providerEditorBaseUrl = (event.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-          <label class="provider-editor-field wide">
-            <span>API Key</span>
-            <input
-              name="api-key"
-              type="password"
-              ?required=${!apiKeyAlreadySet}
-              autocomplete="new-password"
-              placeholder=${apiKeyAlreadySet
-                ? (zh ? '留空则保持已有 Key' : 'Leave blank to keep the existing key')
-                : 'sk-...'}
-              .value=${this.providerEditorApiKey}
-              @input=${(event: Event) => {
-                this.providerEditorApiKey = (event.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
-          <div class="provider-editor-models">
-            <div class="provider-editor-models-title">${zh ? '模型' : 'Models'}</div>
-            <datalist id="provider-editor-model-presets">
-              ${models.map((model) => html`<option value=${model.id}>
-                ${this.builtinModelLabel(model)}
-              </option>`)}
-            </datalist>
-            ${this.providerEditorModels.map((row) => html`
-              <div class="provider-editor-model-row">
-                <label class="provider-editor-field">
-                  <span>${zh ? '模型 ID' : 'Model ID'}</span>
-                  <input
-                    name=${`model-id-${row.key}`}
-                    list="provider-editor-model-presets"
-                    required
-                    autocomplete="off"
-                    .value=${row.modelId}
-                    placeholder="gpt-4.1"
-                    @input=${(event: Event) => this.updateProviderEditorModel(row.key, {
-                      modelId: (event.target as HTMLInputElement).value,
-                    })}
-                  />
-                </label>
-                <label class="provider-editor-field">
-                  <span>Context</span>
-                  <input
-                    name=${`model-context-${row.key}`}
-                    type="number"
-                    min="1"
-                    step="1"
-                    .value=${row.contextWindow === null ? '' : String(row.contextWindow)}
-                    placeholder="128000"
-                    @input=${(event: Event) => this.updateProviderEditorModel(row.key, {
-                      contextWindow: this.parseOptionalPositiveInt((event.target as HTMLInputElement).value),
-                    })}
-                  />
-                </label>
-                <button
-                  class="provider-editor-icon-button secondary"
-                  type="button"
-                  aria-label=${zh ? '删除模型' : 'Remove model'}
-                  title=${zh ? '删除模型' : 'Remove model'}
-                  ?disabled=${this.providerEditorModels.length <= 1 || this.providerOperation !== null}
-                  @click=${() => this.removeProviderEditorModel(row.key)}
-                >×</button>
-                <div class="provider-reasoning-settings">
-                  <label class="provider-editor-field">
-                    <span>${zh ? '推理强度' : 'Reasoning effort'}</span>
-                    <select name=${`model-effort-${row.key}`}
-                      .value=${row.reasoning?.effort ?? ''}
-                      @change=${(event: Event) => this.updateProviderEditorModel(row.key, {
-                        reasoning: { ...row.reasoning, effort: (event.target as HTMLSelectElement).value as ModelReasoningConfig['effort'] || undefined },
-                      })}>
-                      <option value="">${zh ? '服务端默认' : 'Server default'}</option>
-                      ${(this.providerEditorApiParadigm === 'anthropic_messages'
-                        ? ['low', 'medium', 'high', 'xhigh', 'max']
-                        : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
-                        .map((effort) => html`<option value=${effort}>${effort}</option>`)}
-                    </select>
-                  </label>
-                  ${this.providerEditorApiParadigm === 'openai_responses' ? html`
-                    <label class="provider-editor-field">
-                      <span>${zh ? '思考摘要' : 'Reasoning summary'}</span>
-                      <select name=${`model-summary-${row.key}`} .value=${row.reasoning?.summary ?? ''}
-                        @change=${(event: Event) => this.updateProviderEditorModel(row.key, {
-                          reasoning: { ...row.reasoning, summary: (event.target as HTMLSelectElement).value as ModelReasoningConfig['summary'] || undefined },
-                        })}>
-                        <option value="">${zh ? '不指定' : 'Unspecified'}</option>
-                        ${['auto', 'concise', 'detailed'].map((summary) => html`<option value=${summary}>${summary}</option>`)}
-                      </select>
-                    </label>` : nothing}
-                  ${this.providerEditorApiParadigm === 'anthropic_messages' ? html`
-                    <label class="provider-editor-field">
-                      <span>${zh ? '思考模式' : 'Thinking mode'}</span>
-                      <select name=${`model-thinking-${row.key}`} .value=${row.reasoning?.thinking ?? ''}
-                        @change=${(event: Event) => this.updateProviderEditorModel(row.key, {
-                          reasoning: { ...row.reasoning, thinking: (event.target as HTMLSelectElement).value as ModelReasoningConfig['thinking'] || undefined },
-                        })}>
-                        <option value="">${zh ? '不指定' : 'Unspecified'}</option>
-                        <option value="adaptive">${zh ? '自适应' : 'Adaptive'}</option>
-                        <option value="enabled">${zh ? '固定预算' : 'Fixed budget'}</option>
-                        <option value="disabled">${zh ? '关闭' : 'Disabled'}</option>
-                      </select>
-                    </label>
-                    ${row.reasoning?.thinking === 'enabled' ? html`
-                      <label class="provider-editor-field">
-                        <span>${zh ? '思考预算（tokens）' : 'Thinking budget (tokens)'}</span>
-                        <input name=${`model-budget-${row.key}`} type="number" min="1024" step="1" required
-                          .value=${row.reasoning?.budget_tokens ? String(row.reasoning.budget_tokens) : ''}
-                          @input=${(event: Event) => this.updateProviderEditorModel(row.key, {
-                            reasoning: { ...row.reasoning, budget_tokens: this.parseOptionalPositiveInt((event.target as HTMLInputElement).value) ?? undefined },
-                          })}/>
-                      </label>` : nothing}
-                    ` : nothing}
-                  <span class="provider-editor-models-title">${zh ? '可用档位取决于目标模型；默认不发送推理参数。' : 'Supported levels depend on the target model; defaults omit reasoning parameters.'}</span>
-                </div>
-              </div>
-            `)}
+        <form class="provider-editor-form" @submit=${this.submitProviderEditor}>
+          <header class="provider-editor-header">
+            <h2 id="provider-editor-title">
+              ${editing
+                ? zh
+                  ? '编辑模型厂商'
+                  : 'Edit model provider'
+                : zh
+                  ? '添加模型厂商'
+                  : 'Add model provider'}
+            </h2>
             <button
-              class="provider-editor-add-model secondary"
+              class="provider-editor-close"
+              type="button"
+              aria-label=${zh ? '关闭厂商配置' : 'Close provider settings'}
+              ?disabled=${this.providerOperation !== null}
+              @click=${() => this.closeProviderEditor()}
+            >
+              ×
+            </button>
+          </header>
+          <div
+            class="provider-editor-tabs"
+            role="tablist"
+            aria-label=${zh ? '配置方式' : 'Configuration mode'}
+          >
+            ${(['manual', 'import'] as const).map(
+              (mode) =>
+                html`<button
+                  class="provider-editor-tab"
+                  type="button"
+                  role="tab"
+                  tabindex=${this.providerEditorMode === mode ? 0 : -1}
+                  @keydown=${providerTabKey}
+                  aria-selected=${String(this.providerEditorMode === mode)}
+                  ?disabled=${this.providerOperation !== null}
+                  @click=${() => {
+                    this.providerEditorMode = mode;
+                    this.providerEditorError = '';
+                  }}
+                >
+                  ${mode === 'manual'
+                    ? zh
+                      ? '手动配置'
+                      : 'Configure'
+                    : zh
+                      ? '导入 JSON'
+                      : 'Import JSON'}
+                </button>`,
+            )}
+          </div>
+          <fieldset
+            class="provider-editor-body"
+            ?hidden=${this.providerEditorMode !== 'manual'}
+            ?disabled=${this.providerOperation !== null ||
+            this.providerEditorMode !== 'manual'}
+          >
+            <div class="provider-editor-grid">
+              <label class="provider-editor-field wide">
+                <span>${zh ? '内置预设' : 'Built-in preset'}</span>
+                <select
+                  name="builtin-provider"
+                  .value=${this.providerEditorBuiltinProviderId}
+                  @change=${this.selectProviderPreset}
+                >
+                  <option value="">
+                    ${zh ? '自定义厂商' : 'Custom provider'}
+                  </option>
+                  ${providers.map(
+                    (provider) =>
+                      html`<option value=${provider.id}>
+                        ${provider.name}
+                      </option>`,
+                  )}
+                </select>
+              </label>
+              <label class="provider-editor-field">
+                <span>${zh ? '厂商名称' : 'Provider name'}</span>
+                <input
+                  name="provider-name"
+                  required
+                  autocomplete="off"
+                  placeholder="OpenAI Compatible"
+                  .value=${this.providerEditorProviderName}
+                  @input=${(event: Event) => {
+                    this.providerEditorProviderName = (
+                      event.target as HTMLInputElement
+                    ).value;
+                  }}
+                />
+              </label>
+              <label class="provider-editor-field">
+                <span>${zh ? '接口协议' : 'API protocol'}</span>
+                <select
+                  name="api-paradigm"
+                  .value=${this.providerEditorApiParadigm}
+                  @change=${(event: Event) => {
+                    this.providerEditorApiParadigm = (
+                      event.target as HTMLSelectElement
+                    ).value;
+                  }}
+                >
+                  <option value="openai_chat_completions">
+                    OpenAI Chat Completions
+                  </option>
+                  <option value="openai_responses">OpenAI Responses</option>
+                  <option value="anthropic_messages">Anthropic Messages</option>
+                </select>
+              </label>
+              <label class="provider-editor-field wide">
+                <span>API Endpoint</span>
+                <input
+                  name="base-url"
+                  type="url"
+                  required
+                  autocomplete="url"
+                  placeholder="https://api.example.com/v1"
+                  .value=${this.providerEditorBaseUrl}
+                  @input=${(event: Event) => {
+                    this.providerEditorBaseUrl = (
+                      event.target as HTMLInputElement
+                    ).value;
+                  }}
+                />
+              </label>
+              <label class="provider-editor-field wide">
+                <span>API Key</span>
+                <input
+                  name="api-key"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder=${apiKeyAlreadySet
+                    ? zh
+                      ? '留空则保持已有 Key'
+                      : 'Leave blank to keep the existing key'
+                    : 'sk-...'}
+                  .value=${this.providerEditorApiKey}
+                  @input=${(event: Event) => {
+                    this.providerEditorApiKey = (
+                      event.target as HTMLInputElement
+                    ).value;
+                  }}
+                />
+              </label>
+              <div class="provider-editor-models">
+                <div class="provider-editor-models-title">
+                  ${zh ? '模型' : 'Models'}
+                </div>
+                <datalist id="provider-editor-model-presets">
+                  ${models.map(
+                    (model) =>
+                      html`<option value=${model.id}>
+                        ${this.builtinModelLabel(model)}
+                      </option>`,
+                  )}
+                </datalist>
+                ${this.providerEditorModels.map(
+                  (row) => html`
+                    <div class="provider-editor-model-row">
+                      <label class="provider-editor-field">
+                        <span>${zh ? '模型 ID' : 'Model ID'}</span>
+                        <input
+                          name=${`model-id-${row.key}`}
+                          list="provider-editor-model-presets"
+                          required
+                          autocomplete="off"
+                          .value=${row.modelId}
+                          placeholder="gpt-4.1"
+                          @input=${(event: Event) =>
+                            this.updateProviderEditorModel(row.key, {
+                              modelId: (event.target as HTMLInputElement).value,
+                            })}
+                        />
+                      </label>
+                      <label class="provider-editor-field">
+                        <span>${zh ? '上下文长度' : 'Context length'}</span>
+                        <input
+                          name=${`model-context-${row.key}`}
+                          type="number"
+                          min="1"
+                          required
+                          step="1"
+                          .value=${row.contextWindow === null
+                            ? ''
+                            : String(row.contextWindow)}
+                          placeholder="128000"
+                          @input=${(event: Event) =>
+                            this.updateProviderEditorModel(row.key, {
+                              contextWindow: this.parseOptionalPositiveInt(
+                                (event.target as HTMLInputElement).value,
+                              ),
+                            })}
+                        />
+                      </label>
+                      <button
+                        class="provider-editor-icon-button secondary"
+                        type="button"
+                        aria-label=${zh ? '删除模型' : 'Remove model'}
+                        title=${zh ? '删除模型' : 'Remove model'}
+                        ?disabled=${this.providerEditorModels.length <= 1 ||
+                        this.providerOperation !== null}
+                        @click=${() => this.removeProviderEditorModel(row.key)}
+                      >
+                        ×
+                      </button>
+                      <div class="provider-reasoning-settings">
+                        <label class="provider-editor-field">
+                          <span>${zh ? '推理强度' : 'Reasoning effort'}</span>
+                          <select
+                            name=${`model-effort-${row.key}`}
+                            .value=${row.reasoning?.effort ?? ''}
+                            @change=${(event: Event) =>
+                              this.updateProviderEditorModel(row.key, {
+                                reasoning: {
+                                  ...row.reasoning,
+                                  effort:
+                                    ((event.target as HTMLSelectElement)
+                                      .value as ModelReasoningConfig['effort']) ||
+                                    undefined,
+                                },
+                              })}
+                          >
+                            <option value="">
+                              ${zh ? '服务端默认' : 'Server default'}
+                            </option>
+                            ${(this.providerEditorApiParadigm ===
+                            'anthropic_messages'
+                              ? ['low', 'medium', 'high', 'xhigh', 'max']
+                              : [
+                                  'none',
+                                  'minimal',
+                                  'low',
+                                  'medium',
+                                  'high',
+                                  'xhigh',
+                                  'max',
+                                ]
+                            ).map(
+                              (effort) =>
+                                html`<option value=${effort}>
+                                  ${effort}
+                                </option>`,
+                            )}
+                          </select>
+                        </label>
+                        ${this.providerEditorApiParadigm === 'openai_responses'
+                          ? html` <label class="provider-editor-field">
+                              <span
+                                >${zh ? '思考摘要' : 'Reasoning summary'}</span
+                              >
+                              <select
+                                name=${`model-summary-${row.key}`}
+                                .value=${row.reasoning?.summary ?? ''}
+                                @change=${(event: Event) =>
+                                  this.updateProviderEditorModel(row.key, {
+                                    reasoning: {
+                                      ...row.reasoning,
+                                      summary:
+                                        ((event.target as HTMLSelectElement)
+                                          .value as ModelReasoningConfig['summary']) ||
+                                        undefined,
+                                    },
+                                  })}
+                              >
+                                <option value="">
+                                  ${zh ? '不指定' : 'Unspecified'}
+                                </option>
+                                ${['auto', 'concise', 'detailed'].map(
+                                  (summary) =>
+                                    html`<option value=${summary}>
+                                      ${summary}
+                                    </option>`,
+                                )}
+                              </select>
+                            </label>`
+                          : nothing}
+                        ${this.providerEditorApiParadigm ===
+                        'anthropic_messages'
+                          ? html`
+                              <label class="provider-editor-field">
+                                <span
+                                  >${zh ? '思考模式' : 'Thinking mode'}</span
+                                >
+                                <select
+                                  name=${`model-thinking-${row.key}`}
+                                  .value=${row.reasoning?.thinking ?? ''}
+                                  @change=${(event: Event) =>
+                                    this.updateProviderEditorModel(row.key, {
+                                      reasoning: {
+                                        ...row.reasoning,
+                                        thinking:
+                                          ((event.target as HTMLSelectElement)
+                                            .value as ModelReasoningConfig['thinking']) ||
+                                          undefined,
+                                      },
+                                    })}
+                                >
+                                  <option value="">
+                                    ${zh ? '不指定' : 'Unspecified'}
+                                  </option>
+                                  <option value="adaptive">
+                                    ${zh ? '自适应' : 'Adaptive'}
+                                  </option>
+                                  <option value="enabled">
+                                    ${zh ? '固定预算' : 'Fixed budget'}
+                                  </option>
+                                  <option value="disabled">
+                                    ${zh ? '关闭' : 'Disabled'}
+                                  </option>
+                                </select>
+                              </label>
+                              ${row.reasoning?.thinking === 'enabled'
+                                ? html` <label class="provider-editor-field">
+                                    <span
+                                      >${zh
+                                        ? '思考预算（tokens）'
+                                        : 'Thinking budget (tokens)'}</span
+                                    >
+                                    <input
+                                      name=${`model-budget-${row.key}`}
+                                      type="number"
+                                      min="1024"
+                                      step="1"
+                                      required
+                                      .value=${row.reasoning?.budget_tokens
+                                        ? String(row.reasoning.budget_tokens)
+                                        : ''}
+                                      @input=${(event: Event) =>
+                                        this.updateProviderEditorModel(
+                                          row.key,
+                                          {
+                                            reasoning: {
+                                              ...row.reasoning,
+                                              budget_tokens:
+                                                this.parseOptionalPositiveInt(
+                                                  (
+                                                    event.target as HTMLInputElement
+                                                  ).value,
+                                                ) ?? undefined,
+                                            },
+                                          },
+                                        )}
+                                    />
+                                  </label>`
+                                : nothing}
+                            `
+                          : nothing}
+                      </div>
+                    </div>
+                  `,
+                )}
+                <button
+                  class="provider-editor-add-model secondary"
+                  type="button"
+                  ?disabled=${this.providerOperation !== null}
+                  @click=${() => this.addProviderEditorModel()}
+                >
+                  ${zh ? '添加模型' : 'Add model'}
+                </button>
+              </div>
+            </div>
+          </fieldset>
+          <section
+            class="provider-editor-body"
+            ?hidden=${this.providerEditorMode !== 'import'}
+          >
+            <div class="provider-editor-import">
+              <label class="provider-editor-field"
+                ><span>${zh ? '厂商配置 JSON' : 'Provider JSON'}</span
+                ><textarea
+                  aria-label="Provider JSON"
+                  spellcheck="false"
+                  placeholder='{"schema":"agent-runtime-llm-registration/v1","providers":[...]}'
+                  .value=${this.providerImportJson}
+                  ?disabled=${this.providerOperation !== null}
+                  @input=${(event: Event) =>
+                    (this.providerImportJson = (
+                      event.target as HTMLTextAreaElement
+                    ).value)}
+                ></textarea></label
+              ><input
+                class="provider-file-input"
+                type="file"
+                accept=".json,application/json"
+                aria-label=${zh ? '导入配置文件' : 'Import configuration file'}
+                @change=${this.readProviderImportFile}
+              /><button
+                class="secondary provider-import-file"
+                type="button"
+                ?disabled=${this.providerOperation !== null}
+                @click=${() =>
+                  this.renderRoot
+                    .querySelector<HTMLInputElement>('.provider-file-input')
+                    ?.click()}
+              >
+                ${zh ? '选择 JSON 文件' : 'Choose JSON file'}
+              </button>
+            </div>
+          </section>
+          ${this.providerEditorError
+            ? html`<div class="provider-editor-error" role="alert">
+                ${this.providerEditorError}
+              </div>`
+            : nothing}
+          <div class="provider-editor-actions">
+            <button
+              class="secondary"
               type="button"
               ?disabled=${this.providerOperation !== null}
-              @click=${() => this.addProviderEditorModel()}
-            >${zh ? '添加模型' : 'Add model'}</button>
+              @click=${() => {
+                this.closeProviderEditor();
+              }}
+            >
+              ${zh ? '取消' : 'Cancel'}
+            </button>
+            <button type="submit" ?disabled=${this.providerOperation !== null}>
+              ${this.providerOperation === 'import'
+                ? zh
+                  ? '保存中…'
+                  : 'Saving…'
+                : this.providerEditorMode === 'import'
+                  ? zh
+                    ? '导入配置'
+                    : 'Import configuration'
+                  : zh
+                    ? '保存厂商'
+                    : 'Save provider'}
+            </button>
           </div>
-        </div>
-        <div class="provider-editor-actions">
-          <button
-            class="secondary"
-            type="button"
-            ?disabled=${this.providerOperation !== null}
-            @click=${() => { this.providerEditorOpen = false; }}
-          >${zh ? '取消' : 'Cancel'}</button>
-          <button type="submit" ?disabled=${this.providerOperation !== null}>
-            ${this.providerOperation === 'import'
-              ? (editing ? (zh ? '正在保存' : 'Saving') : (zh ? '正在添加' : 'Adding'))
-              : (editing ? (zh ? '保存变更' : 'Save changes') : (zh ? '添加厂商' : 'Add provider'))}
-          </button>
-        </div>
-      </form>
+        </form>
+      </div>
     </div>`;
   }
 
-  private async openProviderEditor(providerUid: number | null = null): Promise<void> {
+  private closeProviderEditor() {
+    if (this.providerOperation !== null) return;
+    this.providerEditorOpen = false;
+    this.providerEditorEpoch++;
+    this.providerEditorApiKey = '';
+  }
+  private readProviderImportFile = async (event: Event) => {
+    const input = event.target as HTMLInputElement,
+      file = input.files?.[0];
+    input.value = '';
+    if (!file || this.providerOperation !== null) return;
+    const epoch = this.providerEditorEpoch;
+    try {
+      const text = await file.text();
+      if (epoch !== this.providerEditorEpoch || !this.providerEditorOpen)
+        return;
+      this.providerImportJson = text;
+      this.providerEditorError = '';
+    } catch (error) {
+      if (epoch !== this.providerEditorEpoch || !this.providerEditorOpen)
+        return;
+      this.providerEditorError =
+        error instanceof Error ? error.message : String(error);
+    }
+  };
+  private async openProviderEditor(
+    providerUid: number | null = null,
+  ): Promise<void> {
+    if (this.providerOperation !== null) return;
+    this.providerEditorEpoch++;
+    this.composerPanel = null;
+    this.providerEditorMode = 'manual';
+    this.providerEditorError = '';
+    this.providerImportJson = '';
     this.providerPanelOpen = false;
     this.historyOpen = false;
     this.resetProviderEditorDraft(providerUid);
@@ -1961,47 +3201,69 @@ export class AgentRuntimeConversationElement
   }
 
   private loadProviderEditorDraft(providerUid: number): void {
-    const provider = this.providerDefinitions?.providers?.find((item) => item.uid === providerUid);
+    const provider = this.providerDefinitions?.providers?.find(
+      (item) => item.uid === providerUid,
+    );
     if (!provider) return;
-    const providerType = provider.type ?? provider.builtin_type ?? provider.builtinType ?? '';
-    this.providerEditorBuiltinProviderId = this.builtinProviderById(providerType) ? providerType : '';
-    this.providerEditorProviderName = provider.name ?? `Provider ${provider.uid}`;
+    const providerType =
+      provider.type ?? provider.builtin_type ?? provider.builtinType ?? '';
+    this.providerEditorBuiltinProviderId = this.builtinProviderById(
+      providerType,
+    )
+      ? providerType
+      : '';
+    this.providerEditorProviderName =
+      provider.name ?? `Provider ${provider.uid}`;
     this.providerEditorBaseUrl = provider.base_url ?? provider.baseUrl ?? '';
     this.providerEditorApiParadigm =
-      provider.api_paradigm ?? provider.apiParadigm ?? 'openai_chat_completions';
+      provider.api_paradigm ??
+      provider.apiParadigm ??
+      'openai_chat_completions';
     this.providerEditorApiKey = '';
     const rows = this.providerModelsForProvider(providerUid).map((model) =>
       this.createProviderEditorModelRow(
-        model.model_id ?? model.modelId ?? model.model_name ?? model.modelName ?? model.name ?? '',
+        model.model_id ??
+          model.modelId ??
+          model.model_name ??
+          model.modelName ??
+          model.name ??
+          '',
         model.context_window ?? model.contextWindow ?? null,
         model.uid,
         model.reasoning,
       ),
     );
-    this.providerEditorModels = rows.length ? rows : [this.createProviderEditorModelRow()];
+    this.providerEditorModels = rows.length
+      ? rows
+      : [this.createProviderEditorModelRow()];
   }
 
   private selectProviderPreset = (event: Event): void => {
     const providerId = (event.target as HTMLSelectElement).value;
     this.providerEditorBuiltinProviderId = providerId;
     const provider = this.builtinProviderById(providerId);
-    if (!provider) {
-      this.providerEditorModels = [this.createProviderEditorModelRow()];
-      return;
-    }
+    if (!provider) return;
     this.providerEditorProviderName = provider.name;
-    this.providerEditorBaseUrl = provider.defaultBaseUrl ?? provider.default_base_url ?? '';
+    this.providerEditorBaseUrl =
+      provider.defaultBaseUrl ?? provider.default_base_url ?? '';
     this.providerEditorApiParadigm = this.providerApiParadigm(provider);
-    const defaults = this.providerEditorBuiltinModels().filter((model) => model.default);
-    const selectedModels = defaults.length ? defaults : this.providerEditorBuiltinModels().slice(0, 1);
+    const selectedModels = providerPresetModels(
+      this.builtinProviderCatalog ?? {},
+      providerId,
+    );
     this.providerEditorModels = selectedModels.length
-      ? selectedModels.map((model) => this.createProviderEditorModelRow(model.id, this.builtinModelContext(model)))
+      ? selectedModels.map((model) =>
+          this.createProviderEditorModelRow(
+            model.id,
+            this.builtinModelContext(model),
+          ),
+        )
       : [this.createProviderEditorModelRow()];
   };
 
   private createProviderEditorModelRow(
     modelId = '',
-    contextWindow: number | null = null,
+    contextWindow: number | null = 128000,
     uid: number | null = null,
     reasoning?: ModelReasoningConfig,
   ): ProviderEditorModelRow {
@@ -2024,7 +3286,9 @@ export class AgentRuntimeConversationElement
 
   private removeProviderEditorModel(key: string): void {
     if (this.providerEditorModels.length <= 1) return;
-    this.providerEditorModels = this.providerEditorModels.filter((row) => row.key !== key);
+    this.providerEditorModels = this.providerEditorModels.filter(
+      (row) => row.key !== key,
+    );
   }
 
   private updateProviderEditorModel(
@@ -2045,31 +3309,48 @@ export class AgentRuntimeConversationElement
   }
 
   private providerEditorBuiltinModels(): BuiltinProviderCatalogModel[] {
-    const provider = this.builtinProviderById(this.providerEditorBuiltinProviderId);
+    const provider = this.builtinProviderById(
+      this.providerEditorBuiltinProviderId,
+    );
     const models = this.builtinProviderCatalog?.models ?? [];
     if (!provider) return models.slice(0, 200);
     const prefix = provider.prefix ?? '';
-    return models.filter((model) =>
-      (model.providerPrefix ?? model.provider_prefix ?? '') === prefix,
+    return models.filter(
+      (model) =>
+        (model.providerPrefix ?? model.provider_prefix ?? '') === prefix,
     );
   }
 
-  private builtinProviderById(id: string): BuiltinProviderCatalogProvider | undefined {
+  private builtinProviderById(
+    id: string,
+  ): BuiltinProviderCatalogProvider | undefined {
     if (!id) return undefined;
-    return this.builtinProviderCatalog?.providers?.find((provider) => provider.id === id);
+    return this.builtinProviderCatalog?.providers?.find(
+      (provider) => provider.id === id,
+    );
   }
 
-  private builtinModelById(id: string): BuiltinProviderCatalogModel | undefined {
+  private builtinModelById(
+    id: string,
+  ): BuiltinProviderCatalogModel | undefined {
     if (!id) return undefined;
-    return this.builtinProviderCatalog?.models?.find((model) => model.id === id);
+    return this.builtinProviderCatalog?.models?.find(
+      (model) => model.id === id,
+    );
   }
 
-  private providerApiParadigm(provider: BuiltinProviderCatalogProvider): string {
+  private providerApiParadigm(
+    provider: BuiltinProviderCatalogProvider,
+  ): string {
     const apiFormat = provider.apiFormat ?? provider.api_format;
-    return apiFormat === 'anthropic' ? 'anthropic_messages' : 'openai_chat_completions';
+    return apiFormat === 'anthropic'
+      ? 'anthropic_messages'
+      : 'openai_chat_completions';
   }
 
-  private builtinModelContext(model: BuiltinProviderCatalogModel): number | null {
+  private builtinModelContext(
+    model: BuiltinProviderCatalogModel,
+  ): number | null {
     return model.contextWindow ?? model.context_window ?? null;
   }
 
@@ -2083,11 +3364,16 @@ export class AgentRuntimeConversationElement
     return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
   }
 
-  private providerEditorModelContext(row: ProviderEditorModelRow, rawValue: string): number {
+  private providerEditorModelContext(
+    row: ProviderEditorModelRow,
+    rawValue: string,
+  ): number {
     const explicit = this.parseOptionalPositiveInt(rawValue);
     if (explicit !== null) return explicit;
     const preset = this.builtinModelById(row.modelId);
-    return (preset ? this.builtinModelContext(preset) : row.contextWindow) ?? 128000;
+    return (
+      (preset ? this.builtinModelContext(preset) : row.contextWindow) ?? 128000
+    );
   }
 
   private async refreshProviderDefinitions(): Promise<void> {
@@ -2108,7 +3394,13 @@ export class AgentRuntimeConversationElement
   }
 
   private async selectProviderModel(value: string): Promise<void> {
-    if (!this.providerControls.enabled) return;
+    if (
+      !this.providerControls.enabled ||
+      !this.composerSession.canConfigure ||
+      this.imageSending ||
+      this.providerOperation !== null
+    )
+      return;
     const conversationId = this.state.conversationId ?? this.conversationId;
     if (!conversationId) return;
     const modelUid = Number(value);
@@ -2116,15 +3408,22 @@ export class AgentRuntimeConversationElement
     const model = this.providerModels().find((item) => item.uid === modelUid);
     if (!model) return;
     const modelName = this.providerModelName(model);
+    const controller = this.providerControls.controller;
     this.providerOperation = 'model';
     try {
-      const result = await this.providerControls.controller.setConversationModel({
+      const result = await controller.setConversationModel({
         conversationId,
         modelUid,
       });
       if (result.accepted === false) {
         throw new Error(result.rejectReason ?? 'Model switch was rejected');
       }
+      if (
+        conversationId !== this.state.conversationId ||
+        !this.providerControls.enabled ||
+        controller !== this.providerControls.controller
+      )
+        return;
       this.dispatch({
         type: 'conversation-model-selected',
         model: modelName,
@@ -2142,27 +3441,69 @@ export class AgentRuntimeConversationElement
     }
   }
 
-  private providerEditorReasoning(row: ProviderEditorModelRow): ModelReasoningConfig | undefined {
+  private providerEditorReasoning(
+    row: ProviderEditorModelRow,
+  ): ModelReasoningConfig | undefined {
     const config: ModelReasoningConfig = { effort: row.reasoning?.effort };
-    if (this.providerEditorApiParadigm === 'openai_responses') config.summary = row.reasoning?.summary;
+    if (this.providerEditorApiParadigm === 'openai_responses')
+      config.summary = row.reasoning?.summary;
     if (this.providerEditorApiParadigm === 'anthropic_messages') {
-      if (config.effort === 'none' || config.effort === 'minimal') config.effort = undefined;
+      if (config.effort === 'none' || config.effort === 'minimal')
+        config.effort = undefined;
       config.thinking = row.reasoning?.thinking;
-      if (config.thinking === 'enabled') config.budget_tokens = row.reasoning?.budget_tokens;
+      if (config.thinking === 'enabled')
+        config.budget_tokens = row.reasoning?.budget_tokens;
     }
-    return Object.values(config).some((value) => value !== undefined) ? config : undefined;
+    return Object.values(config).some((value) => value !== undefined)
+      ? config
+      : undefined;
   }
 
   private submitProviderEditor = (event: SubmitEvent): void => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const value = (name: string) =>
-      form.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)?.value.trim() ?? '';
+      form
+        .querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)
+        ?.value.trim() ?? '';
+    if (this.providerOperation !== null) return;
+    this.providerEditorError = '';
+    if (this.providerEditorMode === 'import') {
+      try {
+        JSON.parse(this.providerImportJson);
+      } catch {
+        this.providerEditorError = this.locale.startsWith('zh')
+          ? 'JSON 格式无效，请检查后重试。'
+          : 'Invalid JSON. Check the configuration and retry.';
+        return;
+      }
+      void this.configureProviderInput(this.providerImportJson, 'json').then(
+        (ok) => {
+          if (ok) this.providerEditorOpen = false;
+        },
+      );
+      return;
+    }
+    const invalid = providerEditorValidation(
+      value('provider-name'),
+      value('base-url'),
+      this.providerEditorModels.map((row) => ({
+        name: value(`model-id-${row.key}`),
+        context: Number(value(`model-context-${row.key}`)),
+      })),
+      this.locale.startsWith('zh'),
+    );
+    if (invalid) {
+      this.providerEditorError = invalid;
+      return;
+    }
     const editingProviderUid = this.providerEditorProviderUid;
     const providerUid = editingProviderUid ?? this.nextProviderUid();
     const usedModelUids = new Set(
       this.providerModels()
-        .filter((model) => (model.provider_uid ?? model.providerUid) !== providerUid)
+        .filter(
+          (model) => (model.provider_uid ?? model.providerUid) !== providerUid,
+        )
         .map((model) => model.uid),
     );
     let nextModelUid = this.nextModelUid(usedModelUids);
@@ -2170,31 +3511,40 @@ export class AgentRuntimeConversationElement
       .map((row) => {
         const modelId = value(`model-id-${row.key}`);
         if (!modelId) return null;
-        const uid = row.uid && !usedModelUids.has(row.uid)
-          ? row.uid
-          : nextModelUid;
+        const uid =
+          row.uid && !usedModelUids.has(row.uid) ? row.uid : nextModelUid;
         usedModelUids.add(uid);
         while (usedModelUids.has(nextModelUid)) nextModelUid += 1;
         return {
           uid,
           model_id: modelId,
-          max_context_tokens: this.providerEditorModelContext(row, value(`model-context-${row.key}`)),
+          max_context_tokens: this.providerEditorModelContext(
+            row,
+            value(`model-context-${row.key}`),
+          ),
           reasoning: this.providerEditorReasoning(row),
         };
       })
-      .filter((model): model is {
-        uid: number;
-        model_id: string;
-        max_context_tokens: number;
-        reasoning: ModelReasoningConfig | undefined;
-      } => model !== null);
+      .filter(
+        (
+          model,
+        ): model is {
+          uid: number;
+          model_id: string;
+          max_context_tokens: number;
+          reasoning: ModelReasoningConfig | undefined;
+        } => model !== null,
+      );
     if (!enabledModels.length) return;
     const providerPreset = this.builtinProviderById(value('builtin-provider'));
-    const currentProvider = this.providerDefinitions?.providers?.find((provider) => provider.uid === providerUid);
+    const currentProvider = this.providerDefinitions?.providers?.find(
+      (provider) => provider.uid === providerUid,
+    );
     const providerRegistration: ProviderRegistration = {
       id: providerUid,
       name: value('provider-name'),
-      type: providerPreset?.id ??
+      type:
+        providerPreset?.id ??
         currentProvider?.type ??
         currentProvider?.builtin_type ??
         currentProvider?.builtinType ??
@@ -2202,7 +3552,9 @@ export class AgentRuntimeConversationElement
       api_key: value('api-key'),
       base_url: value('base-url'),
       api_paradigm: value('api-paradigm'),
-      prompt_cache_control: currentProvider?.prompt_cache_control ?? currentProvider?.promptCacheControl,
+      prompt_cache_control:
+        currentProvider?.prompt_cache_control ??
+        currentProvider?.promptCacheControl,
       enabled_models: enabledModels,
     };
     const providers = [
@@ -2210,51 +3562,75 @@ export class AgentRuntimeConversationElement
       providerRegistration,
     ];
     const providerModelUids = new Set(
-      providers.flatMap((provider) => provider.enabled_models.map((model) => model.uid)),
+      providers.flatMap((provider) =>
+        provider.enabled_models.map((model) => model.uid),
+      ),
     );
     const currentModelUid = this.globalProviderModelUid();
     const bundle = {
       schema: 'agent-runtime-llm-registration/v1',
       id: 'conversation-provider-editor',
       providers,
-      current_model_uid: currentModelUid !== null && providerModelUids.has(currentModelUid)
-        ? currentModelUid
-        : enabledModels[0].uid,
+      current_model_uid:
+        currentModelUid !== null && providerModelUids.has(currentModelUid)
+          ? currentModelUid
+          : enabledModels[0].uid,
     };
-    void this.configureProviderInput(JSON.stringify(bundle), 'json')
-      .then((configured) => {
+    void this.configureProviderInput(JSON.stringify(bundle), 'json').then(
+      (configured) => {
         if (configured) this.providerEditorOpen = false;
-      });
+      },
+    );
   };
 
-  private existingProviderRegistrationsExcept(providerUid: number): ProviderRegistration[] {
+  private existingProviderRegistrationsExcept(
+    providerUid: number,
+  ): ProviderRegistration[] {
     const providers = this.providerDefinitions?.providers ?? [];
     return providers
       .filter((provider) => provider.uid !== providerUid)
       .map((provider) => this.providerRegistrationFromDefinition(provider))
-      .filter((provider): provider is ProviderRegistration => provider !== null);
+      .filter(
+        (provider): provider is ProviderRegistration => provider !== null,
+      );
   }
 
-  private providerRegistrationFromDefinition(provider: NonNullable<ProviderDefinitionsResult['providers']>[number]): ProviderRegistration | null {
+  private providerRegistrationFromDefinition(
+    provider: NonNullable<ProviderDefinitionsResult['providers']>[number],
+  ): ProviderRegistration | null {
     const models = this.providerModelsForProvider(provider.uid)
       .map((model) => ({
         uid: model.uid,
-        model_id: model.model_id ?? model.modelId ?? model.model_name ?? model.modelName ?? model.name ?? '',
-        max_context_tokens: model.context_window ?? model.contextWindow ?? 128000,
+        model_id:
+          model.model_id ??
+          model.modelId ??
+          model.model_name ??
+          model.modelName ??
+          model.name ??
+          '',
+        max_context_tokens:
+          model.context_window ?? model.contextWindow ?? 128000,
         reasoning: model.reasoning,
       }))
       .filter((model) => model.model_id);
     if (!models.length) return null;
-    const apiParadigm = provider.api_paradigm ?? provider.apiParadigm ?? 'openai_chat_completions';
+    const apiParadigm =
+      provider.api_paradigm ??
+      provider.apiParadigm ??
+      'openai_chat_completions';
     return {
       id: provider.uid,
       name: provider.name ?? `Provider ${provider.uid}`,
-      type: provider.type ?? provider.builtin_type ?? provider.builtinType ??
+      type:
+        provider.type ??
+        provider.builtin_type ??
+        provider.builtinType ??
         (apiParadigm === 'anthropic_messages' ? 'claude' : 'openai'),
       api_key: '',
       base_url: provider.base_url ?? provider.baseUrl ?? '',
       api_paradigm: apiParadigm,
-      prompt_cache_control: provider.prompt_cache_control ?? provider.promptCacheControl,
+      prompt_cache_control:
+        provider.prompt_cache_control ?? provider.promptCacheControl,
       enabled_models: models,
     };
   }
@@ -2263,17 +3639,25 @@ export class AgentRuntimeConversationElement
     input: string,
     source: 'path' | 'json' | 'text',
   ): Promise<boolean> {
-    if (!this.providerControls.enabled) return false;
+    if (!this.providerControls.enabled || this.providerOperation !== null)
+      return false;
+    const controller = this.providerControls.controller;
+    this.providerEditorError = '';
     this.providerOperation = 'import';
     try {
-      const result = await this.providerControls.controller.configureProviders({
+      const result = await controller.configureProviders({
         input,
         source,
       });
       if (result.accepted === false) {
         throw new Error(result.rejectReason ?? 'Provider import was rejected');
       }
-      await this.refreshProviderDefinitions();
+      if (
+        !this.providerControls.enabled ||
+        this.providerControls.controller !== controller
+      )
+        return false;
+      this.providerDefinitions = await controller.getProviderDefinitions();
       this.emit('agent-conversation-provider-action', {
         action: 'providers-imported',
         source,
@@ -2281,6 +3665,8 @@ export class AgentRuntimeConversationElement
       });
       return true;
     } catch (error) {
+      this.providerEditorError =
+        error instanceof Error ? error.message : String(error);
       this.emitProviderError('import', error);
       return false;
     } finally {
@@ -2292,43 +3678,58 @@ export class AgentRuntimeConversationElement
     return this.providerDefinitions?.models ?? [];
   }
 
-  private providerModelsForProvider(providerUid: number): ProviderModelDefinition[] {
-    return this.providerModels().filter((model) =>
-      (model.provider_uid ?? model.providerUid) === providerUid,
+  private providerModelsForProvider(
+    providerUid: number,
+  ): ProviderModelDefinition[] {
+    return this.providerModels().filter(
+      (model) => (model.provider_uid ?? model.providerUid) === providerUid,
     );
   }
 
   private nextProviderUid(): number {
-    return Math.max(
-      0,
-      ...(this.providerDefinitions?.providers ?? []).map((provider) => provider.uid),
-    ) + 1;
+    return (
+      Math.max(
+        0,
+        ...(this.providerDefinitions?.providers ?? []).map(
+          (provider) => provider.uid,
+        ),
+      ) + 1
+    );
   }
 
   private nextModelUid(used = new Set<number>()): number {
-    let uid = Math.max(1000, ...this.providerModels().map((model) => model.uid), ...used) + 1;
+    let uid =
+      Math.max(
+        1000,
+        ...this.providerModels().map((model) => model.uid),
+        ...used,
+      ) + 1;
     while (used.has(uid)) uid += 1;
     return uid;
   }
 
   private globalProviderModelUid(): number | null {
     const definitions = this.providerDefinitions;
-    return definitions?.current_model_uid ??
-      definitions?.currentModelUid ??
-      null;
+    return (
+      definitions?.current_model_uid ?? definitions?.currentModelUid ?? null
+    );
   }
 
   private permissionIsNoLongerPending(result: CommandResult): boolean {
-    return result.metadata?.resolved === false ||
-      result.rejectReason === 'Permission request is no longer pending.';
+    return (
+      result.metadata?.resolved === false ||
+      result.rejectReason === 'Permission request is no longer pending.'
+    );
   }
 
   private currentConversationModelUid(): number | null {
     if (this.state.modelUid !== undefined) return this.state.modelUid;
     if (!this.state.model) return null;
-    return this.providerModels().find(
-      (model) => this.providerModelName(model) === this.state.model,
-    )?.uid ?? null;
+    return (
+      this.providerModels().find(
+        (model) => this.providerModelName(model) === this.state.model,
+      )?.uid ?? null
+    );
   }
 
   private currentProviderModelLabel(): string | null {
@@ -2344,28 +3745,29 @@ export class AgentRuntimeConversationElement
     const provider = this.providerDefinitions?.providers?.find(
       (item) => item.uid === providerUid,
     );
-    const providerName = provider?.name ?? (providerUid ? `Provider ${providerUid}` : '');
+    const providerName =
+      provider?.name ?? (providerUid ? `Provider ${providerUid}` : '');
     return providerName ? `${modelName} / ${providerName}` : modelName;
   }
 
   private providerModelName(model: ProviderModelDefinition): string {
-    return model.model_name ??
+    return (
+      model.model_name ??
       model.modelName ??
       model.model_id ??
       model.modelId ??
       model.name ??
-      `Model ${model.uid}`;
+      `Model ${model.uid}`
+    );
   }
 
   private isCurrentArchive(archive: PersistedConversation): boolean {
     const binding = this.persistence.enabled ? this.persistence.binding : null;
     return Boolean(
       (binding?.archiveId && binding.archiveId === archive.archiveId) ||
-      (
-        !binding?.archiveId &&
-        archive.runtimeConversationId &&
-        archive.runtimeConversationId === this.state.conversationId
-      ),
+        (!binding?.archiveId &&
+          archive.runtimeConversationId &&
+          archive.runtimeConversationId === this.state.conversationId),
     );
   }
 
@@ -2406,11 +3808,17 @@ export class AgentRuntimeConversationElement
       >
         <div class="permission-shelf-header">
           ${permissions.length === 1
-            ? (zh ? '等待批准' : 'Waiting for approval')
-            : (zh ? `${permissions.length} 个请求等待批准` : `${permissions.length} requests waiting for approval`)}
+            ? zh
+              ? '等待批准'
+              : 'Waiting for approval'
+            : zh
+              ? `${permissions.length} 个请求等待批准`
+              : `${permissions.length} requests waiting for approval`}
         </div>
         <div class="permission-tools">
-          ${permissions.map((permission) => this.renderShelfPermissionItem(permission))}
+          ${permissions.map((permission) =>
+            this.renderShelfPermissionItem(permission),
+          )}
         </div>
       </section>
     </div>`;
@@ -2421,49 +3829,77 @@ export class AgentRuntimeConversationElement
     const busy = this.permissionOperation === permission.tool_call_id;
     const effect = this.permissionEffectLabel(permission, zh);
     const targets = summarizePermissionTargets(permission);
-    const error = this.permissionError?.toolCallId === permission.tool_call_id
-      ? this.permissionError.message
-      : null;
-    return html`<div class="permission-tool" data-call-id=${permission.tool_call_id}>
-        <div class="permission-copy">
-          <div class="permission-tool-name">
-            ${permission.display_name || permission.tool_name}
-          </div>
-          <div class="permission-effect">${effect} · ${permission.tool_name}</div>
-          ${targets.length
-            ? html`<div class="permission-arguments">
-                ${targets.map((target) => html`<div class="permission-argument">
-                  <span class="permission-argument-label">${target.label}</span>
-                  <span>${target.value}</span>
-                </div>`)}
-              </div>`
-            : nothing}
-          ${error
-            ? html`<div class="permission-error" role="alert">${error}</div>`
-            : nothing}
+    const error =
+      this.permissionError?.toolCallId === permission.tool_call_id
+        ? this.permissionError.message
+        : null;
+    return html`<div
+      class="permission-tool"
+      data-call-id=${permission.tool_call_id}
+    >
+      <div class="permission-copy">
+        <div class="permission-tool-name">
+          ${permission.display_name || permission.tool_name}
         </div>
-          <div class="permission-actions">
-            <button
-              class="deny"
-              type="button"
-              ?disabled=${busy}
-              @click=${() => void this.resolveToolPermission(permission.tool_call_id, 'deny')}
-            >${zh ? '拒绝' : 'Deny'}</button>
-            <button
-              type="button"
-              ?disabled=${busy}
-              @click=${() => void this.resolveToolPermission(permission.tool_call_id, 'allow')}
-            >${busy ? (zh ? '处理中' : 'Working') : (zh ? '允许' : 'Allow')}</button>
-          </div>
-        </div>`;
+        <div class="permission-effect">${effect} · ${permission.tool_name}</div>
+        ${targets.length
+          ? html`<div class="permission-arguments">
+              ${targets.map(
+                (target) =>
+                  html`<div class="permission-argument">
+                    <span class="permission-argument-label"
+                      >${target.label}</span
+                    >
+                    <span>${target.value}</span>
+                  </div>`,
+              )}
+            </div>`
+          : nothing}
+        ${error
+          ? html`<div class="permission-error" role="alert">${error}</div>`
+          : nothing}
+      </div>
+      <div class="permission-actions">
+        <button
+          class="deny"
+          type="button"
+          ?disabled=${this.permissionOperation !== null ||
+          this.state.connection !== 'connected' ||
+          Boolean(this.composerSession.awaiting)}
+          @click=${() =>
+            void this.resolveToolPermission(permission.tool_call_id, 'deny')}
+        >
+          ${zh ? '拒绝' : 'Deny'}
+        </button>
+        <button
+          type="button"
+          ?disabled=${this.permissionOperation !== null ||
+          this.state.connection !== 'connected' ||
+          Boolean(this.composerSession.awaiting)}
+          @click=${() =>
+            void this.resolveToolPermission(permission.tool_call_id, 'allow')}
+        >
+          ${busy ? (zh ? '处理中' : 'Working') : zh ? '允许' : 'Allow'}
+        </button>
+      </div>
+    </div>`;
   }
 
-  private permissionEffectLabel(permission: PendingToolPermission, zh: boolean): string {
+  private permissionEffectLabel(
+    permission: PendingToolPermission,
+    zh: boolean,
+  ): string {
     return permission.effect === 'destructive'
-      ? (zh ? '破坏性操作' : 'Destructive operation')
+      ? zh
+        ? '破坏性操作'
+        : 'Destructive operation'
       : permission.effect === 'controlled_change'
-        ? (zh ? '可控变更' : 'Controlled change')
-        : (zh ? '只读操作' : 'Read-only operation');
+        ? zh
+          ? '可控变更'
+          : 'Controlled change'
+        : zh
+          ? '只读操作'
+          : 'Read-only operation';
   }
 
   private renderHistoryPanel() {
@@ -2471,33 +3907,63 @@ export class AgentRuntimeConversationElement
     const zh = this.locale.toLowerCase().startsWith('zh');
     return html`<aside class="history-panel" part="history-panel">
       ${this.persistenceOperation === 'list'
-        ? html`<div class="history-empty">${zh ? '正在加载会话' : 'Loading conversations'}</div>`
+        ? html`<div class="history-empty">
+            ${zh ? '正在加载会话' : 'Loading conversations'}
+          </div>`
         : this.persistedConversations.length === 0
-          ? html`<div class="history-empty">${zh ? '还没有会话' : 'No conversations'}</div>`
+          ? html`<div class="history-empty">
+              ${zh ? '还没有会话' : 'No conversations'}
+            </div>`
           : this.persistedConversations.map((archive) => {
               const current = this.isCurrentArchive(archive);
-              return html`<div class="history-item" data-current=${String(current)}>
+              return html`<div
+                class="history-item"
+                data-current=${String(current)}
+              >
                 <div class="history-copy">
-                  <div class="history-title">${archive.title ?? (zh ? '未命名会话' : 'Untitled conversation')}</div>
-                  <div class="history-preview">${archive.preview ?? archive.updatedAt ?? archive.archiveId}</div>
+                  <div class="history-title">
+                    ${archive.title ??
+                    (zh ? '未命名会话' : 'Untitled conversation')}
+                  </div>
+                  <div class="history-preview">
+                    ${archive.preview ?? archive.updatedAt ?? archive.archiveId}
+                  </div>
                   <div class="history-meta">
                     ${current || archive.instanceState === 'current'
-                      ? (zh ? '当前会话' : 'Current conversation')
+                      ? zh
+                        ? '当前会话'
+                        : 'Current conversation'
                       : archive.instanceState === 'background'
-                        ? (zh ? '后台运行' : 'Running in background')
-                        : (zh ? '仅数据' : 'Saved data')}
-                    · ${this.formatArchiveTime(archive.updatedAt ?? archive.createdAt)}
+                        ? zh
+                          ? '后台运行'
+                          : 'Running in background'
+                        : zh
+                          ? '仅数据'
+                          : 'Saved data'}
+                    ·
+                    ${this.formatArchiveTime(
+                      archive.updatedAt ?? archive.createdAt,
+                    )}
                   </div>
                 </div>
                 <button
                   type="button"
                   ?disabled=${current || this.persistenceOperation !== null}
-                  @click=${() => void this.restoreConversation(archive.archiveId)}
-                >${this.persistenceOperation === `restore:${archive.archiveId}`
-                  ? (zh ? '打开中' : 'Opening')
-                  : current
-                    ? (zh ? '当前' : 'Current')
-                    : (zh ? '打开' : 'Open')}</button>
+                  @click=${() =>
+                    void this.restoreConversation(archive.archiveId)}
+                >
+                  ${this.persistenceOperation === `restore:${archive.archiveId}`
+                    ? zh
+                      ? '打开中'
+                      : 'Opening'
+                    : current
+                      ? zh
+                        ? '当前'
+                        : 'Current'
+                      : zh
+                        ? '打开'
+                        : 'Open'}
+                </button>
               </div>`;
             })}
     </aside>`;
@@ -2510,7 +3976,10 @@ export class AgentRuntimeConversationElement
     scheme: 'light' | 'dark',
   ) {
     if (item.kind === 'presentation') {
-      if (item.item.kind !== 'assistant-markdown' && item.item.kind !== 'notice') {
+      if (
+        item.item.kind !== 'assistant-markdown' &&
+        item.item.kind !== 'notice'
+      ) {
         return nothing;
       }
       return html`<article class="message assistant" part="assistant-message">
@@ -2526,7 +3995,7 @@ export class AgentRuntimeConversationElement
           .contentMetadata=${item.item.metadata}
           .hideToolCalls=${this.hideToolCalls}
           .reveal=${item.item.reveal === 'progressive' &&
-            !this.completedRevealKeys.has(item.key)}
+          !this.completedRevealKeys.has(item.key)}
           .widgetsExpired=${true}
           @agent-content-reveal=${this.followReveal}
           @agent-content-reveal-complete=${() => this.completeReveal(item.key)}
@@ -2581,114 +4050,25 @@ export class AgentRuntimeConversationElement
           void this.send(event.detail.content, { source: 'widget' })}
       ></agent-conversation-rich-content>
       ${showDisclaimer
-        ? html`<div class="disclaimer" part="disclaimer">${this.disclaimer}</div>`
+        ? html`<div class="disclaimer" part="disclaimer">
+            ${this.disclaimer}
+          </div>`
         : nothing}
     </article>`;
   }
 
   private createDisplayItems(): DisplayItem[] {
-    const records: DisplayItem[] = this.state.records
-      .filter((record) =>
-        record.role === 'user' ||
-        record.role === 'assistant' ||
-        isVisibleGatewayRecord(record))
-      .map((record) => ({ kind: 'record', key: recordKey(record), record }));
-    const items = [...records];
-    const anchorInsertCounts = new Map<string, number>();
-    for (const presentation of visiblePresentationItems(
+    return createDisplayItems(
+      this.state,
       this.presentationItems,
       this.completedRevealKeys,
-    )) {
-      const presentationKey = `presentation:${presentation.id}`;
-      const item: DisplayItem = {
-        kind: 'presentation',
-        key: presentationKey,
-        item: presentation,
-      };
-      if (presentation.anchor.type === 'head') {
-        const offset = anchorInsertCounts.get('head') ?? 0;
-        items.splice(offset, 0, item);
-        anchorInsertCounts.set('head', offset + 1);
-      } else if (presentation.anchor.type === 'tail') {
-        items.push(item);
-      } else {
-        const anchor = presentation.anchor;
-        const target = items.findIndex(
-          (current) =>
-            current.kind === 'record' &&
-            recordKey(current.record) === anchor.recordId,
-        );
-        if (target < 0) items.push(item);
-        else {
-          const anchorKey = `${anchor.type}:${anchor.recordId}`;
-          const offset = anchorInsertCounts.get(anchorKey) ?? 0;
-          items.splice(
-            anchor.type === 'before-record' ? target : target + 1 + offset,
-            0,
-            item,
-          );
-          anchorInsertCounts.set(anchorKey, offset + 1);
-        }
-      }
-    }
-    for (const pending of this.state.pendingUserMessages) {
-      items.push({
-        kind: 'record',
-        key: pending.id,
-        record: {
-          record_id: pending.id,
-          role: 'user',
-          content: pending.state === 'failed'
-            ? `${pending.content}\n${pending.error ?? ''}`
-            : pending.content,
-          metadata: pending.parts ? { extra: {
-            parts: pending.parts,
-            pending_error: pending.state === 'failed' ? pending.error ?? 'Message rejected.' : undefined,
-          } } : undefined,
-        },
-      });
-    }
-    const stream = this.state.assistantStream;
-    const provisionalToolLines = (stream?.provisional_tool_calls ?? [])
-      .map((call) => `[tool:status | call_id="${call.call_id || call.key}"]`);
-    if (stream && (stream.content || provisionalToolLines.length)) {
-      items.push({
-        kind: 'record',
-        key: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
-        record: {
-          record_id: `assistant-stream:${stream.agent_id}:${stream.turn_id}:${stream.attempt}`,
-          role: 'assistant',
-          content: [stream.content, ...provisionalToolLines].filter(Boolean).join('\n'),
-        },
-      });
-    }
-    return items;
+    );
   }
-
   private latestWidgetRecordKey(items: DisplayItem[]): string | null {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index];
-      if (item.kind !== 'record') continue;
-      if (item.record.role !== 'assistant' && item.record.role !== 'user') continue;
-      return item.record.role === 'assistant'
-        && /\[(?:input:|select:|confirm\b)/.test(displayText(item.record))
-        ? item.key
-        : null;
-    }
-    return null;
+    return latestWidgetRecordKey(items);
   }
-
   private latestAssistantKey(items: DisplayItem[]): string | null {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index];
-      if (
-        item.kind === 'record' &&
-        item.record.role === 'assistant'
-      ) {
-        return item.key;
-      }
-    }
-    return null;
+    return latestAssistantKey(items);
   }
 
   private handleTransportEvent(event: ConversationTransportEvent): void {
@@ -2717,7 +4097,8 @@ export class AgentRuntimeConversationElement
         event.conversationId &&
         this.state.conversationId &&
         event.conversationId !== this.state.conversationId
-      ) return;
+      )
+        return;
       const initialSnapshot = !this.state.snapshotReceived;
       this.dispatch({
         type: 'snapshot',
@@ -2733,7 +4114,8 @@ export class AgentRuntimeConversationElement
       if (
         this.state.conversationId &&
         event.conversationId !== this.state.conversationId
-      ) return;
+      )
+        return;
       this.dispatch({
         type: 'local-message-added',
         message: createPendingUserMessage(
@@ -2768,6 +4150,12 @@ export class AgentRuntimeConversationElement
     const next = conversationReducer(this.state, action);
     if (next === this.state) return;
     this.state = next;
+    this.composerSession.sync(
+      this.state,
+      this.transport,
+      this.composerController,
+      this.state.modelUid,
+    );
     this.emit('agent-conversation-state-change', {
       state: next,
       reason: action.type,
@@ -2782,19 +4170,24 @@ export class AgentRuntimeConversationElement
   }
 
   private emit(name: string, detail: unknown): void {
-    this.dispatchEvent(new CustomEvent(name, {
-      bubbles: true,
-      composed: true,
-      detail,
-    }));
+    this.dispatchEvent(
+      new CustomEvent(name, {
+        bubbles: true,
+        composed: true,
+        detail,
+      }),
+    );
   }
 
   private onDraftInput(event: Event): void {
     const textarea = event.target as HTMLTextAreaElement;
     this.draft = textarea.value;
-    const retained = this.pendingImages.filter((image) => this.draft.includes(`@图片${image.number}`));
+    const retained = this.pendingImages.filter((image) =>
+      this.draft.includes(`@图片${image.number}`),
+    );
     for (const image of this.pendingImages) {
-      if (!retained.includes(image) && image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+      if (!retained.includes(image) && image.previewUrl)
+        URL.revokeObjectURL(image.previewUrl);
     }
     if (retained.length !== this.pendingImages.length) {
       this.pendingImages = retained;
@@ -2812,15 +4205,20 @@ export class AgentRuntimeConversationElement
   }
 
   private onComposerPaste(event: ClipboardEvent): void {
-    if (!this.transport?.imageInput || !this.canCompose() || this.imageSending) return;
+    if (!this.transport?.imageInput || !this.canCompose() || this.imageSending)
+      return;
     const items = Array.from(event.clipboardData?.items ?? []);
     const itemFiles = items
       .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null && file.type.startsWith('image/'));
+      .filter(
+        (file): file is File => file !== null && file.type.startsWith('image/'),
+      );
     const files = itemFiles.length
       ? itemFiles
-      : Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'));
+      : Array.from(event.clipboardData?.files ?? []).filter((file) =>
+          file.type.startsWith('image/'),
+        );
     if (!files.length) return;
     event.preventDefault();
     const text = event.clipboardData?.getData?.('text/plain') ?? '';
@@ -2830,8 +4228,13 @@ export class AgentRuntimeConversationElement
   private addPendingImages(files: File[], pastedText = ''): void {
     const markers: string[] = [];
     for (const file of files) {
-      if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) ||
-          file.size > 20 * 1024 * 1024 || this.pendingImages.length >= 8) {
+      if (
+        !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(
+          file.type,
+        ) ||
+        file.size > 20 * 1024 * 1024 ||
+        this.pendingImages.length >= 8
+      ) {
         this.emit('agent-conversation-error', {
           code: 'invalid-image',
           message: `Unsupported image, image larger than 20 MiB, or more than 8 images: ${file.name}`,
@@ -2839,9 +4242,19 @@ export class AgentRuntimeConversationElement
         });
         continue;
       }
-      const previewUrl = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '';
-      const number = this.pendingImages.reduce((max, image) => Math.max(max, image.number), 0) + 1;
-      this.pendingImages = [...this.pendingImages, { file, previewUrl, number }];
+      const previewUrl =
+        typeof URL.createObjectURL === 'function'
+          ? URL.createObjectURL(file)
+          : '';
+      const number =
+        this.pendingImages.reduce(
+          (max, image) => Math.max(max, image.number),
+          0,
+        ) + 1;
+      this.pendingImages = [
+        ...this.pendingImages,
+        { file, previewUrl, number },
+      ];
       markers.push(`@图片${number}`);
     }
     if (pastedText || markers.length) {
@@ -2850,16 +4263,19 @@ export class AgentRuntimeConversationElement
   }
 
   private insertIntoDraft(value: string): void {
-    const textarea = this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
+    const textarea =
+      this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
     const start = textarea?.selectionStart ?? this.draft.length;
     const end = textarea?.selectionEnd ?? this.draft.length;
     const before = this.draft.slice(0, start);
     const after = this.draft.slice(end);
     const prefix = /@图片\d+$/.test(before) && /^\S/.test(value) ? ' ' : '';
-    const suffix = /@图片\d+$/.test(value) && /^[A-Za-z0-9]/.test(after) ? ' ' : '';
+    const suffix =
+      /@图片\d+$/.test(value) && /^[A-Za-z0-9]/.test(after) ? ' ' : '';
     this.draft = `${before}${prefix}${value}${suffix}${after}`;
     void this.updateComplete.then(() => {
-      const current = this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
+      const current =
+        this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
       const cursor = start + prefix.length + value.length + suffix.length;
       current?.setSelectionRange(cursor, cursor);
     });
@@ -2874,7 +4290,8 @@ export class AgentRuntimeConversationElement
       if (index >= 0) {
         let before = this.draft.slice(0, index);
         let after = this.draft.slice(index + label.length);
-        if (before.endsWith(' ') && after.startsWith(' ')) before = before.slice(0, -1);
+        if (before.endsWith(' ') && after.startsWith(' '))
+          before = before.slice(0, -1);
         else if (!before && after.startsWith(' ')) after = after.slice(1);
         this.draft = before + after;
       }
@@ -2883,12 +4300,17 @@ export class AgentRuntimeConversationElement
   }
 
   private renumberPendingImages(): void {
-    const numbers = new Map(this.pendingImages.map((image, index) => [image.number, index + 1]));
+    const numbers = new Map(
+      this.pendingImages.map((image, index) => [image.number, index + 1]),
+    );
     this.draft = this.draft.replace(/@图片(\d+)/g, (marker, number: string) => {
       const next = numbers.get(Number(number));
       return next ? `@图片${next}` : marker;
     });
-    this.pendingImages = this.pendingImages.map((image, index) => ({ ...image, number: index + 1 }));
+    this.pendingImages = this.pendingImages.map((image, index) => ({
+      ...image,
+      number: index + 1,
+    }));
   }
 
   private clearPendingImages(): void {
@@ -2915,8 +4337,12 @@ export class AgentRuntimeConversationElement
   }
 
   private renderReference(label: string, objectKey: string) {
-    return html`<span class="at-reference" style=${`--reference-color: ${referenceColor(objectKey)}`}
-      data-reference-key=${objectKey}>${label}</span>`;
+    return html`<span
+      class="at-reference"
+      style=${`--reference-color: ${referenceColor(objectKey)}`}
+      data-reference-key=${objectKey}
+      >${label}</span
+    >`;
   }
 
   private renderMentionText(value: string) {
@@ -2925,8 +4351,13 @@ export class AgentRuntimeConversationElement
     return tokens.map((token) => {
       const previous = value[offset - 1] ?? '';
       offset += token.length;
-      return token.startsWith('@') && token.length > 1 && !/[A-Za-z0-9._%+-]/.test(previous)
-        ? this.renderReference(token, `mention:${token.slice(1).toLocaleLowerCase()}`)
+      return token.startsWith('@') &&
+        token.length > 1 &&
+        !/[A-Za-z0-9._%+-]/.test(previous)
+        ? this.renderReference(
+            token,
+            `mention:${token.slice(1).toLocaleLowerCase()}`,
+          )
         : token;
     });
   }
@@ -2938,28 +4369,38 @@ export class AgentRuntimeConversationElement
     const hasText = parts.some((part) => part.type === 'text');
     let imageNumber = 0;
     const pendingError = record.metadata?.extra?.pending_error;
-    return html`${!hasText && message !== '[Image]' && !pendingError ? this.renderMentionText(message) : nothing}${parts.map((part) => {
+    return html`${!hasText && message !== '[Image]' && !pendingError
+      ? this.renderMentionText(message)
+      : nothing}${parts.map((part) => {
       if (part.type === 'text') return this.renderMentionText(part.text);
       imageNumber += 1;
-      return this.renderReference(`@图片${imageNumber}`, `image:${part.image_id}`);
+      return html`<agent-runtime-image-reference
+        data-reference-key=${`image:${part.image_id}`}
+        style=${`--reference-color: ${referenceColor(`image:${part.image_id}`)}`}
+        .imageId=${part.image_id}
+        .conversationId=${this.state.conversationId ?? undefined}
+        .capabilities=${this.capabilities}
+        .label=${this.locale.startsWith('zh')
+          ? `预览图片 ${imageNumber}`
+          : `Preview image ${imageNumber}`}
+        >${`@图片${imageNumber}`}</agent-runtime-image-reference
+      >`;
     })}${pendingError ? html`<br />${pendingError}` : nothing}`;
   }
 
   private resetComposerHeight(): void {
     requestAnimationFrame(() => {
-      const textarea = this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
+      const textarea =
+        this.renderRoot.querySelector<HTMLTextAreaElement>('textarea');
       if (textarea) textarea.style.height = '';
     });
   }
 
   private onComposerKeydown(event: KeyboardEvent): void {
-    if (
-      event.key !== 'Enter' ||
-      event.shiftKey ||
-      event.isComposing
-    ) return;
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
     event.preventDefault();
-    if (this.canCompose() && (this.draft.trim() || this.pendingImages.length)) void this.send(this.draft);
+    if (this.canCompose() && (this.draft.trim() || this.pendingImages.length))
+      void this.send(this.draft);
   }
 
   private onScroll(event: Event): void {
@@ -3017,26 +4458,31 @@ export class AgentRuntimeConversationElement
   }
 
   private statusLabel(): string {
-    if (this.state.connection === 'reconnecting') return 'Reconnecting';
-    if (this.state.connection === 'connecting') return 'Connecting';
-    if (!this.state.initialized) return 'Initializing';
-    return this.state.connection === 'connected' ? 'Connected' : 'Offline';
+    const zh = this.locale.startsWith('zh');
+    if (this.state.connection === 'reconnecting')
+      return zh ? '重新连接中' : 'Reconnecting';
+    if (this.state.connection === 'connecting')
+      return zh ? '连接中' : 'Connecting';
+    if (this.state.connection !== 'connected') return zh ? '未连接' : 'Offline';
+    if (!this.state.initialized) return zh ? '初始化中' : 'Initializing';
+    return zh ? '已连接' : 'Connected';
   }
 
   private canCompose(): boolean {
-    return this.state.initialized &&
-      this.state.snapshotReceived &&
-      !this.state.awaitingAssistantResponse &&
-      this.state.runtimeState === 'waiting';
+    return (
+      this.composerSession.canCompose && this.providerOperation !== 'model'
+    );
   }
 
   private canSaveConversation(): boolean {
-    return this.persistence.enabled &&
+    return (
+      this.persistence.enabled &&
       Boolean(this.state.conversationId) &&
       this.state.connection === 'connected' &&
       this.state.snapshotReceived &&
       this.state.runtimeState === 'waiting' &&
-      this.persistenceOperation === null;
+      this.persistenceOperation === null
+    );
   }
 
   private configurePersistenceController(): void {
@@ -3049,11 +4495,15 @@ export class AgentRuntimeConversationElement
     this.persistenceController = controller;
     this.persistedConversations = [];
     if (controller?.subscribe) {
-      this.persistenceUnsubscribe = controller.subscribe(
-        (event) => this.handlePersistenceEvent(event),
+      this.persistenceUnsubscribe = controller.subscribe((event) =>
+        this.handlePersistenceEvent(event),
       );
     }
-    if (controller && this.persistence.enabled && this.persistence.showHistory !== false) {
+    if (
+      controller &&
+      this.persistence.enabled &&
+      this.persistence.showHistory !== false
+    ) {
       void this.refreshConversationHistory();
     }
   }
@@ -3105,10 +4555,11 @@ export class AgentRuntimeConversationElement
     if (this.state.runtimeState === 'waiting') return null;
     if (
       this.state.runtimeState === 'executing' ||
-      this.state.toolCalls.some((call) =>
-        call.status === 'placeholder' ||
-        call.status === 'running' ||
-        call.status === 'waiting_permission'
+      this.state.toolCalls.some(
+        (call) =>
+          call.status === 'placeholder' ||
+          call.status === 'running' ||
+          call.status === 'waiting_permission',
       )
     ) {
       return this.locale.toLowerCase().startsWith('zh')

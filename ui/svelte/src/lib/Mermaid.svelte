@@ -1,38 +1,59 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
+  import DOMPurify from 'dompurify';
+  import './mermaid.css';
 
   export let source = '';
   export let dark = false;
-  let container: HTMLDivElement;
   let error = '';
   let renderVersion = 0;
+  let svg = '';
+  const emit = createEventDispatcher<{
+    diagnostic: { code: string; message: string };
+  }>();
 
   async function renderDiagram() {
-    if (!container || !source.trim()) return;
     const version = ++renderVersion;
+    if (!source.trim()) {
+      svg = '';
+      error = '';
+      return;
+    }
     try {
-      const {default: mermaid} = await import('mermaid');
+      const { default: mermaid } = await import('mermaid');
       if (version !== renderVersion) return;
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
         theme: dark ? 'dark' : 'neutral',
+        flowchart: { htmlLabels: false },
       });
       const id = `orbit-mermaid-${crypto.randomUUID().replaceAll('-', '')}`;
       const result = await mermaid.render(id, source);
       if (version !== renderVersion) return;
-      container.innerHTML = result.svg;
+      svg = DOMPurify.sanitize(result.svg, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+        FORBID_TAGS: ['script', 'foreignObject', 'iframe', 'object', 'embed'],
+        FORBID_ATTR: ['onload', 'onclick', 'onerror'],
+      });
       error = '';
     } catch (cause) {
       if (version !== renderVersion) return;
-      container.textContent = '';
+      svg = '';
       error = cause instanceof Error ? cause.message : String(cause);
+      emit('diagnostic', { code: 'mermaid-render-failed', message: error });
     }
   }
 
-  onMount(() => { void renderDiagram(); });
-  $: source, dark, container && void renderDiagram();
+  onDestroy(() => {
+    ++renderVersion;
+  });
+  $: (source, dark, void renderDiagram());
 </script>
 
-<div class="diagram" bind:this={container}></div>
-{#if error}<pre class="diagram-error">{error}</pre>{/if}
+<div class="orbit-svelte-mermaid">
+  {#if error}<pre part="mermaid-fallback"><code>{source}</code></pre>
+  {:else if svg}<div class="diagram" part="mermaid-diagram">
+      {@html svg}
+    </div>{/if}
+</div>

@@ -2,6 +2,7 @@ import { EXTENSION_CONTRACT, TRANSPORT_CONTRACT, } from '../host/types.js';
 export class HttpSseConversationTransport {
     contract = TRANSPORT_CONTRACT;
     id;
+    resume;
     imageInput;
     config;
     fetchImplementation;
@@ -12,6 +13,10 @@ export class HttpSseConversationTransport {
         if (config.imageImport)
             this.imageInput = { importImage: config.imageImport };
         this.fetchImplementation = config.fetch ?? globalThis.fetch.bind(globalThis);
+        if (config.resumePath)
+            this.resume = async (request) => commandResult(await this.request(config.resumePath, {
+                method: 'POST', signal: request.signal, body: JSON.stringify({ conversation_id: request.conversationId }),
+            }));
     }
     async connect(context, handlers) {
         this.disconnect();

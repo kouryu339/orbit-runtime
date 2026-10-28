@@ -3,6 +3,7 @@ import { defaultEnvelopeEvents } from './http-sse.js';
 export class TauriConversationTransport {
     contract = TRANSPORT_CONTRACT;
     id;
+    resume;
     imageInput;
     config;
     unlisten = new Set();
@@ -13,6 +14,8 @@ export class TauriConversationTransport {
         this.id = config.id ?? 'tauri-events';
         if (config.imageImport)
             this.imageInput = { importImage: config.imageImport };
+        if (config.commands?.resume)
+            this.resume = async (request) => normalizeCommandResult(await config.invoke(config.commands.resume, await this.commandArgs(request.conversationId)));
     }
     async connect(context, handlers) {
         this.disconnect();

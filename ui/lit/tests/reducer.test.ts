@@ -577,7 +577,7 @@ describe('conversationReducer', () => {
       },
     });
     expect(state.toolCalls).toEqual([
-      expect.objectContaining({ id: 'call-1', status: 'finished', detail: 'ok' }),
+      expect.objectContaining({ id: 'call-1', status: 'finished', detail: '' }),
     ]);
   });
 

@@ -1,0 +1,36 @@
+/* Generated from Lit image-reference.ts; run node ui/sync-svelte-styles.mjs. */
+.orbit-svelte-image-reference {
+      display: inline-block;
+      vertical-align: middle;
+      margin: 3px 4px;
+    }.orbit-svelte-image-reference button {
+      display: inline-grid;
+      place-items: center;
+      width: 64px;
+      height: 48px;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--reference-color, var(--conversation-border));
+      border-radius: 7px;
+      background: var(--conversation-code-background, #edf1ef);
+      color: inherit;
+      cursor: pointer;
+      vertical-align: middle;
+    }.orbit-svelte-image-reference button:disabled {
+      cursor: default;
+    }.orbit-svelte-image-reference button:focus-visible {
+      outline: 2px solid var(--conversation-accent, #167d71);
+      outline-offset: 3px;
+    }.orbit-svelte-image-reference img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }.orbit-svelte-image-reference .fallback {
+      display: inline;
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: var(--reference-color, #27624f);
+      color: #fff;
+      white-space: nowrap;
+    }

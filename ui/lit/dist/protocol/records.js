@@ -56,7 +56,11 @@ export function toolCallIdsFromRecord(record) {
     const declarations = record.metadata?.extra?.tool_calls;
     if (Array.isArray(declarations)) {
         for (const call of declarations) {
-            if (call && typeof call === 'object' && 'id' in call && typeof call.id === 'string' && !ids.includes(call.id))
+            if (call &&
+                typeof call === 'object' &&
+                'id' in call &&
+                typeof call.id === 'string' &&
+                !ids.includes(call.id))
                 ids.push(call.id);
         }
     }
@@ -69,7 +73,7 @@ export function toolCallFromRecord(record) {
     const extra = record.metadata?.extra ?? {};
     const id = String(extra.call_id ?? record.metadata?.call_id ?? recordKey(record));
     const toolName = String(record.metadata?.tool_name ?? extra.tool_name ?? '');
-    const title = String(record.metadata?.title ?? (toolName || recordText(record) || 'Tool call'));
+    const title = String(record.metadata?.title ?? (toolName || 'Tool call'));
     const status = subtype === 'tool_call_interrupted_unknown' ||
         extra.status === 'interrupted_unknown' ||
         extra.status === 'recovery_interrupted'
@@ -87,8 +91,8 @@ export function toolCallFromRecord(record) {
         title,
         status,
         toolName,
-        command: record.metadata?.tool_command,
-        detail: recordText(record),
+        detail: '',
+        userSummary: typeof extra.user_summary === 'string' ? extra.user_summary : undefined,
     };
 }
 export function collectToolCalls(records, previous = []) {

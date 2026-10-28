@@ -95,8 +95,12 @@ export type ToolCallView = {
     id: string;
     title: string;
     status: ToolCallStatus;
+    /** @deprecated Raw tool details are never rendered in the conversation UI. */
     detail: string;
+    /** Explicit user-facing text supplied by the host; never inferred from tool output. */
+    userSummary?: string;
     toolName: string;
+    /** @deprecated Execution commands are not displayed to users. */
     command?: string;
 };
 export type PendingUserMessage = {

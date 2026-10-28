@@ -1,0 +1,129 @@
+:root {
+  font-family: 'Segoe UI', sans-serif;
+  color: #242424;
+  background: #f5f5f5;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+.acceptance-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+  padding: 12px;
+  gap: 12px;
+}
+.acceptance-controls {
+  background: #fff;
+  border: 1px solid #ced8d2;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.acceptance-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.acceptance-heading strong {
+  font-size: 17px;
+}
+.acceptance-heading span {
+  color: #52645a;
+  font-size: 13px;
+}
+.acceptance-heading a {
+  margin-left: auto;
+  color: #176a5d;
+}
+.acceptance-fields,
+.acceptance-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+}
+.acceptance-fields label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.acceptance-actions {
+  margin-top: 12px;
+}
+.acceptance-controls select,
+.acceptance-controls button {
+  font: inherit;
+  background: #fff;
+  color: #243b35;
+  border: 1px solid #b8c9bf;
+  border-radius: 6px;
+  padding: 6px 10px;
+  min-height: 34px;
+}
+.acceptance-controls button {
+  cursor: pointer;
+}
+.acceptance-controls button:hover {
+  background: #edf5f0;
+}
+.acceptance-controls label {
+  font-size: 13px;
+}
+.acceptance-controls input {
+  accent-color: #167d71;
+}
+.acceptance-audit {
+  margin-top: 10px;
+  font-size: 13px;
+}
+.acceptance-audit summary {
+  cursor: pointer;
+}
+.acceptance-audit ol {
+  max-height: 110px;
+  overflow: auto;
+  padding-left: 22px;
+}
+.acceptance-conversation {
+  min-height: 0;
+  height: 100%;
+}
+.acceptance-conversation > agent-runtime-conversation {
+  height: 100%;
+}
+button:focus-visible,
+select:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #167d71;
+  outline-offset: 3px;
+}
+@media (max-width: 640px) {
+  .acceptance-page {
+    padding: 6px;
+    gap: 6px;
+  }
+  .acceptance-controls {
+    padding: 10px;
+    max-height: 40dvh;
+    overflow: auto;
+  }
+  .acceptance-fields,
+  .acceptance-actions {
+    gap: 8px;
+  }
+  .acceptance-heading {
+    gap: 8px;
+  }
+  .acceptance-heading span {
+    width: 100%;
+  }
+  .acceptance-heading a {
+    margin-left: 0;
+  }
+}

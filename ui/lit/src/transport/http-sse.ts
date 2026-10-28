@@ -26,6 +26,7 @@ export type HttpSseTransportConfig = {
   eventsPath?: string;
   sendPath?: string;
   pausePath?: string;
+  resumePath?: string;
   closePath?: string;
   permissionPath?: string;
   query?: Record<string, string | undefined>;
@@ -46,6 +47,7 @@ export type HttpSseTransportConfig = {
 export class HttpSseConversationTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id: string;
+  readonly resume?: ConversationTransport['resume'];
   readonly imageInput?: { importImage(request: ImportImageRequest): Promise<ImportedImage> };
 
   private readonly config: HttpSseTransportConfig;
@@ -57,6 +59,9 @@ export class HttpSseConversationTransport implements ConversationTransport {
     this.id = config.id ?? 'http-sse';
     if (config.imageImport) this.imageInput = { importImage: config.imageImport };
     this.fetchImplementation = config.fetch ?? globalThis.fetch.bind(globalThis);
+    if(config.resumePath)this.resume=async request=>commandResult(await this.request(config.resumePath!,{
+      method:'POST',signal:request.signal,body:JSON.stringify({conversation_id:request.conversationId}),
+    }));
   }
 
   async connect(

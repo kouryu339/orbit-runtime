@@ -1,0 +1,377 @@
+/* Generated from Lit rich-content.ts; run node ui/sync-svelte-styles.mjs. */
+.orbit-svelte-rich-content {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+      color: var(--conversation-text);
+    }.orbit-svelte-rich-content .markdown {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+      font: 400 14px/1.68 var(--conversation-font-body);
+      overflow-wrap: anywhere;
+    }.orbit-svelte-rich-content .markdown > :first-child {
+      margin-top: 0;
+    }.orbit-svelte-rich-content .markdown > :last-child {
+      margin-bottom: 0;
+    }.orbit-svelte-rich-content .markdown h1,
+.orbit-svelte-rich-content .markdown h2,
+.orbit-svelte-rich-content .markdown h3 {
+      margin: 1.15em 0 0.45em;
+      color: var(--conversation-text-strong);
+      font-family: var(--conversation-font-display);
+      line-height: 1.25;
+    }.orbit-svelte-rich-content .markdown h1 {
+      font-size: 18px;
+    }.orbit-svelte-rich-content .markdown h2 {
+      font-size: 16px;
+    }.orbit-svelte-rich-content .markdown h3 {
+      font-size: 14px;
+    }.orbit-svelte-rich-content .markdown p {
+      margin: 0.72em 0;
+    }.orbit-svelte-rich-content .markdown ul,
+.orbit-svelte-rich-content .markdown ol {
+      padding-left: 22px;
+    }.orbit-svelte-rich-content .markdown blockquote {
+      margin: 12px 0;
+      padding: 2px 0 2px 13px;
+      border-left: 2px solid var(--conversation-accent);
+      color: var(--conversation-text-muted);
+    }.orbit-svelte-rich-content .markdown pre {
+      max-width: 100%;
+      overflow-x: hidden;
+      padding: 13px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 10px;
+      background: var(--conversation-code-background);
+      font: 12px/1.55 var(--conversation-font-mono);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }.orbit-svelte-rich-content .markdown code {
+      padding: 0.15em 0.35em;
+      border-radius: 5px;
+      background: var(--conversation-code-background);
+      font-family: var(--conversation-font-mono);
+    }.orbit-svelte-rich-content .markdown pre code {
+      padding: 0;
+      background: transparent;
+    }.orbit-svelte-rich-content .markdown a {
+      color: var(--conversation-accent);
+    }.orbit-svelte-rich-content .markdown table {
+      width: 100%;
+      max-width: 100%;
+      table-layout: fixed;
+      border-collapse: collapse;
+      font-size: 13px;
+    }.orbit-svelte-rich-content .markdown th,
+.orbit-svelte-rich-content .markdown td {
+      padding: 7px 9px;
+      border: 1px solid var(--conversation-border);
+      text-align: left;
+      vertical-align: top;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }.orbit-svelte-rich-content .markdown math[display='block'] {
+      display: block;
+      max-width: 100%;
+      overflow-x: hidden;
+      margin: 14px 0;
+      text-align: center;
+    }.orbit-svelte-rich-content .part + .part {
+      margin-top: 12px;
+    }.orbit-svelte-rich-content .tool {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+      border: 1px solid var(--conversation-border);
+      border-radius: 10px;
+      background: var(--conversation-surface-raised);
+      color: var(--conversation-text);
+    }.orbit-svelte-rich-content .tool summary {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 11px;
+      cursor: pointer;
+      list-style: none;
+      font: 600 12px/1.4 var(--conversation-font-body);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }.orbit-svelte-rich-content .tool summary::-webkit-details-marker {
+      display: none;
+    }.orbit-svelte-rich-content .tool-title {
+      flex: 1;
+      min-width: 0;
+    }.orbit-svelte-rich-content .tool-state {
+      color: var(--conversation-text-muted);
+      font-weight: 400;
+    }.orbit-svelte-rich-content .tool-dot {
+      flex-shrink: 0;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--conversation-tool-running);
+      box-shadow: 0 0 0 3px
+        color-mix(in srgb, var(--conversation-tool-running) 16%, transparent);
+    }.orbit-svelte-rich-content .tool[data-status='finished'] .tool-dot {
+      background: var(--conversation-tool-success);
+    }.orbit-svelte-rich-content .tool[data-status='failed'] .tool-dot {
+      background: var(--conversation-tool-error);
+    }.orbit-svelte-rich-content .tool[data-status='uncertain'] .tool-dot {
+      background: var(--conversation-accent);
+      box-shadow: 0 0 0 3px
+        color-mix(in srgb, var(--conversation-accent) 18%, transparent);
+    }.orbit-svelte-rich-content .tool[data-status='waiting_permission'] {
+      border-color: color-mix(
+        in srgb,
+        var(--conversation-accent) 45%,
+        var(--conversation-border)
+      );
+    }.orbit-svelte-rich-content .tool[data-status='waiting_permission'] .tool-dot {
+      background: var(--conversation-accent);
+      box-shadow: 0 0 0 3px
+        color-mix(in srgb, var(--conversation-accent) 18%, transparent);
+    }.orbit-svelte-rich-content .tool-detail {
+      max-width: 100%;
+      overflow-x: hidden;
+      margin: 0;
+      padding: 0 11px 11px 27px;
+      color: var(--conversation-text-muted);
+      font: 12px/1.55 var(--conversation-font-body);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }.orbit-svelte-rich-content .widgets {
+      display: grid;
+      min-width: 0;
+      max-width: 100%;
+      gap: 18px;
+      padding: 4px;
+      box-sizing: border-box;
+      grid-template-columns: minmax(0, 1fr);
+    }.orbit-svelte-rich-content .widget {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+    }.orbit-svelte-rich-content .widget > input,
+.orbit-svelte-rich-content .path-row > input {
+      width: 100%;
+      max-width: 100%;
+    }.orbit-svelte-rich-content .widget-label {
+      color: var(--conversation-text-strong);
+      font: 600 13px/1.5 var(--conversation-font-body);
+    }.orbit-svelte-rich-content input {
+      box-sizing: border-box;
+      min-width: 0;
+      height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--conversation-text);
+      font: 14px var(--conversation-font-body);
+      caret-color: var(--conversation-text-strong);
+    }.orbit-svelte-rich-content input::placeholder {
+      color: var(--conversation-text-muted);
+      opacity: 1;
+    }.orbit-svelte-rich-content button {
+      min-height: 36px;
+      padding: 7px 16px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 9px;
+      background: var(--conversation-surface);
+      color: var(--conversation-text-strong);
+      font: 600 13px/1.4 var(--conversation-font-body);
+      cursor: pointer;
+    }.orbit-svelte-rich-content .widgets > button {
+      justify-self: end;
+      min-width: 72px;
+      background: var(--conversation-text-strong);
+      color: var(--conversation-surface);
+      border-color: transparent;
+      margin-top: 2px;
+    }.orbit-svelte-rich-content button:disabled,
+.orbit-svelte-rich-content input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }.orbit-svelte-rich-content .choice-list {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }.orbit-svelte-rich-content .choice-option {
+      position: relative;
+      box-sizing: border-box;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 42px;
+      padding: 9px 12px;
+      border: 1px solid
+        color-mix(
+          in srgb,
+          var(--conversation-text-muted) 40%,
+          var(--conversation-border)
+        );
+      border-radius: 10px;
+      background: color-mix(
+        in srgb,
+        var(--conversation-text) 6%,
+        var(--conversation-surface)
+      );
+      color: var(--conversation-text-strong);
+      cursor: pointer;
+      font: 14px/1.55 var(--conversation-font-body);
+    }.orbit-svelte-rich-content .choice-option span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }.orbit-svelte-rich-content .choice-option:hover:not(:has(input:disabled)) {
+      background: color-mix(
+        in srgb,
+        var(--conversation-text) 11%,
+        var(--conversation-surface)
+      );
+      border-color: var(--conversation-text-muted);
+    }.orbit-svelte-rich-content .choice-option:has(input:checked) {
+      background: color-mix(
+        in srgb,
+        var(--conversation-accent) 26%,
+        var(--conversation-surface)
+      );
+      border-color: var(--conversation-accent);
+      color: var(--conversation-text-strong);
+    }.orbit-svelte-rich-content .choice-option:has(input:checked):hover:not(:has(input:disabled)) {
+      background: color-mix(
+        in srgb,
+        var(--conversation-accent) 34%,
+        var(--conversation-surface)
+      );
+      border-color: var(--conversation-accent);
+    }.orbit-svelte-rich-content .choice-option:has(input:disabled) {
+      cursor: default;
+    }.orbit-svelte-rich-content .choice-option input[type='radio'],
+.orbit-svelte-rich-content .choice-option input[type='checkbox'] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }.orbit-svelte-rich-content .choice-option:has(input:focus-visible) {
+      outline: 2px solid var(--conversation-accent);
+      outline-offset: 2px;
+    }.orbit-svelte-rich-content .other-option {
+      margin-top: 7px;
+      cursor: text;
+      padding-block: 7px;
+    }.orbit-svelte-rich-content .other-option:focus-within {
+      border-color: var(--conversation-text-muted);
+    }.orbit-svelte-rich-content .other-option .other-input {
+      flex: 1;
+      width: 0;
+      min-width: 0;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      border-radius: 0;
+    }.orbit-svelte-rich-content input:focus-visible,
+.orbit-svelte-rich-content button:focus-visible {
+      outline: 2px solid var(--conversation-accent);
+      outline-offset: 3px;
+    }.orbit-svelte-rich-content .other-option .other-input:focus-visible {
+      outline: none;
+    }.orbit-svelte-rich-content .other-option:has(.other-input:focus-visible) {
+      outline: 2px solid var(--conversation-accent);
+      outline-offset: 2px;
+    }.orbit-svelte-rich-content .choice-row {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 24px;
+    }.orbit-svelte-rich-content .choice-row button {
+      min-width: 96px;
+    }.orbit-svelte-rich-content .choice-row button[aria-pressed='true'] {
+      background: var(--conversation-text-strong);
+      color: var(--conversation-surface);
+      border-color: transparent;
+    }.orbit-svelte-rich-content .path-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }.orbit-svelte-rich-content .path-row button {
+      min-height: 42px;
+    }.orbit-svelte-rich-content .widgets[data-inactive='false'] .widget > input,
+.orbit-svelte-rich-content .widgets[data-inactive='false'] .path-row > input,
+.orbit-svelte-rich-content .widgets[data-inactive='false'] .choice-row button,
+.orbit-svelte-rich-content .widgets[data-inactive='false'] .path-row button {
+      color: var(--conversation-text-strong);
+      background: var(
+        --conversation-surface-raised,
+        var(--conversation-surface)
+      );
+      border-color: color-mix(
+        in srgb,
+        var(--conversation-text-muted) 40%,
+        var(--conversation-border)
+      );
+    }.orbit-svelte-rich-content .widgets[data-inactive='false'] .choice-row button:hover,
+.orbit-svelte-rich-content .widgets[data-inactive='false'] .path-row button:hover {
+      background: color-mix(
+        in srgb,
+        var(--conversation-text) 11%,
+        var(--conversation-surface)
+      );
+      border-color: var(--conversation-text-muted);
+    }.orbit-svelte-rich-content .widgets[data-inactive='false'] .choice-row button[aria-pressed='true'] {
+      background: var(--conversation-accent);
+      color: var(--conversation-accent-contrast, var(--conversation-surface));
+      border-color: var(--conversation-accent);
+    }.orbit-svelte-rich-content .widgets[data-inactive='true'] {
+      color: var(--conversation-text-muted);
+    }.orbit-svelte-rich-content .widgets[data-inactive='true'] .widget-label,
+.orbit-svelte-rich-content .widgets[data-inactive='true'] input,
+.orbit-svelte-rich-content .widgets[data-inactive='true'] button {
+      color: var(--conversation-text-muted);
+    }.orbit-svelte-rich-content .widgets[data-inactive='true'] input:disabled,
+.orbit-svelte-rich-content .widgets[data-inactive='true'] button:disabled {
+      opacity: 1;
+      cursor: default;
+    }.orbit-svelte-rich-content .widgets[data-inactive='true'] .choice-option {
+      background: transparent;
+      border-color: var(--conversation-border);
+      color: var(--conversation-text-muted);
+      cursor: default;
+    }.orbit-svelte-rich-content .widgets[data-inactive='true'] .choice-option:has(input:checked),
+.orbit-svelte-rich-content .widgets[data-inactive='true'] .choice-row button[aria-pressed='true'] {
+      color: var(--conversation-text-muted);
+      background: color-mix(
+        in srgb,
+        var(--conversation-text-muted) 10%,
+        transparent
+      );
+      border-color: var(--conversation-border);
+    }.orbit-svelte-rich-content .widget-status {
+      padding: 8px 4px;
+      color: var(--conversation-text-muted);
+      font: 12px/1.5 var(--conversation-font-body);
+    }
+    @media (max-width: 480px) {.orbit-svelte-rich-content input {
+        font-size: 16px;
+      }.orbit-svelte-rich-content .choice-option {
+        padding-inline: 9px;
+      }
+    }
+    @media (forced-colors: active) {.orbit-svelte-rich-content .choice-option:has(input:checked) {
+        border-color: Highlight;
+        outline: 2px solid Highlight;
+        outline-offset: -3px;
+      }
+    }

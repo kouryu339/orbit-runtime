@@ -4,139 +4,397 @@
   import {
     parseConversationContent,
     renderSafeMarkdown,
+    toolCallForId,
+    toolStatusLabel,
+    toolDisplaySummary,
+    revealBaseline,
+    nextRevealLength,
+    sourceLength,
+    isSafeLink,
     type WidgetDefinition,
   } from '@agent-runtime/conversation-element/content';
   import type { ToolCallView } from '@agent-runtime/conversation-element/protocol';
   import Mermaid from './Mermaid.svelte';
-
+  import './rich-content.css';
   export let content = '';
   export let toolCalls: ToolCallView[] = [];
   export let dark = false;
+  export let colorScheme = 'light';
   export let hideToolCalls = false;
   export let widgetsExpired = false;
   export let capabilities: ConversationHostCapabilities = {};
-  export let locale = 'zh-CN';
-  export let baseDir = '';
+  export let locale = 'en-US';
+  export let baseDir: string | undefined = undefined;
+  export let contentBaseDir: string | undefined = undefined;
+  export let contentMetadata: Record<string, unknown> | undefined = undefined;
   export let reveal = false;
-  let revealed = '';
+  const dispatch = createEventDispatcher<{
+    submit: { content: string };
+    complete: void;
+    reveal: void;
+    error: { message: string };
+  }>();
+  let visibleLength = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let previousContent = '';
-  let capabilityError = '';
-
-  const dispatch = createEventDispatcher<{ submit: { content: string }; complete: void }>();
-  let widgetValues: Record<string, string | string[] | boolean> = {};
+  let completedContent: string | undefined;
+  let widgetValues: Record<string, string | string[]> = {};
+  let otherValues: Record<string, string> = {};
+  let otherEnabled = new Set<string>();
   let submitted = false;
+  const widgetGroupId = crypto.randomUUID();
+  let capabilityError = '';
+  $: zh = locale.toLowerCase().startsWith('zh');
+  $: effectiveDark = dark || colorScheme === 'dark';
+  $: parts = parseConversationContent(content);
+  $: widgets = parts.flatMap((part) =>
+    part.kind === 'widgets' ? part.widgets : [],
+  );
+  $: canSubmit = hasValue(widgets, widgetValues, otherValues, otherEnabled);
+  $: lastMarkdown = parts.map((part) => part.kind).lastIndexOf('markdown');
   $: updateReveal(content, reveal);
-  $: parts = parseConversationContent(revealed);
+  let renderedParts: ReturnType<typeof parseConversationContent> = [];
+  $: {
+    let consumed = 0;
+    renderedParts = parts.map((part, index) => {
+      const available = Math.max(0, visibleLength - consumed);
+      consumed += sourceLength(part);
+      return part.kind === 'markdown' && reveal && index === lastMarkdown
+        ? { ...part, content: part.content.slice(0, available) }
+        : part;
+    });
+  }
+  function complete() {
+    if (completedContent === content) return;
+    completedContent = content;
+    queueMicrotask(() => dispatch('complete'));
+  }
   function updateReveal(value: string, enabled: boolean) {
     clearInterval(timer);
-    if (!enabled || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      revealed = value; previousContent = value;
-      dispatch('complete'); return;
-    }
-    if (!value.startsWith(previousContent)) revealed = '';
+    const baseline = revealBaseline(value);
+    visibleLength =
+      !previousContent || !value.startsWith(previousContent)
+        ? baseline
+        : Math.max(baseline, Math.min(visibleLength, value.length));
     previousContent = value;
+    if (
+      !enabled ||
+      globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ) {
+      visibleLength = value.length;
+      complete();
+      return;
+    }
+    if (visibleLength >= value.length) {
+      complete();
+      return;
+    }
     timer = setInterval(() => {
-      revealed = value.slice(0, revealed.length + Math.max(3, Math.ceil(value.length / 100)));
-      if (revealed.length >= value.length) { clearInterval(timer); dispatch('complete'); }
-    }, 16);
+      const remaining = value.length - visibleLength;
+      visibleLength = nextRevealLength(
+        value,
+        visibleLength,
+        remaining > 200 ? 16 : remaining > 80 ? 8 : remaining > 24 ? 4 : 2,
+      );
+      dispatch('reveal');
+      if (visibleLength >= value.length) {
+        clearInterval(timer);
+        complete();
+      }
+    }, 80);
   }
   onDestroy(() => clearInterval(timer));
-
+  async function perform(action: () => void | Promise<unknown>) {
+    try {
+      await action();
+    } catch (cause) {
+      capabilityError = cause instanceof Error ? cause.message : String(cause);
+      dispatch('error', { message: capabilityError });
+    }
+  }
   function markdownActions(node: HTMLElement) {
-    const click = async (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      const anchor = target.closest('a');
-      const image = target.closest('img');
-      try {
-        if (anchor && capabilities.openLink) { event.preventDefault(); await capabilities.openLink({url:anchor.href, source:'markdown'}); }
-        else if (image && capabilities.openImage) { event.preventDefault(); await capabilities.openImage({source:image.src, alt:image.alt, baseDir}); }
-      } catch (error) { capabilityError = String(error); }
+    const click = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const anchor = event.target.closest('a');
+      if (anchor) {
+        if (!isSafeLink(anchor.href)) {
+          event.preventDefault();
+          return;
+        }
+        if (capabilities.openLink) {
+          event.preventDefault();
+          void perform(() =>
+            capabilities.openLink!({ url: anchor.href, source: 'markdown' }),
+          );
+        }
+        return;
+      }
+      const image = event.target.closest('img');
+      if (image && capabilities.openImage) {
+        event.preventDefault();
+        void perform(() =>
+          capabilities.openImage!({
+            source: image.getAttribute('src') ?? image.src,
+            alt: image.alt,
+            baseDir: baseDir ?? contentBaseDir,
+            metadata: contentMetadata,
+          }),
+        );
+      }
     };
     node.addEventListener('click', click);
-    return {destroy() { node.removeEventListener('click', click); }};
-  }
-  async function pickPath(widget: WidgetDefinition, key: string) {
-    try {
-      const result = await capabilities.pickPath?.({mode:widget.accept === 'directory' ? 'directory' : 'file', label:widget.label, accept:widget.accept ? [widget.accept] : undefined});
-      if (result) widgetValues = {...widgetValues, [key]:result.paths.join('\n')};
-    } catch (error) { capabilityError = String(error); }
-  }
-
-  function callFor(id: string): ToolCallView {
-    return toolCalls.find((call) => call.id === id) ?? {
-      id,
-      title: 'Preparing tool call',
-      status: 'placeholder',
-      detail: '',
-      toolName: '',
+    return {
+      destroy() {
+        node.removeEventListener('click', click);
+      },
     };
   }
-
-  function widgetKey(widget: WidgetDefinition, index: number): string {
-    return `${widget.kind}:${widget.label}:${index}`;
+  function setOther(widget: WidgetDefinition, enabled: boolean) {
+    otherEnabled = new Set(otherEnabled);
+    if (enabled) otherEnabled.add(widget.raw);
+    else otherEnabled.delete(widget.raw);
+    if (enabled && widget.kind === 'select:single')
+      widgetValues = { ...widgetValues, [widget.raw]: '' };
   }
-
-  function submitWidgets(widgets: WidgetDefinition[]) {
-    const lines = widgets.map((widget, index) => {
-      const key = widgetKey(widget, index);
-      const value = widgetValues[key];
-      const rendered = Array.isArray(value) ? value.join(', ') : String(value ?? '');
-      return `${widget.label}: ${rendered}`;
-    });
+  function answer(widget: WidgetDefinition): string | string[] {
+    const value = widgetValues[widget.raw] ?? '';
+    if (!otherEnabled.has(widget.raw))
+      return typeof value === 'string' ? value.trim() : value;
+    const other = (otherValues[widget.raw] ?? '').trim();
+    return widget.kind === 'select:multi'
+      ? [
+          ...new Set([
+            ...(Array.isArray(value) ? value : []),
+            ...(other ? [other] : []),
+          ]),
+        ]
+      : other;
+  }
+  function toggleMulti(
+    widget: WidgetDefinition,
+    option: string,
+    checked: boolean,
+  ) {
+    const value = widgetValues[widget.raw];
+    const values = Array.isArray(value) ? value : [];
+    widgetValues = {
+      ...widgetValues,
+      [widget.raw]: checked
+        ? [...new Set([...values, option])]
+        : values.filter((v) => v !== option),
+    };
+  }
+  function hasValue(
+    items: WidgetDefinition[],
+    _values = widgetValues,
+    _others = otherValues,
+    _enabled = otherEnabled,
+  ) {
+    return (
+      !items.some(
+        (w) => otherEnabled.has(w.raw) && !(otherValues[w.raw] ?? '').trim(),
+      ) && items.some((w) => answer(w).length > 0)
+    );
+  }
+  function submit() {
+    if (widgetsExpired || submitted || !hasValue(widgets)) return;
+    const content = widgets
+      .map((w) => [w.label, answer(w)] as const)
+      .filter(([, v]) => v.length > 0)
+      .map(
+        ([label, value]) =>
+          `${label}: ${Array.isArray(value) ? value.join(', ') : value}`,
+      )
+      .join('\n');
     submitted = true;
-    dispatch('submit', { content: lines.join('\n') });
+    dispatch('submit', { content });
+  }
+  async function pickPath(widget: WidgetDefinition) {
+    await perform(async () => {
+      const result = await capabilities.pickPath?.({
+        mode: 'file',
+        label: widget.label,
+        accept: widget.accept
+          ?.split(',')
+          .map((v) => v.trim())
+          .filter(Boolean),
+        multiple: false,
+      });
+      if (result?.paths[0])
+        widgetValues = { ...widgetValues, [widget.raw]: result.paths[0] };
+    });
   }
 </script>
 
-{#each parts as part}
-  {#if part.kind === 'markdown'}
-    <div class="markdown" use:markdownActions>{@html renderSafeMarkdown(part.content)}</div>
-    {#if capabilities.copyText}<button class="quiet copy" on:click={() => capabilities.copyText?.(part.content)}>{locale.startsWith('zh') ? '复制' : 'Copy'}</button>{/if}
-  {:else if part.kind === 'mermaid'}
-    <Mermaid source={part.source} {dark} />
-  {:else if part.kind === 'tool' && !hideToolCalls}
-    {@const call = callFor(part.callId)}
-    <details class="tool" data-status={call.status} open={call.status === 'waiting_permission'}>
-      <summary><span class="tool-dot"></span>{call.title}</summary>
-      {#if call.detail}<pre>{call.detail}</pre>{/if}
-    </details>
-  {:else if part.kind === 'widgets'}
-    <section class="widgets">
-      {#each part.widgets as widget, index}
-        {@const key = widgetKey(widget, index)}
-        <label>
-          <span>{widget.label}</span>
-          {#if widget.kind === 'select:single'}
-            <select bind:value={widgetValues[key]} disabled={widgetsExpired || submitted}>
-              <option value="">请选择</option>
-              {#each widget.options as option}<option value={option}>{option}</option>{/each}
-            </select>
-          {:else if widget.kind === 'select:multi'}
-            <select multiple bind:value={widgetValues[key]} disabled={widgetsExpired || submitted}>
-              {#each widget.options as option}<option value={option}>{option}</option>{/each}
-            </select>
-          {:else if widget.kind === 'confirm'}
-            <input
-              type="checkbox"
-              checked={widgetValues[key] === true}
-              disabled={widgetsExpired || submitted}
-              on:change={(event) => { widgetValues[key] = event.currentTarget.checked; }}
-            />
-          {:else if widget.kind === 'input:date'}
-            <input type="date" bind:value={widgetValues[key]} disabled={widgetsExpired || submitted} />
-          {:else if widget.kind === 'input:time'}
-            <input type="time" bind:value={widgetValues[key]} disabled={widgetsExpired || submitted} />
-          {:else}
-            <input bind:value={widgetValues[key]} disabled={widgetsExpired || submitted} />
-            {#if widget.kind === 'input:path' && capabilities.pickPath}<button disabled={widgetsExpired || submitted} on:click={() => void pickPath(widget,key)}>选择路径</button>{/if}
-          {/if}
-        </label>
-      {/each}
-      <button type="button" disabled={widgetsExpired || submitted} on:click={() => submitWidgets(part.widgets)}>
-        {submitted ? '已提交' : '提交'}
-      </button>
-    </section>
+<div class="orbit-svelte-rich-content">
+  {#each renderedParts as part}
+    {#if part.kind === 'markdown'}
+      <div class="part markdown" use:markdownActions>
+        {@html renderSafeMarkdown(part.content)}
+      </div>
+    {:else if part.kind === 'mermaid'}<Mermaid
+        source={part.source}
+        dark={effectiveDark}
+        on:diagnostic
+      />
+    {:else if part.kind === 'tool' && !hideToolCalls}
+      {@const call = toolCallForId(toolCalls, part.callId)}
+      <details
+        class="part tool"
+        data-status={call.status}
+        open={call.status === 'waiting_permission'}
+      >
+        <summary
+          ><span class="tool-dot"></span><span class="tool-title"
+            >{call.title}</span
+          ><span class="tool-state">{toolStatusLabel(call.status, locale)}</span
+          ></summary
+        >
+        <div class="tool-detail">{toolDisplaySummary(call, locale)}</div>
+      </details>
+    {:else if part.kind === 'widgets'}
+      <div
+        class="part widgets"
+        data-inactive={String(widgetsExpired || submitted)}
+      >
+        {#each part.widgets as widget}
+          {@const disabled = widgetsExpired || submitted}
+          {@const value = widgetValues[widget.raw] ?? ''}
+          <div class="widget">
+            <span class="widget-label">{widget.label}</span>
+            {#if widget.kind === 'select:single' || widget.kind === 'select:multi'}
+              {@const multiple = widget.kind === 'select:multi'}
+              <div class="choice-list" role="group" aria-label={widget.label}>
+                {#each [...new Set(widget.options)].filter((v) => !/^(其他|其它|other)$/i.test(v.trim())) as option}
+                  <label class="choice-option"
+                    ><input
+                      type={multiple ? 'checkbox' : 'radio'}
+                      name={`${widgetGroupId}:${encodeURIComponent(widget.raw)}`}
+                      {disabled}
+                      checked={(Array.isArray(value)
+                        ? value
+                        : [value]
+                      ).includes(option) &&
+                        (multiple || !otherEnabled.has(widget.raw))}
+                      on:change={(event) => {
+                        if (multiple)
+                          toggleMulti(
+                            widget,
+                            option,
+                            event.currentTarget.checked,
+                          );
+                        else {
+                          setOther(widget, false);
+                          widgetValues = {
+                            ...widgetValues,
+                            [widget.raw]: option,
+                          };
+                        }
+                      }}
+                    /><span>{option}</span></label
+                  >
+                {/each}
+                <div class="choice-option other-option">
+                  <input
+                    class="other-toggle"
+                    type={multiple ? 'checkbox' : 'radio'}
+                    name={`${widgetGroupId}:${encodeURIComponent(widget.raw)}`}
+                    {disabled}
+                    checked={otherEnabled.has(widget.raw)}
+                    aria-label={`${widget.label}: ${zh ? '其他' : 'Other'}`}
+                    on:change={(e) => setOther(widget, e.currentTarget.checked)}
+                  />
+                  <input
+                    class="other-input"
+                    type="text"
+                    {disabled}
+                    aria-label={`${widget.label}: ${zh ? '其他内容' : 'Other answer'}`}
+                    placeholder={zh
+                      ? '其他，请输入…'
+                      : 'Other, please specify…'}
+                    value={otherValues[widget.raw] ?? ''}
+                    on:focus={() => setOther(widget, true)}
+                    on:input={(e) => {
+                      setOther(widget, true);
+                      otherValues = {
+                        ...otherValues,
+                        [widget.raw]: e.currentTarget.value,
+                      };
+                    }}
+                  />
+                </div>
+              </div>
+            {:else if widget.kind === 'confirm'}
+              <div class="choice-row">
+                <button
+                  type="button"
+                  {disabled}
+                  aria-pressed={value === 'yes'}
+                  on:click={() =>
+                    (widgetValues = { ...widgetValues, [widget.raw]: 'yes' })}
+                  >{zh ? '确认' : 'Confirm'}</button
+                ><button
+                  type="button"
+                  {disabled}
+                  aria-pressed={value === 'no'}
+                  on:click={() =>
+                    (widgetValues = { ...widgetValues, [widget.raw]: 'no' })}
+                  >{zh ? '取消' : 'Cancel'}</button
+                >
+              </div>
+            {:else if widget.kind === 'input:path'}
+              <div class="path-row">
+                <input
+                  type="text"
+                  aria-label={widget.label}
+                  {disabled}
+                  value={String(value)}
+                  on:input={(e) =>
+                    (widgetValues = {
+                      ...widgetValues,
+                      [widget.raw]: e.currentTarget.value,
+                    })}
+                />{#if capabilities.pickPath}<button
+                    type="button"
+                    {disabled}
+                    on:click={() => void pickPath(widget)}
+                    >{zh ? '浏览…' : 'Browse…'}</button
+                  >{/if}
+              </div>
+            {:else}<input
+                type="text"
+                aria-label={widget.label}
+                {disabled}
+                value={String(value)}
+                on:input={(e) =>
+                  (widgetValues = {
+                    ...widgetValues,
+                    [widget.raw]: e.currentTarget.value,
+                  })}
+              />{/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  {/each}
+  {#if widgets.length}
+    {#if submitted || widgetsExpired}<div
+        class="part widget-status"
+        role="status"
+      >
+        {submitted
+          ? zh
+            ? '已提交'
+            : 'Submitted'
+          : zh
+            ? '已过期 · 请在最新消息中回复'
+            : 'Expired · Reply in the latest message'}
+      </div>
+    {:else}<div class="part widgets widget-actions">
+        <button type="button" disabled={!canSubmit} on:click={submit}
+          >{zh ? '提交' : 'Submit'}</button
+        >
+      </div>{/if}
   {/if}
-{/each}
-{#if capabilityError}<p role="alert" class="error">{capabilityError}</p>{/if}
+  {#if capabilityError}<p role="alert">{capabilityError}</p>{/if}
+</div>

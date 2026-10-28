@@ -12,6 +12,11 @@ ledger/tool semantics, and keep model selection conversation-scoped.
 Both directories produce ordinary frontend build output. Desktop or other
 native hosts remain separate consumers of these UI packages.
 
+Both renderers also share the display-item projection and progressive-reveal
+helpers from `lit/src/content`. Svelte's scoped styles are generated from the
+Lit component styles with `node ui/sync-svelte-styles.mjs`. Run the script with
+`--check` to detect drift; Svelte does not import or wrap Lit custom elements.
+
 Feature parity is checked against `ui/feature-parity.json`. A feature should not
 be marked supported until both implementations have a concrete code path and a
 test or build-time verification route.

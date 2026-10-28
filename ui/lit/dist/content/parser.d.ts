@@ -23,4 +23,7 @@ export type ConversationContentPart = {
 export declare function parseConversationContent(content: string): ConversationContentPart[];
 export declare function parseWidget(line: string): WidgetDefinition | null;
 export declare function toolCallForId(calls: ToolCallView[], callId: string): ToolCallView;
+export declare function toolStatusLabel(status: ToolCallView['status'], locale: string): string;
+/** No raw-result, raw-error or command fallback, including for legacy callers. */
+export declare function toolDisplaySummary(call: ToolCallView, locale: string): string;
 //# sourceMappingURL=parser.d.ts.map

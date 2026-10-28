@@ -36,6 +36,7 @@ export type TauriConversationTransportConfig = {
     prepare?: string;
     send?: string;
     pause?: string;
+    resume?: string;
     close?: string;
     snapshot?: string;
     pendingMessages?: string;
@@ -84,6 +85,7 @@ type PendingMessage = {
 export class TauriConversationTransport implements ConversationTransport {
   readonly contract = TRANSPORT_CONTRACT;
   readonly id: string;
+  readonly resume?: ConversationTransport['resume'];
   readonly imageInput?: { importImage(request: ImportImageRequest): Promise<ImportedImage> };
 
   private readonly config: TauriConversationTransportConfig;
@@ -95,6 +97,9 @@ export class TauriConversationTransport implements ConversationTransport {
     this.config = config;
     this.id = config.id ?? 'tauri-events';
     if (config.imageImport) this.imageInput = { importImage: config.imageImport };
+    if(config.commands?.resume) this.resume = async request => normalizeCommandResult(
+      await config.invoke(config.commands!.resume!, await this.commandArgs(request.conversationId)),
+    );
   }
 
   async connect(

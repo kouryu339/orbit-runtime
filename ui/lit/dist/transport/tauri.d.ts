@@ -12,6 +12,7 @@ export type TauriConversationTransportConfig = {
         prepare?: string;
         send?: string;
         pause?: string;
+        resume?: string;
         close?: string;
         snapshot?: string;
         pendingMessages?: string;
@@ -32,6 +33,7 @@ export type TauriConversationTransportConfig = {
 export declare class TauriConversationTransport implements ConversationTransport {
     readonly contract: "agent-conversation-transport/v1";
     readonly id: string;
+    readonly resume?: ConversationTransport['resume'];
     readonly imageInput?: {
         importImage(request: ImportImageRequest): Promise<ImportedImage>;
     };

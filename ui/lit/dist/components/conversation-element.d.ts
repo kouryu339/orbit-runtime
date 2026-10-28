@@ -1,8 +1,9 @@
 import { LitElement } from 'lit';
-import type { AgentRuntimeConversationPublicApi, CommandResult, ConversationDensity, ConversationExtension, ConversationHostCapabilities, PresetMarkdown, ConversationProviderControlsPolicy, ConversationPersistencePolicy, ConversationPresentationItem, ConversationThemeName, ConversationTransport, PersistedConversation, PresentationItemPatch, SendOptions, SendResult } from '../host/types.js';
+import type { AgentRuntimeConversationPublicApi, CommandResult, ConversationDensity, ConversationExtension, ConversationHostCapabilities, ConversationComposerController, PresetMarkdown, ConversationProviderControlsPolicy, ConversationPersistencePolicy, ConversationPresentationItem, ConversationThemeName, ConversationTransport, PersistedConversation, PresentationItemPatch, SendOptions, SendResult } from '../host/types.js';
 import { type ConversationState } from '../protocol/index.js';
 import './rich-content.js';
 import './plan-card.js';
+import './image-reference.js';
 export declare class AgentRuntimeConversationElement extends LitElement implements AgentRuntimeConversationPublicApi {
     static properties: {
         transport: {
@@ -10,6 +11,15 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
         };
         capabilities: {
             attribute: boolean;
+        };
+        composerController: {
+            attribute: boolean;
+        };
+        composerPanel: {
+            state: boolean;
+        };
+        composerPanelPosition: {
+            state: boolean;
         };
         presentationItems: {
             attribute: boolean;
@@ -75,6 +85,15 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
         providerEditorOpen: {
             state: boolean;
         };
+        providerEditorMode: {
+            state: boolean;
+        };
+        providerImportJson: {
+            state: boolean;
+        };
+        providerEditorError: {
+            state: boolean;
+        };
         providerDefinitions: {
             state: boolean;
         };
@@ -121,6 +140,13 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     static styles: import("lit").CSSResult;
     transport: ConversationTransport | null;
     capabilities: ConversationHostCapabilities;
+    composerController: ConversationComposerController | null;
+    private composerPanel;
+    private composerPanelPosition;
+    private composerSession;
+    private dismissComposerMenu;
+    private escapeComposerMenu;
+    private closeComposerMenu;
     presentationItems: readonly ConversationPresentationItem[];
     extensions: readonly ConversationExtension[];
     conversationId: string | null;
@@ -140,6 +166,12 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private persistenceOperation;
     private providerPanelOpen;
     private providerEditorOpen;
+    private providerEditorMode;
+    private providerImportJson;
+    private providerEditorError;
+    private providerModalNode;
+    private providerEditorEpoch;
+    private releaseProviderModal;
     private providerDefinitions;
     private builtinProviderCatalog;
     private providerEditorProviderUid;
@@ -165,6 +197,7 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     private persistenceUnsubscribe;
     private persistenceController;
     constructor();
+    connectedCallback(): void;
     disconnectedCallback(): void;
     connect(): Promise<void>;
     disconnect(): void;
@@ -175,6 +208,7 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     refreshConversationHistory(): Promise<void>;
     send(content: string, options?: SendOptions): Promise<SendResult>;
     pause(): Promise<CommandResult>;
+    resume(): Promise<CommandResult>;
     resolveToolPermission(toolCallId: string, decision: 'allow' | 'deny'): Promise<CommandResult>;
     closeConversation(): Promise<void>;
     focusComposer(): void;
@@ -186,10 +220,15 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     protected willUpdate(changed: Map<PropertyKey, unknown>): void;
     protected updated(changed: Map<PropertyKey, unknown>): void;
     protected render(): import("lit-html").TemplateResult<1>;
+    private renderComposerControls;
+    private toggleComposerPanel;
+    private renderComposerMenu;
     private renderPersistenceActions;
     private renderProviderActions;
     private renderProviderPanel;
     private renderProviderEditor;
+    private closeProviderEditor;
+    private readProviderImportFile;
     private openProviderEditor;
     private resetProviderEditorDraft;
     private loadProviderEditorDraft;

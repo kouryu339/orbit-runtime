@@ -1,0 +1,34 @@
+/* Generated from Lit mermaid-diagram.ts; run node ui/sync-svelte-styles.mjs. */
+.orbit-svelte-mermaid {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+    }.orbit-svelte-mermaid .diagram {
+      max-width: 100%;
+      overflow-x: hidden;
+      padding: 14px;
+      border: 1px solid var(--conversation-border);
+      border-radius: 12px;
+      background: var(--conversation-surface-raised);
+    }.orbit-svelte-mermaid .diagram svg {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto;
+    }.orbit-svelte-mermaid pre {
+      max-width: 100%;
+      overflow-x: hidden;
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--conversation-tool-error);
+      border-radius: 10px;
+      background: var(--conversation-code-background);
+      color: var(--conversation-text);
+      font: 12px/1.55 var(--conversation-font-mono);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }

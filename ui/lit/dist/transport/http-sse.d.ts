@@ -7,6 +7,7 @@ export type HttpSseTransportConfig = {
     eventsPath?: string;
     sendPath?: string;
     pausePath?: string;
+    resumePath?: string;
     closePath?: string;
     permissionPath?: string;
     query?: Record<string, string | undefined>;
@@ -21,6 +22,7 @@ export type HttpSseTransportConfig = {
 export declare class HttpSseConversationTransport implements ConversationTransport {
     readonly contract: "agent-conversation-transport/v1";
     readonly id: string;
+    readonly resume?: ConversationTransport['resume'];
     readonly imageInput?: {
         importImage(request: ImportImageRequest): Promise<ImportedImage>;
     };

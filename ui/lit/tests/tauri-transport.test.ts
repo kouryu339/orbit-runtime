@@ -2,18 +2,32 @@ import { describe, expect, it, vi } from 'vitest';
 import { TauriConversationTransport } from '../src/transport/tauri.js';
 
 describe('TauriConversationTransport', () => {
+  it('exposes resume only for an explicitly configured host command', async () => {
+    const invoke = vi.fn(async () => ({ accepted: true }));
+    const base = { invoke: invoke as never, listen: vi.fn() as never };
+    expect(new TauriConversationTransport(base).resume).toBeUndefined();
+    const transport = new TauriConversationTransport({
+      ...base,
+      commands: { resume: 'host_continue' },
+    });
+    expect((await transport.resume!({ conversationId: 'one' })).accepted).toBe(
+      true,
+    );
+    expect(invoke).toHaveBeenCalledWith('host_continue', {
+      args: { conversationId: 'one' },
+    });
+  });
   it('prepares, hydrates, restores pending messages, and releases listeners', async () => {
     const handlers = new Map<string, (event: { payload: unknown }) => void>();
     const unlistenRuntime = vi.fn();
     const unlistenPending = vi.fn();
-    const listen = vi.fn(async (
-      event: string,
-      handler: (event: { payload: unknown }) => void,
-    ) => {
-      handlers.set(event, handler);
-      if (event === 'ai-frontend-event') return unlistenRuntime;
-      return unlistenPending;
-    });
+    const listen = vi.fn(
+      async (event: string, handler: (event: { payload: unknown }) => void) => {
+        handlers.set(event, handler);
+        if (event === 'ai-frontend-event') return unlistenRuntime;
+        return unlistenPending;
+      },
+    );
     const invoke = vi.fn(async (command: string) => {
       if (command === 'ai_prepare_conversation') {
         return { conversation_id: 'sunwoo-1' };
@@ -26,11 +40,13 @@ describe('TauriConversationTransport', () => {
         };
       }
       if (command === 'ai_pending_messages') {
-        return [{
-          message_id: 'pending-1',
-          conversation_id: 'sunwoo-1',
-          content: 'queued',
-        }];
+        return [
+          {
+            message_id: 'pending-1',
+            conversation_id: 'sunwoo-1',
+            content: 'queued',
+          },
+        ];
       }
       return { accepted: true };
     });
@@ -40,11 +56,14 @@ describe('TauriConversationTransport', () => {
       listen: listen as never,
     });
 
-    const connection = await transport.connect({}, {
-      event: (event) => events.push(event),
-      connection: vi.fn(),
-      error: vi.fn(),
-    });
+    const connection = await transport.connect(
+      {},
+      {
+        event: (event) => events.push(event),
+        connection: vi.fn(),
+        error: vi.fn(),
+      },
+    );
 
     expect(events).toEqual([
       expect.objectContaining({
@@ -73,11 +92,13 @@ describe('TauriConversationTransport', () => {
       listen: vi.fn() as never,
     });
 
-    await expect(transport.resolveToolPermission({
-      conversationId: 'conversation-1',
-      toolCallId: 'call-1',
-      decision: 'deny',
-    })).resolves.toMatchObject({ accepted: true });
+    await expect(
+      transport.resolveToolPermission({
+        conversationId: 'conversation-1',
+        toolCallId: 'call-1',
+        decision: 'deny',
+      }),
+    ).resolves.toMatchObject({ accepted: true });
     expect(invoke).toHaveBeenCalledWith('ai_resolve_tool_permission', {
       args: {
         conversation_id: 'conversation-1',
@@ -89,15 +110,15 @@ describe('TauriConversationTransport', () => {
 
   it('maps ledger deltas to message snapshots and forwards state/telemetry events', async () => {
     const handlers = new Map<string, (event: { payload: unknown }) => void>();
-    const listen = vi.fn(async (
-      event: string,
-      handler: (event: { payload: unknown }) => void,
-    ) => {
-      handlers.set(event, handler);
-      return vi.fn();
-    });
+    const listen = vi.fn(
+      async (event: string, handler: (event: { payload: unknown }) => void) => {
+        handlers.set(event, handler);
+        return vi.fn();
+      },
+    );
     const invoke = vi.fn(async (command: string) => {
-      if (command === 'ai_prepare_conversation') return { conversation_id: 'sunwoo-1' };
+      if (command === 'ai_prepare_conversation')
+        return { conversation_id: 'sunwoo-1' };
       if (command === 'ai_runtime_snapshot') return {};
       if (command === 'ai_pending_messages') return [];
       return { accepted: true };
@@ -108,11 +129,14 @@ describe('TauriConversationTransport', () => {
       listen: listen as never,
     });
 
-    await transport.connect({}, {
-      event: (event) => events.push(event),
-      connection: vi.fn(),
-      error: vi.fn(),
-    });
+    await transport.connect(
+      {},
+      {
+        event: (event) => events.push(event),
+        connection: vi.fn(),
+        error: vi.fn(),
+      },
+    );
 
     const runtimeHandler = handlers.get('ai-frontend-event');
     expect(runtimeHandler).toBeDefined();
@@ -136,28 +160,33 @@ describe('TauriConversationTransport', () => {
         payload: { conversation_id: 'sunwoo-1', op: 'agent_plan.set' },
       },
     });
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'state-snapshot',
-      eventSeq: 2,
-      payload: expect.objectContaining({
-        ledger_delta: expect.objectContaining({
-          kind: 'append',
-          record: expect.objectContaining({ record_id: 'r1' }),
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'state-snapshot',
+        eventSeq: 2,
+        payload: expect.objectContaining({
+          ledger_delta: expect.objectContaining({
+            kind: 'append',
+            record: expect.objectContaining({ record_id: 'r1' }),
+          }),
         }),
       }),
-    }));
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'transport-extension',
-      extension: expect.objectContaining({
-        namespace: 'org.agent-runtime.state-delta',
-        kind: 'conversation.state_delta',
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'transport-extension',
+        extension: expect.objectContaining({
+          namespace: 'org.agent-runtime.state-delta',
+          kind: 'conversation.state_delta',
+        }),
       }),
-    }));
+    );
   });
 
   it('wraps default command payloads in the Tauri args parameter', async () => {
     const invoke = vi.fn(async (command: string) => {
-      if (command === 'ai_prepare_conversation') return { conversation_id: 'c-1' };
+      if (command === 'ai_prepare_conversation')
+        return { conversation_id: 'c-1' };
       if (command === 'ai_runtime_snapshot') return {};
       if (command === 'ai_pending_messages') return [];
       return { accepted: true };
@@ -167,11 +196,14 @@ describe('TauriConversationTransport', () => {
       listen: vi.fn(async () => vi.fn()) as never,
     });
 
-    const connection = await transport.connect({}, {
-      event: vi.fn(),
-      connection: vi.fn(),
-      error: vi.fn(),
-    });
+    const connection = await transport.connect(
+      {},
+      {
+        event: vi.fn(),
+        connection: vi.fn(),
+        error: vi.fn(),
+      },
+    );
     const conversationId = connection.conversationId!;
     await transport.send({
       conversationId,
@@ -195,13 +227,19 @@ describe('TauriConversationTransport', () => {
       conversationId,
       content: 'look',
       clientMessageId: 'client-image',
-      parts: [{ type: 'text', text: 'look' }, { type: 'image', image_id: 'a'.repeat(64) }],
+      parts: [
+        { type: 'text', text: 'look' },
+        { type: 'image', image_id: 'a'.repeat(64) },
+      ],
     });
     expect(invoke).toHaveBeenCalledWith('ai_send_message', {
       args: {
         conversationId: 'c-1',
         content: 'look',
-        parts: [{ type: 'text', text: 'look' }, { type: 'image', image_id: 'a'.repeat(64) }],
+        parts: [
+          { type: 'text', text: 'look' },
+          { type: 'image', image_id: 'a'.repeat(64) },
+        ],
         clientMessageId: 'client-image',
         metadata: undefined,
       },
@@ -216,23 +254,26 @@ describe('TauriConversationTransport', () => {
     try {
       let snapshotRead = 0;
       const invoke = vi.fn(async (command: string) => {
-        if (command === 'ai_prepare_conversation') return { conversation_id: 'c-1' };
+        if (command === 'ai_prepare_conversation')
+          return { conversation_id: 'c-1' };
         if (command === 'ai_runtime_snapshot') {
           snapshotRead += 1;
-          const conversationState = snapshotRead === 1
-            ? 'waiting'
-            : snapshotRead === 2
-              ? 'executing'
-              : 'waiting';
+          const conversationState =
+            snapshotRead === 1
+              ? 'waiting'
+              : snapshotRead === 2
+                ? 'executing'
+                : 'waiting';
           return {
             type: 'frontend:state_snapshot',
             conversation_id: 'c-1',
             payload: {
               revision: snapshotRead,
               conversation_state: conversationState,
-              ledger_records: snapshotRead >= 3
-                ? [{ record_id: 1, role: 'assistant', content: 'done' }]
-                : [],
+              ledger_records:
+                snapshotRead >= 3
+                  ? [{ record_id: 1, role: 'assistant', content: 'done' }]
+                  : [],
             },
           };
         }
@@ -243,11 +284,14 @@ describe('TauriConversationTransport', () => {
         invoke: invoke as never,
         listen: vi.fn(async () => vi.fn()) as never,
       });
-      await transport.connect({}, {
-        event: vi.fn(),
-        connection: vi.fn(),
-        error: vi.fn(),
-      });
+      await transport.connect(
+        {},
+        {
+          event: vi.fn(),
+          connection: vi.fn(),
+          error: vi.fn(),
+        },
+      );
 
       await transport.send({
         conversationId: 'c-1',

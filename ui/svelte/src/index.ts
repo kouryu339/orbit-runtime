@@ -1,4 +1,11 @@
 export { default as Conversation } from './lib/Conversation.svelte';
 export { default as RichContent } from './lib/RichContent.svelte';
 export { default as ProviderEditor } from './lib/ProviderEditor.svelte';
+export { default as PlanCard } from './lib/PlanCard.svelte';
+export { default as Mermaid } from './lib/Mermaid.svelte';
+export { default as ImageReference } from './lib/ImageReference.svelte';
 export { DemoTransport } from './demo-transport.js';
+export * from '@agent-runtime/conversation-element/host';
+export * from '@agent-runtime/conversation-element/protocol';
+export * from '@agent-runtime/conversation-element/content';
+export * from '@agent-runtime/conversation-element/transport';
