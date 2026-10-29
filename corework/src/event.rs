@@ -116,7 +116,7 @@ impl EventBus for InMemoryEventBus {
                 let handler = handler.clone();
                 let event = event.clone();
 
-                tasks.push(tokio::spawn(async move {
+                tasks.push(crate::platform::spawn(async move {
                     if let Err(e) = handler.handle(&event).await {
                         tracing::error!(
                             "Handler {} failed for event {}: {}",

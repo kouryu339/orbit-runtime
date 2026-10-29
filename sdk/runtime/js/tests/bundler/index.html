@@ -1,0 +1,4 @@
+<!doctype html><meta charset="UTF-8"><title>Bundled WASM</title><script type="module">
+import {createRuntime} from '../../dist/index.js';
+window.verification=(async()=>{const runtime=await createRuntime({storage:'memory'});try{const catalog=await runtime.invoke('runtime.get_tool_definitions');return {ok:catalog.tools.length>0};}finally{await runtime.dispose();}})().catch(error=>({ok:false,error:error.stack}));
+</script>

@@ -129,7 +129,7 @@ fn broadcast_snapshot_updated(snap: &DraftSnapshot) {
     };
     let event_bus = framework.event_bus();
 
-    tokio::spawn(async move {
+    crate::platform::spawn(async move {
         use corework::event::EventBus as _;
         let event = corework::event::BaseEvent::new(
             "ui:snapshot-updated",

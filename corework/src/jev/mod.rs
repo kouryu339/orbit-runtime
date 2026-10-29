@@ -10,7 +10,9 @@ mod manager;
 mod snapshot;
 mod types;
 
-pub use client::{HttpJevClient, JevClient, JevDecision};
+#[cfg(not(target_arch = "wasm32"))]
+pub use client::HttpJevClient;
+pub use client::{JevClient, JevDecision};
 pub use executor::RegistryJevToolExecutor;
 pub use manager::JevManager;
 pub use snapshot::apply_snapshot_update;

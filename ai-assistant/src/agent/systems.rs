@@ -424,7 +424,7 @@ impl SystemOperation for CreateAgentSystem {
                 ));
             }
             spins += 1;
-            tokio::task::yield_now().await;
+            corework::platform::task::yield_now().await;
         }
 
         let response: String = cache
@@ -970,7 +970,8 @@ async fn wait_for_delegated_agent_task(
     // Subscribe before the first read so a terminal transition between the
     // read and wait cannot be lost.
     let mut task_changes = state.subscribe_agent_tasks();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let deadline =
+        corework::platform::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
     loop {
         let task = match state.agent_task(task_id).await {
@@ -1028,7 +1029,7 @@ async fn wait_for_delegated_agent_task(
             _ = user_input_wakeup.cancelled() => {
                 return Ok(("user_input".to_string(), task, None));
             }
-            _ = tokio::time::sleep_until(deadline) => {
+            _ = corework::platform::time::sleep_until(deadline) => {
                 return Ok(("timeout".to_string(), task, None));
             }
         }
@@ -1302,7 +1303,7 @@ mod agent_control_tests {
             .upsert_agent_task(task(AgentTaskStatus::Running))
             .await;
         let waiting_state = Arc::clone(&state);
-        let mut wait = tokio::spawn(async move {
+        let mut wait = corework::platform::spawn(async move {
             wait_for_delegated_agent_task(
                 &waiting_state,
                 "boss",
@@ -1312,13 +1313,13 @@ mod agent_control_tests {
             )
             .await
         });
-        tokio::task::yield_now().await;
+        corework::platform::task::yield_now().await;
 
         let mut unrelated = task(AgentTaskStatus::Completed);
         unrelated.task_id = "task-2".to_string();
         state.upsert_agent_task(unrelated).await;
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(20), &mut wait)
+            corework::platform::time::timeout(std::time::Duration::from_millis(20), &mut wait)
                 .await
                 .is_err()
         );
@@ -1361,7 +1362,7 @@ mod agent_control_tests {
             .upsert_agent_task(task(AgentTaskStatus::Running))
             .await;
         let waiting_state = Arc::clone(&state);
-        let wait = tokio::spawn(async move {
+        let wait = corework::platform::spawn(async move {
             wait_for_delegated_agent_task(
                 &waiting_state,
                 "boss",
@@ -1371,7 +1372,7 @@ mod agent_control_tests {
             )
             .await
         });
-        tokio::task::yield_now().await;
+        corework::platform::task::yield_now().await;
 
         state
             .request_agent_task_input(
@@ -1404,7 +1405,7 @@ mod agent_control_tests {
         other.task_id = "task-2".to_string();
         state.upsert_agent_task(other).await;
         let waiting_state = Arc::clone(&state);
-        let wait = tokio::spawn(async move {
+        let wait = corework::platform::spawn(async move {
             wait_for_delegated_agent_task(
                 &waiting_state,
                 "boss",
@@ -1414,7 +1415,7 @@ mod agent_control_tests {
             )
             .await
         });
-        tokio::task::yield_now().await;
+        corework::platform::task::yield_now().await;
 
         state
             .request_agent_task_input(
@@ -1450,7 +1451,7 @@ mod agent_control_tests {
         state.upsert_agent_task(other).await;
 
         let waiting_state = Arc::clone(&state);
-        let wait = tokio::spawn(async move {
+        let wait = corework::platform::spawn(async move {
             wait_for_delegated_agent_task(
                 &waiting_state,
                 "boss",
@@ -1460,7 +1461,7 @@ mod agent_control_tests {
             )
             .await
         });
-        tokio::task::yield_now().await;
+        corework::platform::task::yield_now().await;
 
         state
             .report_agent_task("task-2", "worker-2", candidate_report("completed"))

@@ -12,9 +12,11 @@ use std::path::Path;
 
 /// 从文件路径加载完整 Skill（Tier 1 + Tier 2）
 pub async fn load_skill_file(path: &Path) -> Result<Skill> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        FrameworkError::InvalidData(format!("读取 Skill 文件失败 {:?}: {}", path, e))
-    })?;
+    let content = corework::platform::fs::read_to_string(path)
+        .await
+        .map_err(|e| {
+            FrameworkError::InvalidData(format!("读取 Skill 文件失败 {:?}: {}", path, e))
+        })?;
 
     let mut skill = parse_skill_content(&content)?;
 
@@ -26,9 +28,11 @@ pub async fn load_skill_file(path: &Path) -> Result<Skill> {
 /// 仅加载元数据（Tier 1）——不读取 instructions body
 /// 适用于首次扫描时快速获取所有 Skill 的 name + description
 pub async fn load_skill_metadata(path: &Path) -> Result<SkillMetadata> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        FrameworkError::InvalidData(format!("读取 Skill 文件失败 {:?}: {}", path, e))
-    })?;
+    let content = corework::platform::fs::read_to_string(path)
+        .await
+        .map_err(|e| {
+            FrameworkError::InvalidData(format!("读取 Skill 文件失败 {:?}: {}", path, e))
+        })?;
 
     parse_frontmatter(&content)
 }
@@ -148,9 +152,11 @@ fn parse_yaml_frontmatter(yaml_str: &str) -> Result<SkillMetadata> {
 
 /// 从 JSON 文件加载 SkillRegistry
 pub async fn load_registry(path: &Path) -> Result<SkillRegistry> {
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        FrameworkError::InvalidData(format!("读取注册表文件失败 {:?}: {}", path, e))
-    })?;
+    let content = corework::platform::fs::read_to_string(path)
+        .await
+        .map_err(|e| {
+            FrameworkError::InvalidData(format!("读取注册表文件失败 {:?}: {}", path, e))
+        })?;
 
     let registry: SkillRegistry = serde_json::from_str(&content)
         .map_err(|e| FrameworkError::InvalidData(format!("注册表 JSON 解析错误: {}", e)))?;
@@ -182,9 +188,11 @@ pub async fn discover_skills(skills_dir: &Path) -> Result<Vec<(String, SkillMeta
         return Ok(result);
     }
 
-    let mut entries = tokio::fs::read_dir(skills_dir).await.map_err(|e| {
-        FrameworkError::InvalidData(format!("读取 Skills 目录失败 {:?}: {}", skills_dir, e))
-    })?;
+    let mut entries = corework::platform::fs::read_dir(skills_dir)
+        .await
+        .map_err(|e| {
+            FrameworkError::InvalidData(format!("读取 Skills 目录失败 {:?}: {}", skills_dir, e))
+        })?;
 
     while let Some(entry) = entries
         .next_entry()
@@ -217,7 +225,7 @@ pub async fn discover_skills(skills_dir: &Path) -> Result<Vec<(String, SkillMeta
             }
             Err(e) => {
                 // 读取文件内容用于调试
-                if let Ok(content) = tokio::fs::read_to_string(&skill_file).await {
+                if let Ok(content) = corework::platform::fs::read_to_string(&skill_file).await {
                     let preview = content.chars().take(100).collect::<String>();
                     tracing::warn!(
                         "跳过无效 Skill '{}': {}，文件前100字符: {:?}",
@@ -271,7 +279,7 @@ pub async fn list_references(skill: &Skill) -> Result<Vec<String>> {
     };
 
     let mut files = Vec::new();
-    let mut entries = tokio::fs::read_dir(&ref_dir)
+    let mut entries = corework::platform::fs::read_dir(&ref_dir)
         .await
         .map_err(|e| FrameworkError::InvalidData(format!("读取 reference 目录失败: {}", e)))?;
 
@@ -296,9 +304,11 @@ pub async fn load_reference(skill: &Skill, filename: &str) -> Result<String> {
     })?;
 
     let path = ref_dir.join(filename);
-    tokio::fs::read_to_string(&path).await.map_err(|e| {
-        FrameworkError::InvalidData(format!("读取 reference 文件 {:?} 失败: {}", path, e))
-    })
+    corework::platform::fs::read_to_string(&path)
+        .await
+        .map_err(|e| {
+            FrameworkError::InvalidData(format!("读取 reference 文件 {:?} 失败: {}", path, e))
+        })
 }
 
 // ============================================================================

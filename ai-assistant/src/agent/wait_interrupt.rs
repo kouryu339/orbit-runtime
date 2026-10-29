@@ -153,7 +153,7 @@ mod tests {
             .await;
         let source = DelegatedTaskWaitInterruptSource::new(state, "boss");
 
-        let interrupt = tokio::time::timeout(
+        let interrupt = corework::platform::time::timeout(
             std::time::Duration::from_millis(50),
             source.wait_for_interrupt(),
         )
@@ -177,7 +177,7 @@ mod tests {
             .await;
         let source = DelegatedTaskWaitInterruptSource::new(state, "boss");
 
-        assert!(tokio::time::timeout(
+        assert!(corework::platform::time::timeout(
             std::time::Duration::from_millis(10),
             source.wait_for_interrupt(),
         )
@@ -196,9 +196,9 @@ mod tests {
         entry.input_requests.clear();
         state.upsert_agent_task(entry).await;
         let source = DelegatedTaskWaitInterruptSource::new(Arc::clone(&state), "boss");
-        let waiting = tokio::spawn(async move { source.wait_for_interrupt().await });
+        let waiting = corework::platform::spawn(async move { source.wait_for_interrupt().await });
 
-        tokio::task::yield_now().await;
+        corework::platform::task::yield_now().await;
         state
             .request_agent_task_input(
                 "task-1",
@@ -211,10 +211,11 @@ mod tests {
             .await
             .unwrap();
 
-        let interrupt = tokio::time::timeout(std::time::Duration::from_millis(50), waiting)
-            .await
-            .expect("task revision should wake the registered wait")
-            .unwrap();
+        let interrupt =
+            corework::platform::time::timeout(std::time::Duration::from_millis(50), waiting)
+                .await
+                .expect("task revision should wake the registered wait")
+                .unwrap();
         assert_eq!(interrupt.details["request_id"], "request-late");
     }
 
@@ -234,7 +235,7 @@ mod tests {
             .unwrap();
         let source = DelegatedTaskWaitInterruptSource::new(state, "boss");
 
-        assert!(tokio::time::timeout(
+        assert!(corework::platform::time::timeout(
             std::time::Duration::from_millis(10),
             source.wait_for_interrupt(),
         )

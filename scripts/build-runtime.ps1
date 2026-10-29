@@ -58,13 +58,14 @@ function Resolve-ZigOnPath {
 function Build-Windows {
     Write-Host ""
     Write-Host "=== building Windows .dll ===" -ForegroundColor Cyan
-    & cargo build $profileFlag -p $crate
+    & cargo build $profileFlag --locked -p $crate
     if ($LASTEXITCODE -ne 0) { throw "windows cargo build failed ($LASTEXITCODE)" }
 
-    $dll = Join-Path $repo "target\$profileDir\agent_runtime.dll"
+    $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
+    $dll = Join-Path $targetDir "$profileDir\agent_runtime.dll"
     if (-not (Test-Path $dll)) { throw "expected artifact missing: $dll" }
     Copy-Item -Force $dll (Join-Path $dist 'agent_runtime.dll')
-    $importLib = Join-Path $repo "target\$profileDir\agent_runtime.dll.lib"
+    $importLib = Join-Path $targetDir "$profileDir\agent_runtime.dll.lib"
     if (Test-Path $importLib) {
         Copy-Item -Force $importLib (Join-Path $dist 'agent_runtime.dll.lib')
     }
@@ -126,17 +127,18 @@ exit $LASTEXITCODE
     $env:CXX_x86_64_unknown_linux_gnu = Join-Path $repo 'scripts\zig-cxx-linux-gnu.cmd'
     $env:AR_x86_64_unknown_linux_gnu  = Join-Path $repo 'scripts\zig-ar.cmd'
 
-    & cargo build $profileFlag --target x86_64-unknown-linux-gnu -p $crate
+    & cargo build $profileFlag --locked --target x86_64-unknown-linux-gnu -p $crate
     if ($LASTEXITCODE -ne 0) { throw "linux cargo build failed ($LASTEXITCODE)" }
 
-    $so = Join-Path $repo "target\x86_64-unknown-linux-gnu\$profileDir\libagent_runtime.so"
+    $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
+    $so = Join-Path $targetDir "x86_64-unknown-linux-gnu\$profileDir\libagent_runtime.so"
     if (-not (Test-Path $so)) { throw "expected artifact missing: $so" }
     Copy-Item -Force $so (Join-Path $dist 'libagent_runtime.so')
 
     # Also stage to target\release\libagent_runtime.so so the existing
     # Dockerfile.runtime COPY directive (which expects that exact path)
     # works without modification.
-    $native = Join-Path $repo "target\$profileDir\libagent_runtime.so"
+    $native = Join-Path $targetDir "$profileDir\libagent_runtime.so"
     New-Item -ItemType Directory -Force -Path (Split-Path $native) | Out-Null
     Copy-Item -Force $so $native
     Write-Host "  -> $so" -ForegroundColor Green

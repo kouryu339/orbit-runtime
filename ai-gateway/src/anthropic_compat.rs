@@ -9,6 +9,12 @@ use crate::error::ApiError;
 use crate::retry::{retry_with_backoff, RetryPolicy};
 use crate::types::{ChatMessage, FunctionCall, LlmResponse, TokenUsage, ToolCall, ToolDefinition};
 
+#[cfg(target_arch = "wasm32")]
+fn http_client() -> &'static Client {
+    static CLIENT: once_cell::sync::OnceCell<Client> = once_cell::sync::OnceCell::new();
+    CLIENT.get_or_init(Client::new)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn http_client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
@@ -21,6 +27,12 @@ fn http_client() -> &'static Client {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
+fn streaming_http_client() -> &'static Client {
+    static CLIENT: once_cell::sync::OnceCell<Client> = once_cell::sync::OnceCell::new();
+    CLIENT.get_or_init(Client::new)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn streaming_http_client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
@@ -72,7 +84,7 @@ pub async fn call_inner_with_reasoning(
     force_tool_name: Option<&str>,
 ) -> crate::error::Result<LlmResponse> {
     crate::image_content::validate_model(model, messages)?;
-    let request_started = std::time::Instant::now();
+    let request_started = corework::platform::time::Instant::now();
     let client = http_client().clone();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
@@ -313,7 +325,7 @@ where
     crate::image_content::validate_model(model, messages)?;
     use std::collections::BTreeMap;
 
-    let request_started = std::time::Instant::now();
+    let request_started = corework::platform::time::Instant::now();
 
     #[derive(Default)]
     struct ToolBlock {

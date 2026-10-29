@@ -28,7 +28,7 @@ pub enum NodeState {
 
     /// Delay 状态
     Delay {
-        start_time: std::time::Instant,
+        start_time: crate::platform::time::Instant,
         duration: std::time::Duration,
     },
 
@@ -64,7 +64,7 @@ impl NodeState {
     /// 创建 Delay 状态
     pub fn new_delay(duration: std::time::Duration) -> Self {
         Self::Delay {
-            start_time: std::time::Instant::now(),
+            start_time: crate::platform::time::Instant::now(),
             duration,
         }
     }

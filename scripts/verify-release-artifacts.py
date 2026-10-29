@@ -9,6 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
+import tarfile
 import zipfile
 
 
@@ -86,6 +87,35 @@ def main() -> None:
     script = (output / f"{name}.js").read_bytes()
     assert script == files["orbit-conversation-svelte.js"] == (repo / "ui/svelte/dist-library/orbit-conversation-svelte.js").read_bytes()
     assert (output / f"{name}.js.sha256").read_text().split() == [digest(script), f"{name}.js"]
+
+    name = f"{prefix}-browser-v{version}"
+    browser_files = archive(name)
+    package = json.loads(browser_files["package.json"])
+    assert package["version"] == version and package["name"] == "@orbit-runtime/browser"
+    browser_manifest = json.loads(browser_files["dist/manifest.json"])
+    assert browser_manifest["version"] == version
+    assert browser_manifest["target"] == "wasm32-unknown-unknown"
+    assert {"README.md", "USAGE.zh-CN.md", "LICENSE", "NOTICE", "examples/quickstart.js"} <= browser_files.keys()
+    for filename, info in browser_manifest["files"].items():
+        content = browser_files[f"dist/{filename}"]
+        assert len(content) == info["bytes"] and digest(content) == info["sha256"]
+    assert browser_files["dist/wasm/orbit_runtime_wasm_bg.wasm"][:8] == b"\0asm\x01\0\0\0"
+    for filename, content in browser_files.items():
+        assert content == (repo / "sdk/runtime/js" / filename).read_bytes(), filename
+    tgz = output / f"{name}.tgz"
+    tgz_hash = digest(tgz.read_bytes())
+    assert (output / f"{name}.tgz.sha256").read_text().split() == [tgz_hash, tgz.name]
+    with tarfile.open(tgz, "r:gz") as bundle:
+        packed = {}
+        for entry in bundle.getmembers():
+            parts = PurePosixPath(entry.name).parts
+            assert parts[0] == "package" and ".." not in parts and not entry.name.startswith("/")
+            assert entry.isfile(), entry.name
+            key = "/".join(parts[1:])
+            assert key not in packed, key
+            packed[key] = bundle.extractfile(entry).read()
+        assert packed == browser_files, "browser ZIP and npm package differ"
+    report[tgz.name] = {"bytes": tgz.stat().st_size, "sha256": tgz_hash, "files": len(packed)}
 
     files = archive(f"{prefix}-sdk-v{version}")
     sdk_manifest = json.loads(files["sdk/release_manifest.json"])

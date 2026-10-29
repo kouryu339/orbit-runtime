@@ -77,3 +77,5 @@ pub use workflows::WorkflowsModule;
 
 // 为了避免名称冲突，BlueprintMetadata 通过模块路径访问：
 // - blueprint_json::BlueprintMetadata - 蓝图JSON格式的元数据（包含inputs/outputs）
+
+pub mod node_definitions;

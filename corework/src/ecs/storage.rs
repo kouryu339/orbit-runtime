@@ -1,6 +1,6 @@
 use crate::ecs::entity::UnitEntityId;
+use crate::platform::time::SystemTime;
 use dashmap::DashMap;
-use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct Versioned<T> {
@@ -14,14 +14,14 @@ impl<T> Versioned<T> {
         Self {
             value,
             version: 0,
-            changed_at: SystemTime::now(),
+            changed_at: crate::platform::time::system_time_now(),
         }
     }
 
     pub fn update(&mut self, value: T) {
         self.value = value;
         self.version = self.version.saturating_add(1);
-        self.changed_at = SystemTime::now();
+        self.changed_at = crate::platform::time::system_time_now();
     }
 }
 
@@ -54,7 +54,7 @@ impl<T> ComponentStore<T> {
         let mut existing = self.values.get_mut(&entity)?;
         let result = modify(&mut existing.value);
         existing.version = existing.version.saturating_add(1);
-        existing.changed_at = SystemTime::now();
+        existing.changed_at = crate::platform::time::system_time_now();
         Some(result)
     }
 

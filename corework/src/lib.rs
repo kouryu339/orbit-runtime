@@ -58,6 +58,7 @@ pub mod jev;
 pub mod module; // 轻量模块封装：Arc<ExecutionUnit>
 pub mod monitoring;
 pub mod orchestration;
+pub mod platform;
 pub mod rag; // RAG 类型/trait 骨架，尚未实现检索链路
 pub mod retry;
 pub mod rpc_proto;
@@ -90,9 +91,11 @@ pub mod prelude {
     pub use crate::event_line::{EventLineAccess, EventLineHandle, EventLinePolicy};
     pub use crate::hierarchical_cache::HierarchicalCache;
     pub use crate::instance::InstanceHandle;
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use crate::jev::HttpJevClient;
     pub use crate::jev::{
-        HttpJevClient, JevAction, JevArgumentBinding, JevDefinition, JevExecutionContext,
-        JevManager, JevRunOutcome, JevRunStatus, JevSnapshotUpdate, JevToolExecutor, JevToolResult,
+        JevAction, JevArgumentBinding, JevDefinition, JevExecutionContext, JevManager,
+        JevRunOutcome, JevRunStatus, JevSnapshotUpdate, JevToolExecutor, JevToolResult,
         RegistryJevToolExecutor,
     };
     pub use crate::monitoring::{Metrics, NoopTelemetry, Telemetry};
@@ -209,3 +212,5 @@ mod tests {
         assert_eq!(2 + 2, 4);
     }
 }
+
+pub mod tool_definitions;

@@ -18,6 +18,7 @@ pub trait JevClient: Send + Sync {
     async fn choose(&self, definition: &JevDefinition, state: &Value) -> Result<JevDecision>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct HttpJevClient {
     client: reqwest::Client,
@@ -25,6 +26,7 @@ pub struct HttpJevClient {
     api_key: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpJevClient {
     pub fn new(api_key: impl Into<String>) -> Result<Self> {
         Self::with_endpoint(api_key, "https://api.typesafe.ai/v1/systemone")
@@ -57,6 +59,7 @@ impl HttpJevClient {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl JevClient for HttpJevClient {
     async fn choose(&self, definition: &JevDefinition, state: &Value) -> Result<JevDecision> {
@@ -98,13 +101,17 @@ impl JevClient for HttpJevClient {
                         ))
                     })?;
                     if (status.as_u16() == 429 || status.is_server_error()) && attempt < 3 {
-                        tokio::time::sleep(Duration::from_millis(200 * (1 << (attempt - 1)))).await;
+                        crate::platform::time::sleep(Duration::from_millis(
+                            200 * (1 << (attempt - 1)),
+                        ))
+                        .await;
                         continue;
                     }
                     break (status, body);
                 }
                 Err(error) if attempt < 3 && (error.is_timeout() || error.is_connect()) => {
-                    tokio::time::sleep(Duration::from_millis(200 * (1 << (attempt - 1)))).await;
+                    crate::platform::time::sleep(Duration::from_millis(200 * (1 << (attempt - 1))))
+                        .await;
                 }
                 Err(error) => {
                     return Err(FrameworkError::SystemError(format!(

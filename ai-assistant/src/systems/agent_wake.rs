@@ -418,9 +418,9 @@ mod tests {
             output.outcome,
             crate::agent::cluster::AgentWakeOutcome::Woken
         );
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        corework::platform::time::timeout(std::time::Duration::from_secs(1), async {
             while boss.sm.current_state() != crate::state::states::SUSPENDED {
-                tokio::task::yield_now().await;
+                corework::platform::task::yield_now().await;
             }
         })
         .await

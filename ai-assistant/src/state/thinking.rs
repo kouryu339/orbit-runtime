@@ -234,7 +234,7 @@ async fn append_llm_trace<T: Serialize>(
     line_with_newline.push('\n');
     if let Err(err) = async {
         use tokio::io::AsyncWriteExt;
-        let mut file = tokio::fs::OpenOptions::new()
+        let mut file = corework::platform::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
@@ -379,7 +379,7 @@ fn emit_stream_reset(sm_ctx: &Arc<ExecutionUnit>) {
     // must clear partial tokens before the next attempt starts.
     let event = BaseEvent::new(ev_types::STREAM_RESET, serde_json::json!({}));
     let bus = sm_ctx.event_bus();
-    tokio::spawn(async move {
+    corework::platform::spawn(async move {
         let _ = bus.publish(event).await;
     });
 }
@@ -445,10 +445,10 @@ fn spawn_assistant_stream_projector(
     attempt: u32,
 ) -> (
     tokio::sync::mpsc::UnboundedSender<llm_gateway::LlmStreamEvent>,
-    tokio::task::JoinHandle<corework::error::Result<()>>,
+    corework::platform::task::JoinHandle<corework::error::Result<()>>,
 ) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<llm_gateway::LlmStreamEvent>();
-    let task = tokio::spawn(async move {
+    let task = corework::platform::spawn(async move {
         let mut content = String::new();
         let mut sequence = 0u64;
         let mut provisional =
@@ -465,7 +465,7 @@ fn spawn_assistant_stream_projector(
             if !changed {
                 continue;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+            corework::platform::time::sleep(std::time::Duration::from_millis(16)).await;
             while let Ok(event) = rx.try_recv() {
                 changed |= apply_assistant_stream_event(
                     event,
@@ -907,14 +907,14 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         workflow_authoring_enabled,
     );
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     {
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::time::UNIX_EPOCH;
 
         let temp_dir = std::env::temp_dir().join("ai-assistant-prompt");
-        let _ = tokio::fs::create_dir_all(&temp_dir).await;
+        let _ = corework::platform::fs::create_dir_all(&temp_dir).await;
 
-        let timestamp = SystemTime::now()
+        let timestamp = corework::platform::time::system_time_now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
@@ -925,7 +925,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         };
         let file_path = temp_dir.join(&filename);
 
-        if let Err(e) = tokio::fs::write(&file_path, &system_text).await {
+        if let Err(e) = corework::platform::fs::write(&file_path, &system_text).await {
             tracing::warn!("failed to write prompt debug file: {}", e);
         }
     }
@@ -1640,7 +1640,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                             .unwrap_or(serde_json::json!({})),
                     );
                     let bus = sm_ctx.event_bus();
-                    tokio::spawn(async move {
+                    corework::platform::spawn(async move {
                         let _ = bus.publish(event).await;
                     });
                     record_gateway_fact_for_cache(
@@ -1812,7 +1812,7 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
                     tokio::select! {
                         biased;
                         _ = retry_cancel.cancelled() => {},
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {},
+                        _ = corework::platform::time::sleep(std::time::Duration::from_millis(wait_ms)) => {},
                     }
                 }
             }
@@ -3442,14 +3442,14 @@ mod tests {
         let (first_tx, mut first_rx) = tokio::sync::mpsc::channel(4);
         let (second_tx, mut second_rx) = tokio::sync::mpsc::channel(4);
 
-        let first = tokio::spawn(scope_stream_sender(first_tx, async {
+        let first = corework::platform::spawn(scope_stream_sender(first_tx, async {
             forward_legacy_stream_chunk("first-1");
-            tokio::task::yield_now().await;
+            corework::platform::task::yield_now().await;
             forward_legacy_stream_chunk("first-2");
         }));
-        let second = tokio::spawn(scope_stream_sender(second_tx, async {
+        let second = corework::platform::spawn(scope_stream_sender(second_tx, async {
             forward_legacy_stream_chunk("second-1");
-            tokio::task::yield_now().await;
+            corework::platform::task::yield_now().await;
             forward_legacy_stream_chunk("second-2");
         }));
 

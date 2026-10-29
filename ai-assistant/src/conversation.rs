@@ -98,6 +98,15 @@ impl Conversation {
         options: ConversationOptions,
         export_event_bus: Arc<dyn EventBus>,
     ) -> Result<Arc<Self>> {
+        Self::new_with_framework(options, export_event_bus, FrameworkState::initialize()?).await
+    }
+
+    /// Inherit the owning Runtime's registry instead of recreating global state.
+    pub(crate) async fn new_with_framework(
+        options: ConversationOptions,
+        export_event_bus: Arc<dyn EventBus>,
+        framework: FrameworkState,
+    ) -> Result<Arc<Self>> {
         let conversation_id = options.conversation_id.trim().to_string();
         if conversation_id.is_empty() {
             return Err(crate::Error::Other(anyhow::anyhow!(
@@ -111,7 +120,6 @@ impl Conversation {
         let allow_insecure_llm_request_headers = options.allow_insecure_llm_request_headers;
         let scope_id = options.conversation_scope();
 
-        let framework = FrameworkState::initialize()?;
         let ledger = Arc::new(ExecutionUnit::new_root_in_scope(
             UnitType::Module,
             framework,

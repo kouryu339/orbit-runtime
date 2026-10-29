@@ -92,7 +92,7 @@ mod tests {
     use crate::ecs::SpawnUnitCommand;
     use crate::event_line::EventLinePolicy;
     use crate::execution_unit::UnitType;
-    use std::time::SystemTime;
+    use crate::platform::time::SystemTime;
 
     #[test]
     fn factory_selects_runtime_state_backend_kind() {
@@ -241,7 +241,12 @@ mod tests {
                 2,
                 "dropped units retain shared-component declarations for audit"
             );
-            assert_eq!(store.units().prune_dropped(SystemTime::now(), 1), 1);
+            assert_eq!(
+                store
+                    .units()
+                    .prune_dropped(crate::platform::time::system_time_now(), 1),
+                1
+            );
             assert!(store.units().unit("unit:owner").is_none());
             assert!(store
                 .shared_components()

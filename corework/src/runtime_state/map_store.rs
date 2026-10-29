@@ -3,6 +3,7 @@ use crate::ecs::{EcsUnitSnapshot, EcsWorld, SpawnUnitCommand, UnitEntityId, Unit
 use crate::error::Result;
 use crate::event_line::EventLinePolicy;
 use crate::execution_unit::AccessMode;
+use crate::platform::time::SystemTime;
 use crate::runtime_state::scope::StateScope;
 use crate::runtime_state::snapshots::{
     EventLineStateSnapshot, ResourceAccessSnapshot, SharedComponentStateSnapshot,
@@ -18,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
 
 pub struct MapRuntimeStateStore {
     cache: Arc<dyn Cache>,
@@ -94,7 +94,9 @@ impl RuntimeStateStore for MapRuntimeStateStore {
         if self.drops_since_maintenance.swap(0, Ordering::AcqRel) < self.maintenance_interval {
             return;
         }
-        let Some(dropped_before) = SystemTime::now().checked_sub(self.dropped_retention) else {
+        let Some(dropped_before) =
+            crate::platform::time::system_time_now().checked_sub(self.dropped_retention)
+        else {
             return;
         };
         let pruned = self.prune_dropped(dropped_before, self.prune_batch_size);

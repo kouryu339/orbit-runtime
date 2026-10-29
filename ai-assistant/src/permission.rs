@@ -145,7 +145,7 @@ impl PermissionBroker {
         )
         .await;
 
-        match tokio::time::timeout(PERMISSION_TIMEOUT, receiver).await {
+        match corework::platform::time::timeout(PERMISSION_TIMEOUT, receiver).await {
             Ok(Ok(ToolPermissionDecision::Allow)) => PermissionOutcome::Allowed,
             Ok(Ok(ToolPermissionDecision::Deny)) => PermissionOutcome::UserDenied,
             Ok(Err(_)) => PermissionOutcome::Cancelled,
@@ -298,10 +298,10 @@ mod tests {
         ));
         let waiting = {
             let broker = broker.clone();
-            tokio::spawn(async move { broker.request(request("call-1")).await })
+            corework::platform::spawn(async move { broker.request(request("call-1")).await })
         };
 
-        tokio::task::yield_now().await;
+        corework::platform::task::yield_now().await;
         assert_eq!(broker.pending().await.len(), 1);
         assert!(
             broker
@@ -352,14 +352,16 @@ mod tests {
         ));
         let waiting = {
             let broker = Arc::clone(&broker);
-            tokio::spawn(async move { broker.request(request("call-blocked-observer")).await })
+            corework::platform::spawn(async move {
+                broker.request(request("call-blocked-observer")).await
+            })
         };
         while broker.pending().await.is_empty() {
-            tokio::task::yield_now().await;
+            corework::platform::task::yield_now().await;
         }
         let resolving = {
             let broker = Arc::clone(&broker);
-            tokio::spawn(async move {
+            corework::platform::spawn(async move {
                 broker
                     .resolve("call-blocked-observer", ToolPermissionDecision::Allow)
                     .await
@@ -367,7 +369,7 @@ mod tests {
         };
 
         entered.notified().await;
-        let outcome = tokio::time::timeout(Duration::from_millis(100), waiting)
+        let outcome = corework::platform::time::timeout(Duration::from_millis(100), waiting)
             .await
             .expect("approved tool stayed blocked behind an event observer")
             .unwrap();

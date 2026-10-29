@@ -2,10 +2,10 @@
 
 use crate::ecs::EcsWorld;
 use crate::error::{FrameworkError, Result};
+use crate::platform::time::{Duration, Instant};
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 // ============================================================================
 // ============================================================================

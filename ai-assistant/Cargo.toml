@@ -10,7 +10,7 @@ repository = "https://github.com/kouryu339/orbit-runtime"
 
 [dependencies]
 # 核心框架依赖
-corework = { path = "../corework", default-features = false, features = ["memory-event-bus", "metrics", "type_structure"] }
+corework = { path = "../corework", default-features = false, features = ["memory-event-bus", "type_structure"] }
 
 # AI 网关（LLM/VLM/ASR/OCR 调用封装）
 llm-gateway = { path = "../ai-gateway" }
@@ -19,7 +19,7 @@ llm-gateway = { path = "../ai-gateway" }
 # 它们通过 inventory 自动注册，由顶层 crate（tauri binary）负责 link，ai-assistant 无需直接依赖。
 
 # 异步运行时
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["sync", "macros", "io-util", "rt"] }
 tokio-util = { version = "0.7" }
 async-trait = "0.1"
 
@@ -48,9 +48,13 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # 并发锁（全局 session_id）
 parking_lot = "0.12"
-cap-std = "3"
 regex = "1"
 globset = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["full"] }
+corework = { path = "../corework", default-features = false, features = ["metrics"] }
+cap-std = "3"
 ignore = "0.4"
 
 [dev-dependencies]

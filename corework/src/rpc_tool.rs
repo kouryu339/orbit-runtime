@@ -8,10 +8,13 @@
 use crate::ai_system::{AIOutput, SimpleArgs};
 use crate::error::{FrameworkError, Result};
 use crate::orchestration::Context;
+use crate::platform::time::{Duration, Instant};
+use crate::rpc_proto::v1::ToolErrorCode;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::rpc_proto::v1::{
     agent_tool_service_client::AgentToolServiceClient, tool_stream_message,
     AiOutput as ProtoAIOutput, ExecuteRequest, HostResult as ProtoHostResult, ListToolsRequest,
-    ListToolsResponse, ToolDescriptor, ToolErrorCode, ToolStreamMessage,
+    ListToolsResponse, ToolDescriptor, ToolStreamMessage,
 };
 use crate::workflow::dynamic_node::DynamicExecute;
 use async_trait::async_trait;
@@ -20,10 +23,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpStream;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_stream::wrappers::ReceiverStream;
 
 pub const RPC_TOOL_SCHEMA_V1: &str = "corework-agent-tool/v1";
@@ -741,6 +747,7 @@ pub fn validate_remote_ai_output(tool_name: &str, output: &RemoteAIOutput) -> Re
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn runtime_tool_metadata_from_descriptor(
     endpoint_id: &str,
     descriptor: ToolDescriptor,
@@ -790,6 +797,7 @@ pub fn runtime_tool_metadata_from_descriptor(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn runtime_tools_from_list_tools_response(
     endpoint: &RpcEndpointInfo,
     response: ListToolsResponse,
@@ -824,6 +832,7 @@ impl Default for GrpcRpcToolDiscoveryClient {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl GrpcRpcToolDiscoveryClient {
     pub fn new(runtime_version: impl Into<String>) -> Self {
         Self {
@@ -862,12 +871,14 @@ impl GrpcRpcToolDiscoveryClient {
             runtime_tools_from_list_tools_response(&endpoint, response)
         };
 
-        tokio::time::timeout(timeout, fut).await.map_err(|_| {
-            FrameworkError::SystemError(format!(
-                "RPC endpoint '{}' ListTools timed out after {}ms",
-                endpoint.endpoint_id, endpoint.timeout_ms
-            ))
-        })?
+        crate::platform::time::timeout(timeout, fut)
+            .await
+            .map_err(|_| {
+                FrameworkError::SystemError(format!(
+                    "RPC endpoint '{}' ListTools timed out after {}ms",
+                    endpoint.endpoint_id, endpoint.timeout_ms
+                ))
+            })?
     }
 }
 
@@ -1382,6 +1393,7 @@ enum WireMessage {
     Error { message: String },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl JsonLineRpcToolDiscoveryClient {
     pub async fn list_tools(&self, endpoint: RpcEndpointInfo) -> Result<Vec<RuntimeToolMetadata>> {
         validate_rpc_endpoint_info(&endpoint)?;
@@ -1436,15 +1448,18 @@ impl JsonLineRpcToolDiscoveryClient {
             }
         };
 
-        tokio::time::timeout(timeout, fut).await.map_err(|_| {
-            FrameworkError::SystemError(format!(
-                "RPC endpoint '{}' list_tools timed out after {}ms",
-                endpoint.endpoint_id, endpoint.timeout_ms
-            ))
-        })?
+        crate::platform::time::timeout(timeout, fut)
+            .await
+            .map_err(|_| {
+                FrameworkError::SystemError(format!(
+                    "RPC endpoint '{}' list_tools timed out after {}ms",
+                    endpoint.endpoint_id, endpoint.timeout_ms
+                ))
+            })?
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl RpcToolClient for JsonLineRpcToolClient {
     async fn execute(
@@ -1555,7 +1570,7 @@ impl RpcToolClient for JsonLineRpcToolClient {
             }
         };
 
-        match tokio::time::timeout(timeout, fut).await {
+        match crate::platform::time::timeout(timeout, fut).await {
             Ok(Ok(output)) => {
                 append_rpc_diagnostic(
                     "completed",
@@ -1599,6 +1614,7 @@ impl RpcToolClient for JsonLineRpcToolClient {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl RpcToolClient for GrpcRpcToolClient {
     async fn execute(
@@ -1809,7 +1825,7 @@ impl RpcToolClient for GrpcRpcToolClient {
             )))
         };
 
-        match tokio::time::timeout(timeout, fut).await {
+        match crate::platform::time::timeout(timeout, fut).await {
             Ok(Ok(output)) => {
                 append_rpc_diagnostic(
                     "completed",
@@ -1853,6 +1869,7 @@ impl RpcToolClient for GrpcRpcToolClient {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn proto_ai_output_into_ai_output(
     tool_name: &str,
     output: ProtoAIOutput,
@@ -1898,6 +1915,7 @@ fn proto_ai_output_into_ai_output(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn host_call_error_code(op: &str, error: &FrameworkError) -> ToolErrorCode {
     match error {
         FrameworkError::InvalidOperation(message) if message.contains("not allowed") => {
@@ -1908,6 +1926,7 @@ fn host_call_error_code(op: &str, error: &FrameworkError) -> ToolErrorCode {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn write_wire<W>(writer: &mut W, msg: &WireMessage) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
@@ -2110,7 +2129,7 @@ mod tests {
     async fn workflow_context_reaches_json_line_rpc_tool_request() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let server = crate::platform::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let (reader, mut writer) = stream.into_split();
             let mut reader = BufReader::new(reader);
@@ -2224,7 +2243,7 @@ mod tests {
     async fn json_line_discovery_reads_sdk_registered_tools() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let server = crate::platform::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let (reader, mut writer) = stream.into_split();
             let mut reader = BufReader::new(reader);

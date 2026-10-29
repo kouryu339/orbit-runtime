@@ -106,77 +106,80 @@ pub async fn call_qwen_vl(
     top_p: Option<f64>,
     max_tokens: Option<u32>,
 ) -> crate::error::Result<VlmResponse> {
-    let api_key = std::env::var("DASHSCOPE_API_KEY")
-        .map_err(|_| ApiError::VlmFailed("未设置 DASHSCOPE_API_KEY 环境变量".into()))?;
+    corework::platform::local_future(async move {
+        let api_key = std::env::var("DASHSCOPE_API_KEY")
+            .map_err(|_| ApiError::VlmFailed("未设置 DASHSCOPE_API_KEY 环境变量".into()))?;
 
-    let image_data =
-        std::fs::read(image_path).map_err(|e| ApiError::VlmFailed(format!("读取图片失败: {e}")))?;
-    let image_base64 = general_purpose::STANDARD.encode(&image_data);
+        let image_data = std::fs::read(image_path)
+            .map_err(|e| ApiError::VlmFailed(format!("读取图片失败: {e}")))?;
+        let image_base64 = general_purpose::STANDARD.encode(&image_data);
 
-    let client = Client::new();
-    let url =
-        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+        let client = Client::new();
+        let url =
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 
-    let mut params = json!({});
-    if let Some(t) = temperature {
-        params["temperature"] = json!(t);
-    }
-    if let Some(p) = top_p {
-        params["top_p"] = json!(p);
-    }
-    if let Some(m) = max_tokens {
-        params["max_tokens"] = json!(m);
-    }
-
-    let body = json!({
-        "model": model.unwrap_or(DEFAULT_MODEL),
-        "input": {
-            "messages": [{
-                "role": "user",
-                "content": [
-                    { "image": format!("data:image/jpeg;base64,{}", image_base64) },
-                    { "text": prompt }
-                ]
-            }]
-        },
-        "parameters": params
-    });
-
-    let resp: Value = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ApiError::VlmFailed(format!("调用通义千问 VL 失败: {e}")))?
-        .json()
-        .await
-        .map_err(|e| ApiError::VlmFailed(format!("解析 VL 响应失败: {e}")))?;
-
-    // 错误检查
-    if let Some(code) = resp.get("code") {
-        if code.as_str() != Some("Success") && !code.as_str().unwrap_or("").is_empty() {
-            return Err(ApiError::VlmFailed(format!(
-                "通义千问 VL API 错误: {}",
-                resp.get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("未知错误")
-            )));
+        let mut params = json!({});
+        if let Some(t) = temperature {
+            params["temperature"] = json!(t);
         }
-    }
+        if let Some(p) = top_p {
+            params["top_p"] = json!(p);
+        }
+        if let Some(m) = max_tokens {
+            params["max_tokens"] = json!(m);
+        }
 
-    let content = resp["output"]["choices"][0]["message"]["content"][0]["text"]
-        .as_str()
-        .ok_or_else(|| ApiError::VlmFailed("VL 响应格式错误".into()))?
-        .to_string();
+        let body = json!({
+            "model": model.unwrap_or(DEFAULT_MODEL),
+            "input": {
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        { "image": format!("data:image/jpeg;base64,{}", image_base64) },
+                        { "text": prompt }
+                    ]
+                }]
+            },
+            "parameters": params
+        });
 
-    let tokens = resp.get("usage").map(|u| TokenUsage {
-        input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
-        output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
-    });
+        let resp: Value = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ApiError::VlmFailed(format!("调用通义千问 VL 失败: {e}")))?
+            .json()
+            .await
+            .map_err(|e| ApiError::VlmFailed(format!("解析 VL 响应失败: {e}")))?;
 
-    Ok(VlmResponse { content, tokens })
+        // 错误检查
+        if let Some(code) = resp.get("code") {
+            if code.as_str() != Some("Success") && !code.as_str().unwrap_or("").is_empty() {
+                return Err(ApiError::VlmFailed(format!(
+                    "通义千问 VL API 错误: {}",
+                    resp.get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("未知错误")
+                )));
+            }
+        }
+
+        let content = resp["output"]["choices"][0]["message"]["content"][0]["text"]
+            .as_str()
+            .ok_or_else(|| ApiError::VlmFailed("VL 响应格式错误".into()))?
+            .to_string();
+
+        let tokens = resp.get("usage").map(|u| TokenUsage {
+            input_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
+            output_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
+        });
+
+        Ok(VlmResponse { content, tokens })
+    })
+    .await
 }
 
 // ============================================================================
@@ -196,44 +199,47 @@ pub async fn call_vlm(
     temperature: Option<f64>,
     max_tokens: Option<u32>,
 ) -> crate::error::Result<VlmResponse> {
-    let provider = resolve_vlm(model.unwrap_or(""));
+    corework::platform::local_future(async move {
+        let provider = resolve_vlm(model.unwrap_or(""));
 
-    let api_key = if provider.env_key.is_empty() {
-        String::new()
-    } else {
-        std::env::var(provider.env_key)
-            .map_err(|_| ApiError::VlmFailed(format!("未设置 {} 环境变量", provider.env_key)))?
-    };
+        let api_key = if provider.env_key.is_empty() {
+            String::new()
+        } else {
+            std::env::var(provider.env_key)
+                .map_err(|_| ApiError::VlmFailed(format!("未设置 {} 环境变量", provider.env_key)))?
+        };
 
-    let model_name = model.unwrap_or(provider.default_model);
+        let model_name = model.unwrap_or(provider.default_model);
 
-    match provider.api_style {
-        VlmApiStyle::QwenNative => {
-            // 通义千问 VL 原生端点（忽略 system_message，使用 prompt）
-            call_qwen_vl(
-                image_path,
-                prompt,
-                Some(model_name),
-                temperature,
-                None,
-                max_tokens,
-            )
-            .await
+        match provider.api_style {
+            VlmApiStyle::QwenNative => {
+                // 通义千问 VL 原生端点（忽略 system_message，使用 prompt）
+                call_qwen_vl(
+                    image_path,
+                    prompt,
+                    Some(model_name),
+                    temperature,
+                    None,
+                    max_tokens,
+                )
+                .await
+            }
+            VlmApiStyle::OpenAIVision => {
+                crate::openai_compat::call_inner_vision(
+                    image_path,
+                    prompt,
+                    system_message,
+                    model_name,
+                    provider.base_url,
+                    &api_key,
+                    temperature,
+                    max_tokens,
+                )
+                .await
+            }
         }
-        VlmApiStyle::OpenAIVision => {
-            crate::openai_compat::call_inner_vision(
-                image_path,
-                prompt,
-                system_message,
-                model_name,
-                provider.base_url,
-                &api_key,
-                temperature,
-                max_tokens,
-            )
-            .await
-        }
-    }
+    })
+    .await
 }
 
 // ============================================================================
@@ -254,36 +260,39 @@ pub async fn call_video_vlm(
     model: Option<&str>,
     max_tokens: Option<u32>,
 ) -> crate::error::Result<VlmResponse> {
-    let provider = resolve_vlm_for_video(model.unwrap_or(""))
-        .map_err(|e| ApiError::VlmFailed(e.to_string()))?;
+    corework::platform::local_future(async move {
+        let provider = resolve_vlm_for_video(model.unwrap_or(""))
+            .map_err(|e| ApiError::VlmFailed(e.to_string()))?;
 
-    let api_key = if provider.env_key.is_empty() {
-        String::new()
-    } else {
-        std::env::var(provider.env_key)
-            .map_err(|_| ApiError::VlmFailed(format!("未设置 {} 环境变量", provider.env_key)))?
-    };
+        let api_key = if provider.env_key.is_empty() {
+            String::new()
+        } else {
+            std::env::var(provider.env_key)
+                .map_err(|_| ApiError::VlmFailed(format!("未设置 {} 环境变量", provider.env_key)))?
+        };
 
-    let model_name = model.unwrap_or(provider.default_model);
+        let model_name = model.unwrap_or(provider.default_model);
 
-    match provider.api_style {
-        VlmApiStyle::QwenNative => {
-            call_qwen_vl_video(video_path, prompt, model_name, &api_key, max_tokens).await
+        match provider.api_style {
+            VlmApiStyle::QwenNative => {
+                call_qwen_vl_video(video_path, prompt, model_name, &api_key, max_tokens).await
+            }
+            VlmApiStyle::OpenAIVision => {
+                crate::openai_compat::call_inner_vision_video(
+                    video_path,
+                    prompt,
+                    None,
+                    model_name,
+                    provider.base_url,
+                    &api_key,
+                    None,
+                    max_tokens,
+                )
+                .await
+            }
         }
-        VlmApiStyle::OpenAIVision => {
-            crate::openai_compat::call_inner_vision_video(
-                video_path,
-                prompt,
-                None,
-                model_name,
-                provider.base_url,
-                &api_key,
-                None,
-                max_tokens,
-            )
-            .await
-        }
-    }
+    })
+    .await
 }
 
 /// 通义千问 VL 原生视频理解（DashScope multimodal-generation，`video` base64 字段）
@@ -296,7 +305,7 @@ async fn call_qwen_vl_video(
 ) -> crate::error::Result<VlmResponse> {
     use base64::{engine::general_purpose, Engine as _};
 
-    let video_data = tokio::fs::read(video_path)
+    let video_data = corework::platform::fs::read(video_path)
         .await
         .map_err(|e| ApiError::VlmFailed(format!("读取视频文件失败 [{}]: {e}", video_path)))?;
     let video_base64 = general_purpose::STANDARD.encode(&video_data);

@@ -249,15 +249,7 @@ pub struct RuntimeRegistries {
     pub frozen: bool,
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct RuntimeLlmRegistry {
-    pub id: String,
-    pub current_model_uid: Option<u32>,
-    pub provider_count: usize,
-    pub model_count: usize,
-    pub model_uids: Vec<u32>,
-}
+pub use llm_gateway::registration::RuntimeLlmRegistry;
 
 pub struct RuntimeFacade {
     rt: Runtime,

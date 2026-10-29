@@ -1,0 +1,11 @@
+{
+  "name": "@orbit-runtime/browser",
+  "version": "0.5.3",
+  "type": "module",
+  "description": "Orbit Runtime in a dedicated browser Web Worker",
+  "license": "Apache-2.0",
+  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},"./schemas/*":"./dist/schemas/*","./manifest.json":"./dist/manifest.json"},
+  "files": ["dist", "README.md", "USAGE.zh-CN.md", "examples", "LICENSE", "NOTICE"],
+  "scripts": {"build": "node scripts/build.mjs", "build:wasm":"node scripts/build-wasm.mjs", "test": "node --test tests/*.test.mjs", "test:browser":"node tests/run-browser.mjs"},
+  "engines": {"node": ">=20"}
+}

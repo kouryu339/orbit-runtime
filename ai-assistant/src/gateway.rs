@@ -146,7 +146,7 @@ mod compaction_failure_tests {
     #[tokio::test]
     async fn panic_after_yield_returns_failure_and_allows_cleanup() {
         let outcome = catch_compaction_panic(async {
-            tokio::task::yield_now().await;
+            corework::platform::task::yield_now().await;
             panic!("summary failed");
         })
         .await;

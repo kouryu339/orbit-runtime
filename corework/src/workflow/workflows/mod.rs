@@ -8,6 +8,7 @@ pub mod reference;
 pub mod resource_api;
 pub mod revision;
 pub mod snapshot;
+pub mod source_store;
 
 pub use catalog::{
     preserve_workflow_blueprint_layout, WorkflowEditorSelection, WorkflowEditorSession,

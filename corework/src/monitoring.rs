@@ -1,8 +1,8 @@
 //! Lightweight telemetry and in-memory metrics primitives.
+use crate::platform::time::Instant;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Telemetry sink used by framework contexts and systems.
 #[async_trait]

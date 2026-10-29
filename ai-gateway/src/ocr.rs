@@ -73,6 +73,7 @@ impl SystemOperation for CallBaiduOcrSystem {
 
 /// 调用百度手写文字识别 API（从环境变量读取凭证）
 pub async fn call_baidu_ocr(image_path: &str) -> crate::error::Result<OcrResult> {
+    corework::platform::local_future(async move {
     let api_key = std::env::var("BAIDU_OCR_API_KEY")
         .map_err(|_| ApiError::OcrFailed("未设置 BAIDU_OCR_API_KEY 环境变量".into()))?;
     let secret_key = std::env::var("BAIDU_OCR_SECRET_KEY")
@@ -169,4 +170,5 @@ pub async fn call_baidu_ocr(image_path: &str) -> crate::error::Result<OcrResult>
         },
         elapsed_ms: None,
     })
+    }).await
 }

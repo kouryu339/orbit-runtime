@@ -404,9 +404,11 @@ pub struct DraftSaveToFileInput {
     pub file_path: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[buns_system("DraftSaveToFile")]
 pub struct DraftSaveToFileSystem;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl SystemOperation for DraftSaveToFileSystem {
     type Input = DraftSaveToFileInput;

@@ -2,6 +2,7 @@ use crate::ecs::{EcsUnitSnapshot, SpawnUnitCommand, UnitEntityId};
 use crate::error::Result;
 use crate::event_line::EventLinePolicy;
 use crate::execution_unit::AccessMode;
+use crate::platform::time::SystemTime;
 use crate::runtime_state::scope::StateScope;
 use crate::runtime_state::snapshots::{
     EventLineStateSnapshot, ResourceAccessSnapshot, SharedComponentStateSnapshot,
@@ -10,7 +11,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
-use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeStateBackendKind {

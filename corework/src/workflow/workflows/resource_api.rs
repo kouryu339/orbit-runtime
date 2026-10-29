@@ -179,7 +179,7 @@ impl WorkflowsModule {
                 })
                 .unwrap_or_else(|| self.workflows_dir.join(format!("{id}.workflow.json")));
             self.ensure_owned_resource_path(&path)?;
-            if commit && !restoring && current.is_none() && path.exists() {
+            if commit && !restoring && current.is_none() && self.source_store.exists(&path) {
                 return Err(invalid(format!(
                     "Resource file already exists: {}",
                     path.display()
@@ -354,7 +354,7 @@ impl WorkflowsModule {
         write: bool,
     ) -> Result<()> {
         let previous = if write {
-            match std::fs::read(path) {
+            match self.source_store.read(path) {
                 Ok(bytes) => Some(bytes),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(FrameworkError::SystemError(error.to_string())),
@@ -363,14 +363,15 @@ impl WorkflowsModule {
             None
         };
         if write {
-            revision::atomic_write(path, source.as_bytes())
+            self.source_store
+                .write_atomic(path, source.as_bytes())
                 .map_err(|error| FrameworkError::SystemError(error.to_string()))?;
         }
         if let Err(error) = self.unit.set_resource(key, value, None) {
             if write {
                 match previous {
-                    Some(bytes) => revision::atomic_write(path, &bytes),
-                    None => std::fs::remove_file(path),
+                    Some(bytes) => self.source_store.write_atomic(path, &bytes),
+                    None => self.source_store.remove(path),
                 }
                 .map_err(|rollback| {
                     invalid(format!(
@@ -388,20 +389,21 @@ impl WorkflowsModule {
     pub async fn restore_local_sources(&self, tools: &[RuntimeToolMetadata]) -> Result<usize> {
         let mut pending = Vec::new();
         let mut ids = HashSet::new();
-        for entry in
-            std::fs::read_dir(&self.workflows_dir).map_err(|error| invalid(error.to_string()))?
+        for path in self
+            .source_store
+            .list(&self.workflows_dir)
+            .map_err(|error| invalid(error.to_string()))?
         {
-            let path = entry.map_err(|error| invalid(error.to_string()))?.path();
-            if !path.is_file()
-                || !matches!(
-                    path.extension().and_then(|ext| ext.to_str()),
-                    Some("json" | "workflow")
-                )
-            {
+            if !matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("json" | "workflow")
+            ) {
                 continue;
             }
-            let source =
-                std::fs::read_to_string(&path).map_err(|error| invalid(error.to_string()))?;
+            let source = self
+                .source_store
+                .read_text(&path)
+                .map_err(|error| invalid(error.to_string()))?;
             if resource_source_kind(&source)?.is_none() {
                 tracing::warn!(path=%path.display(), "Legacy workflow source skipped; only orbit.workflow.resource/v1 is automatically loaded");
                 continue;

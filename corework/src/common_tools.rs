@@ -1,8 +1,8 @@
 //! Common AI-callable tools that are useful across products.
 
+use crate::platform::time::{Duration, Instant};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
@@ -163,7 +163,7 @@ impl SystemOperation for Wait {
                 Some(event) => WaitOutcome::Event(event),
                 None => WaitOutcome::Timeout,
             },
-            _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => WaitOutcome::Timeout,
+            _ = crate::platform::time::sleep(Duration::from_millis(timeout_ms)) => WaitOutcome::Timeout,
         };
 
         if let (Some(event_type), Some(handler)) = (event_type.as_deref(), event_handler.as_ref()) {
@@ -265,6 +265,7 @@ impl SystemOperation for ContinueThinking {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[define_operation(
     name = "WriteMarkdown",
     display_name = "将内容{content}按覆盖策略{overwrite}写入Markdown文件{file_name}，返回路径{path}和字节数{bytes_written}",
@@ -287,6 +288,7 @@ impl SystemOperation for ContinueThinking {
 )]
 pub struct WriteMarkdown;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl SystemOperation for WriteMarkdown {
     type Input = AIInput;
@@ -622,7 +624,7 @@ mod tests {
         let ctx = test_context();
         let publisher = ctx.world_event_bus.clone();
         let task_ctx = ctx.clone();
-        let wait_task = tokio::spawn(async move {
+        let wait_task = crate::platform::spawn(async move {
             Wait.execute(
                 AIInput {
                     input: "--timeout_ms 1000 --event_type agent-test.adversary.completed"
@@ -634,7 +636,7 @@ mod tests {
             .unwrap()
         });
 
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        crate::platform::time::sleep(Duration::from_millis(10)).await;
         publisher
             .publish(
                 BaseEvent::new(
@@ -658,7 +660,7 @@ mod tests {
         let ctx = test_context();
         let publisher = ctx.world_event_bus.clone();
         let task_ctx = ctx.clone();
-        let wait_task = tokio::spawn(async move {
+        let wait_task = crate::platform::spawn(async move {
             Wait.execute(
                 AIInput {
                     input: "--timeout_ms 30 --event_type done".to_string(),
@@ -669,7 +671,7 @@ mod tests {
             .unwrap()
         });
 
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        crate::platform::time::sleep(Duration::from_millis(5)).await;
         publisher
             .publish(BaseEvent::new("done", serde_json::json!({})).with_scope("scope-b"))
             .await

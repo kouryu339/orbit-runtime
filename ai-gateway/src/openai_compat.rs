@@ -16,6 +16,12 @@ use crate::types::{
     ChatMessage, FunctionCall, LlmResponse, TokenUsage, ToolCall, ToolDefinition, VlmResponse,
 };
 
+#[cfg(target_arch = "wasm32")]
+fn http_client() -> &'static Client {
+    static CLIENT: once_cell::sync::OnceCell<Client> = once_cell::sync::OnceCell::new();
+    CLIENT.get_or_init(Client::new)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn http_client() -> &'static Client {
     use once_cell::sync::OnceCell;
     static CLIENT: OnceCell<Client> = OnceCell::new();
@@ -29,6 +35,12 @@ fn http_client() -> &'static Client {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
+fn streaming_http_client() -> &'static Client {
+    static CLIENT: once_cell::sync::OnceCell<Client> = once_cell::sync::OnceCell::new();
+    CLIENT.get_or_init(Client::new)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn streaming_http_client() -> &'static Client {
     use once_cell::sync::OnceCell;
     static CLIENT: OnceCell<Client> = OnceCell::new();
@@ -140,7 +152,7 @@ pub async fn call_inner_with_reasoning(
     force_json: bool,
 ) -> crate::error::Result<LlmResponse> {
     crate::image_content::validate_model(model, messages)?;
-    let request_started = std::time::Instant::now();
+    let request_started = corework::platform::time::Instant::now();
     let client = http_client().clone();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
@@ -560,7 +572,7 @@ pub async fn call_inner_vision_video(
 ) -> crate::error::Result<VlmResponse> {
     use base64::{engine::general_purpose, Engine as _};
 
-    let video_data = tokio::fs::read(video_path)
+    let video_data = corework::platform::fs::read(video_path)
         .await
         .map_err(|e| ApiError::VlmFailed(format!("failed to read video [{}]: {e}", video_path)))?;
     let video_base64 = general_purpose::STANDARD.encode(&video_data);
@@ -730,7 +742,7 @@ where
     crate::image_content::validate_model(model, messages)?;
     use std::collections::BTreeMap;
 
-    let request_started = std::time::Instant::now();
+    let request_started = corework::platform::time::Instant::now();
     let client = streaming_http_client().clone();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 

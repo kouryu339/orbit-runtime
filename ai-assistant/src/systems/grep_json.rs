@@ -542,7 +542,7 @@ impl SystemOperation for GrepJsonSystem {
             let _permit = permit;
             query(&service, &request, &flag)
         });
-        match tokio::time::timeout(timeout, task).await {
+        match corework::platform::time::timeout(timeout, task).await {
             Ok(Ok(Ok(value))) => {
                 let text = value.to_string();
                 Ok(AIOutput::success(value, text))

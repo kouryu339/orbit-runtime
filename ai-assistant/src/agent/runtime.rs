@@ -765,7 +765,7 @@ impl AgentRuntime {
             }
             self.sm.tick().await?;
             spins += 1;
-            tokio::task::yield_now().await;
+            corework::platform::task::yield_now().await;
         }
 
         self.persist_cache_snapshot().await;
@@ -946,7 +946,7 @@ mod tests {
         let current = control.begin_thinking_request();
         let token = current.token();
         control.request_thinking_pause(AgentPauseMode::DetachTool);
-        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        corework::platform::time::timeout(std::time::Duration::from_millis(100), async {
             tokio::select! {
                 biased;
                 _ = token.cancelled() => {},

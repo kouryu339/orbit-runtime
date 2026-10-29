@@ -17,7 +17,7 @@ async fn next_with_timeout<S>(stream: &mut S, timeout: Duration) -> Result<Optio
 where
     S: Stream + Unpin,
 {
-    tokio::time::timeout(timeout, stream.next())
+    corework::platform::time::timeout(timeout, stream.next())
         .await
         .map_err(|_| ())
 }

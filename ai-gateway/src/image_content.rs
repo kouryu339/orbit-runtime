@@ -119,7 +119,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "orbit-image-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
+            corework::platform::time::system_time_now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()

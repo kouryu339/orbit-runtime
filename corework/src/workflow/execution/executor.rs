@@ -284,6 +284,11 @@ impl BlueprintExecutor {
         ctx: &mut ExecutionContext,
         node_name: &str,
     ) -> Result<(NodeOutput, Option<String>)> {
+        // Hand controls back to the Worker between nodes, even for pure loops.
+        #[cfg(target_arch = "wasm32")]
+        if ctx.flow().current_step() % 32 == 0 {
+            crate::platform::task::yield_now().await;
+        }
         let node =
             self.nodes.get(node_name).cloned().ok_or_else(|| {
                 FrameworkError::SystemError(format!("Node not found: {}", node_name))

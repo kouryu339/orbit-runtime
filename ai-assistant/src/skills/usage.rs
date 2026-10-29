@@ -151,17 +151,18 @@ mod tests {
             .unwrap();
         let names = BTreeSet::from(["usage-race-role".to_string()]);
         let (attempt, attempted) = tokio::sync::oneshot::channel();
-        let mut writer = tokio::spawn(async move {
+        let mut writer = corework::platform::spawn(async move {
             let _ = attempt.send(());
             let _update = SKILL_UPDATE_GATE.write().await;
             dependencies(Some(&names)).await.unwrap()
         });
         attempted.await.unwrap();
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(20), &mut writer)
-                .await
-                .is_err()
-        );
+        assert!(corework::platform::time::timeout(
+            std::time::Duration::from_millis(20),
+            &mut writer
+        )
+        .await
+        .is_err());
         cache
             .set(
                 keys::MAIN_SKILLS,

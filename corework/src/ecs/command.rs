@@ -1,6 +1,6 @@
 use crate::ecs::components::ScopeComponent;
 use crate::execution_unit::UnitType;
-use std::time::SystemTime;
+use crate::platform::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct SpawnUnitCommand {

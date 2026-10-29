@@ -13,6 +13,8 @@
     orbit-runtime-runtime-vX.Y.Z-linux-x86_64.zip
     orbit-runtime-frontend-svelte-vX.Y.Z.zip
     orbit-runtime-sdk-vX.Y.Z.zip
+    orbit-runtime-browser-vX.Y.Z.zip
+    orbit-runtime-browser-vX.Y.Z.tgz
 
   Each package contains:
     include\agent_runtime.h
@@ -43,6 +45,9 @@
 
 .PARAMETER SkipFrontendBuild
   Reuse the already built and verified ui/svelte/dist-library output.
+
+.PARAMETER SkipBrowserBuild
+  Reuse the already built and verified sdk/runtime/js/dist output.
 
 .PARAMETER Clean
   Remove existing output and staging directories before packaging.
@@ -76,6 +81,8 @@ param(
     [switch]$FrontendOnly,
 
     [switch]$SkipFrontendBuild,
+
+    [switch]$SkipBrowserBuild,
 
     [switch]$Clean,
 
@@ -174,6 +181,8 @@ schemas/rpc-endpoint-add.schema.json. Hosts persist accepted endpoint configurat
 Matching SDK sources are distributed separately as $PackageName-sdk-$versionLabel.zip.
 Extract that archive's sdk directory here to use the included verification scripts.
 The Svelte frontend is a separate platform-independent release asset.
+JS/TS browser hosts use the separate browser ZIP or installable TGZ with WASM.
+See docs/browser-wasm-usage.zh-CN.md for capabilities and deployment constraints.
 See build-info.json for the source branch, commit, and dirty-worktree status.
 $(if ($LocalPreview) { 'Local preview: load this native library by explicit path. SDK online-download defaults still point to the published stable release.' })
 
@@ -249,6 +258,7 @@ function New-ReleasePackage($platform) {
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
     $releaseNotes = Join-Path $repo "agent_runtime_ffi/docs/releases/v$($Version.TrimStart('v'))/release-notes.md"
     if (Test-Path -LiteralPath $releaseNotes) { Copy-RequiredFile $releaseNotes (Join-Path $packageRoot 'docs/release-notes.md') }
+    Copy-RequiredFile (Join-Path $repo 'sdk/runtime/js/USAGE.zh-CN.md') (Join-Path $packageRoot 'docs/browser-wasm-usage.zh-CN.md')
     foreach ($language in @('zh', 'en')) {
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\12-workflow-resource-api.md") (Join-Path $packageRoot "docs\$language\12-workflow-resource-api.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\13-dynamic-agent-clusters.md") (Join-Path $packageRoot "docs\$language\13-dynamic-agent-clusters.md")
@@ -271,6 +281,7 @@ function New-ReleasePackage($platform) {
         worktree_dirty = [bool](@(git -C $repo status --porcelain --untracked-files=normal).Count)
         built_utc = [DateTime]::UtcNow.ToString('o')
         native_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $nativePath).Hash.ToLowerInvariant()
+        cargo_lock_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $repo 'Cargo.lock')).Hash.ToLowerInvariant()
         workflow_schema = 'orbit.workflow.resource/v1'
         compiler_version = ([regex]::Match((Get-Content -Raw (Join-Path $repo 'corework/src/workflow/logic.rs')), 'COMPILER_VERSION: &str = "([^"]+)"')).Groups[1].Value
     }
@@ -370,6 +381,34 @@ function New-SdkPackage {
     Complete-Archive $root $name 'sdk-sources'
 }
 
+function New-BrowserPackage {
+    $browser = Join-Path $repo 'sdk/runtime/js'
+    $browserVersion = (Get-Content -Raw (Join-Path $browser 'package.json') | ConvertFrom-Json).version
+    if ($browserVersion -ne $Version.TrimStart('v')) { throw 'browser SDK version does not match release' }
+    Push-Location $browser
+    try {
+        if (-not $SkipBrowserBuild) {
+            & npm.cmd run build:wasm | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'browser WASM build failed' }
+        }
+        $packed = & npm.cmd pack --json --pack-destination $OutputDir
+        if ($LASTEXITCODE -ne 0) { throw 'browser SDK pack failed' }
+        $packed = ($packed -join "`n") | ConvertFrom-Json
+    } finally { Pop-Location }
+    $name = "$PackageName-browser-v$($Version.TrimStart('v'))"
+    $tgz = Join-Path $OutputDir "$name.tgz"
+    Move-Item -Force -LiteralPath (Join-Path $OutputDir $packed[0].filename) -Destination $tgz
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tgz).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$tgz.sha256" -Encoding ASCII -Value "$hash  $name.tgz"
+    $root = Join-Path $stagingRoot $name
+    Remove-GeneratedDirectory $root $stagingRoot
+    New-Directory $root
+    & tar -xzf $tgz -C $root --strip-components=1
+    if ($LASTEXITCODE -ne 0) { throw 'browser SDK archive extraction failed' }
+    [pscustomobject]@{ Platform = 'browser-npm'; Package = $tgz; Sha256 = "$tgz.sha256" }
+    Complete-Archive $root $name 'browser-wasm'
+}
+
 function Update-SdkReleaseMetadata {
     # SDK sources are outside native ZIPs so their pinned archive hashes cannot
     # create a circular hash dependency.
@@ -434,6 +473,7 @@ if (-not $FrontendOnly) {
 }
 $results += New-FrontendPackage
 if (-not $FrontendOnly) {
+    $results += New-BrowserPackage
     if ($LocalPreview) { Write-Warning 'Local preview: stable SDK online-download pins are unchanged; load the packaged library explicitly.' }
     elseif ($Targets -eq 'all') { Update-SdkReleaseMetadata }
     else { Write-Warning 'Single-platform preview: SDK download pins are unchanged; load the packaged library explicitly.' }

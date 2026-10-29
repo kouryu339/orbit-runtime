@@ -6,7 +6,9 @@
 
 pub mod agent_route;
 pub mod agent_wake;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod grep;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod grep_json;
 pub mod history;
 pub mod history_read;
@@ -213,7 +215,7 @@ impl SystemOperation for UpdateSkillsSystem {
                 .ok()
                 .flatten();
             let skills_clone = desired.clone();
-            tokio::spawn(async move {
+            corework::platform::spawn(async move {
                 let default_agent_id = crate::persistence::current_default_agent_id();
                 let result = if let Some(aid) = agent_id.filter(|aid| aid != &default_agent_id) {
                     crate::persistence::save_agent_skill_state(&aid, skills_clone).await

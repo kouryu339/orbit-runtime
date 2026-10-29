@@ -26,6 +26,9 @@ Cargo.lock
 .idea
 .cargo
 node_modules/
+sdk/runtime/js/dist/
+sdk/runtime/js/LICENSE
+sdk/runtime/js/NOTICE
 ui/lit/playground-dist/
 ui/svelte/dist/
 ui/svelte/dist-library/

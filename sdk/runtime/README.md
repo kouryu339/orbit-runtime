@@ -1,5 +1,10 @@
 # Corework Runtime Host SDK
 
+Browser JS/TS hosts use the independent [WASM Worker SDK](./js/README.md)
+(`@orbit-runtime/browser`, install the `.tgz` from the matching GitHub Release).
+Native hosts continue using DLL/SO SDKs below. Browser capabilities differ;
+see the [browser usage contract](./js/USAGE.zh-CN.md).
+
 > Workflow resources now expose list, register, remove, validate, promote and execute. Legacy API descriptions below are historical. See [the current contract](../../agent_runtime_ffi/docs/en/12-workflow-resource-api.md).
 
 

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use corework::cache::CacheExt;
 use corework::event::EventBus;
+use corework::platform::task::JoinHandle;
 use tokio::sync::{Mutex, RwLock};
-use tokio::task::JoinHandle;
 
 use super::runtime::{AgentId, AgentRuntime};
 use crate::state::{events, states};
@@ -358,7 +358,7 @@ impl AgentCluster {
             state = %driver.sm.current_state(),
             "agent driver spawn"
         );
-        let handle = tokio::spawn(async move {
+        let handle = corework::platform::spawn(async move {
             tracing::debug!(
                 agent_id = %driver.id,
                 state = %driver.sm.current_state(),

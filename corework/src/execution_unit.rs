@@ -38,7 +38,7 @@ pub struct ResourceClaim {
     pub resource_key: String,
     pub owner_id: String,
     pub access_mode: AccessMode,
-    pub claimed_at: std::time::SystemTime,
+    pub claimed_at: crate::platform::time::SystemTime,
 }
 
 pub struct ResourceRegistry {
@@ -84,7 +84,7 @@ impl ResourceRegistry {
                 resource_key: resource_key.to_string(),
                 owner_id: owner_id.to_string(),
                 access_mode,
-                claimed_at: std::time::SystemTime::now(),
+                claimed_at: crate::platform::time::system_time_now(),
             },
         );
 

@@ -156,6 +156,7 @@ impl WorkflowExecutionContext {
 /// - `workflows_dir`：本地工作流持久化目录（`app_local_data_dir/workflows/`）
 #[derive(Clone)]
 pub struct WorkflowsModule {
+    pub(crate) source_store: Arc<dyn super::source_store::WorkflowSourceStore>,
     runtime_registry: Option<Arc<crate::system::SystemRegistry>>,
     pub(crate) unit: Module,
     pub(crate) workflows_dir: PathBuf,
@@ -172,7 +173,12 @@ impl WorkflowsModule {
     pub fn new(workflows_dir: PathBuf) -> Result<Self> {
         let unit = create_module("workflows")?;
         let event_bus = unit.global_event_bus();
-        Self::new_with_unit_and_event_bus(workflows_dir, unit, event_bus)
+        Self::new_with_unit_and_event_bus(
+            workflows_dir,
+            unit,
+            event_bus,
+            Arc::new(super::source_store::FileWorkflowSourceStore),
+        )
     }
 
     pub fn new_with_event_bus(
@@ -180,13 +186,28 @@ impl WorkflowsModule {
         event_bus: Arc<dyn EventBus>,
     ) -> Result<Self> {
         let unit = create_module("workflows")?;
-        Self::new_with_unit_and_event_bus(workflows_dir, unit, event_bus)
+        Self::new_with_unit_and_event_bus(
+            workflows_dir,
+            unit,
+            event_bus,
+            Arc::new(super::source_store::FileWorkflowSourceStore),
+        )
+    }
+
+    pub fn new_with_source_store(
+        root: PathBuf,
+        event_bus: Arc<dyn EventBus>,
+        source_store: Arc<dyn super::source_store::WorkflowSourceStore>,
+    ) -> Result<Self> {
+        let unit = create_module("workflows")?;
+        Self::new_with_unit_and_event_bus(root, unit, event_bus, source_store)
     }
 
     fn new_with_unit_and_event_bus(
         workflows_dir: PathBuf,
         unit: Module,
         event_bus: Arc<dyn EventBus>,
+        source_store: Arc<dyn super::source_store::WorkflowSourceStore>,
     ) -> Result<Self> {
         for key in &[
             REGISTRY,
@@ -214,7 +235,7 @@ impl WorkflowsModule {
         )?;
 
         // 确保持久化目录存在
-        std::fs::create_dir_all(&workflows_dir).map_err(|e| {
+        source_store.initialize(&workflows_dir).map_err(|e| {
             FrameworkError::SystemError(format!(
                 "创建工作流持久化目录失败 {:?}: {}",
                 workflows_dir, e
@@ -227,6 +248,7 @@ impl WorkflowsModule {
         );
 
         Ok(Self {
+            source_store,
             runtime_registry: None,
             unit,
             workflows_dir,
@@ -300,7 +322,7 @@ impl WorkflowsModule {
                 continue;
             }
 
-            match std::fs::read_to_string(&path) {
+            match self.source_store.read_text(&path) {
                 Ok(json_str) => {
                     if super::resource_api::resource_source_kind(&json_str)?.is_some() {
                         continue;
@@ -377,9 +399,11 @@ impl WorkflowsModule {
             FrameworkError::SystemError(format!("序列化 BlueprintJson 失败: {}", e))
         })?;
 
-        std::fs::write(&save_path, &json_pretty).map_err(|e| {
-            FrameworkError::SystemError(format!("保存工作流文件失败 {:?}: {}", save_path, e))
-        })?;
+        self.source_store
+            .write_atomic(&save_path, json_pretty.as_bytes())
+            .map_err(|e| {
+                FrameworkError::SystemError(format!("保存工作流文件失败 {:?}: {}", save_path, e))
+            })?;
 
         let file_path_str = save_path.to_string_lossy().to_string();
         let key = Self::make_key(&blueprint.metadata);
@@ -503,7 +527,7 @@ impl WorkflowsModule {
             .cloned()
             .collect::<Vec<_>>();
         self.unit.set_resource(REGISTRY, &next_registry, None)?;
-        if let Err(error) = std::fs::remove_file(&path) {
+        if let Err(error) = self.source_store.remove(&path) {
             let _ = self.unit.set_resource(REGISTRY, &registry, None);
             return Err(FrameworkError::SystemError(format!(
                 "delete workflow resource file '{}' failed: {}",
@@ -544,7 +568,7 @@ impl WorkflowsModule {
         // Local 工作流同时删除文件
         if let Some(e) = entry {
             if e.source == WorkflowSource::Local && !e.file_path.is_empty() {
-                let _ = std::fs::remove_file(&e.file_path);
+                let _ = self.source_store.remove(std::path::Path::new(&e.file_path));
             }
         }
 
@@ -661,7 +685,7 @@ impl WorkflowsModule {
         inputs: HashMap<String, JsonValue>,
     ) -> Result<HashMap<String, JsonValue>> {
         tracing::debug!(file_path = %file_path, "workflow execution started");
-        let t = std::time::Instant::now();
+        let t = crate::platform::time::Instant::now();
         let blueprint =
             BlueprintJson::from_workflow_file(file_path).map_err(FrameworkError::SystemError)?;
         let outputs = self.execute_from_blueprint(blueprint, inputs).await?;
@@ -688,7 +712,7 @@ impl WorkflowsModule {
         let workflow_id = blueprint.metadata.id.clone();
         let workflow_name = blueprint.metadata.name.clone();
         tracing::debug!(workflow_name = %workflow_name, "inline workflow execution started");
-        let t = std::time::Instant::now();
+        let t = crate::platform::time::Instant::now();
         let ctx = self.create_run_context();
         let (references, _occupancy) = self.admit_workflow_execution(&blueprint)?;
         let loaded = BlueprintLoader::with_workflows(Arc::new(references))
@@ -875,7 +899,7 @@ impl WorkflowsModule {
         .await;
         let event_bus = Arc::clone(&self.event_bus);
         let event_workflow_id = workflow_id.clone();
-        let trace_forwarder = tokio::spawn(async move {
+        let trace_forwarder = crate::platform::spawn(async move {
             while let Some(event) = trace_event_rx.recv().await {
                 publish_trace_event(&event_bus, &event_workflow_id, event).await;
             }
@@ -1113,7 +1137,7 @@ impl WorkflowsModule {
             None => self.workflows_dir.join(format!("{}.workflow.json", id)),
         };
         self.ensure_owned_resource_path(&path)?;
-        if !update && path.exists() {
+        if !update && self.source_store.exists(&path) {
             return Err(FrameworkError::InvalidOperation(format!(
                 "workflow resource file '{}' already exists",
                 path.display()
@@ -1122,7 +1146,10 @@ impl WorkflowsModule {
 
         if existing.is_some() && prepared.and_then(|p| p.logic.as_ref()).is_none() {
             let stored: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(&path).map_err(|e| FrameworkError::SystemError(e.to_string()))?,
+                &self
+                    .source_store
+                    .read(&path)
+                    .map_err(|e| FrameworkError::SystemError(e.to_string()))?,
             )?;
             if stored.get("logic").is_some_and(|v| !v.is_null()) {
                 return Err(FrameworkError::InvalidOperation(
@@ -1158,14 +1185,16 @@ impl WorkflowsModule {
         let json = serde_json::to_string_pretty(&document).map_err(|error| {
             FrameworkError::SystemError(format!("serialize workflow resource failed: {error}"))
         })?;
-        let previous_file = std::fs::read(&path).ok();
-        super::revision::atomic_write(&path, json.as_bytes()).map_err(|error| {
-            FrameworkError::SystemError(format!(
-                "write workflow resource file '{}' failed: {}",
-                path.display(),
-                error
-            ))
-        })?;
+        let previous_file = self.source_store.read(&path).ok();
+        self.source_store
+            .write_atomic(&path, json.as_bytes())
+            .map_err(|error| {
+                FrameworkError::SystemError(format!(
+                    "write workflow resource file '{}' failed: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
 
         let entry = BlueprintEntry {
             accepted: None,
@@ -1182,14 +1211,16 @@ impl WorkflowsModule {
         if let Err(error) = self.unit.set_resource(REGISTRY, &next_registry, None) {
             match previous_file {
                 Some(content) => {
-                    super::revision::atomic_write(&path, &content).map_err(|rollback| {
-                        FrameworkError::SystemError(format!(
-                            "Registry update failed: {error}; rollback failed: {rollback}"
-                        ))
-                    })?;
+                    self.source_store
+                        .write_atomic(&path, &content)
+                        .map_err(|rollback| {
+                            FrameworkError::SystemError(format!(
+                                "Registry update failed: {error}; rollback failed: {rollback}"
+                            ))
+                        })?;
                 }
                 None => {
-                    std::fs::remove_file(&path).map_err(|rollback| {
+                    self.source_store.remove(&path).map_err(|rollback| {
                         FrameworkError::SystemError(format!(
                             "Registry update failed: {error}; rollback failed: {rollback}"
                         ))

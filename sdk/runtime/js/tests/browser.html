@@ -1,0 +1,18 @@
+<!doctype html><meta charset="UTF-8" /><title>Orbit WASM verification</title>
+<body>
+  <pre id="result">Running</pre>
+  <script type="module">
+    import { run } from "./browser-full.mjs";
+    window.verification = run().then(
+      (result) => {
+        document.querySelector("#result").textContent = JSON.stringify(result);
+        return result;
+      },
+      (error) => {
+        const result = { ok: false, error: error.stack };
+        document.querySelector("#result").textContent = JSON.stringify(result);
+        return result;
+      },
+    );
+  </script>
+</body>

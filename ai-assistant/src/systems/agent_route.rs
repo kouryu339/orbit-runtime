@@ -770,7 +770,7 @@ mod tests {
         let first = {
             let cluster = Arc::clone(&cluster);
             let ledger = Arc::clone(&ledger);
-            tokio::spawn(async move {
+            corework::platform::spawn(async move {
                 record_focus_change_if_needed(&cluster, &ledger, "agent_1".into(), "concurrent")
                     .await
                     .unwrap();
@@ -779,7 +779,7 @@ mod tests {
         let second = {
             let cluster = Arc::clone(&cluster);
             let ledger = Arc::clone(&ledger);
-            tokio::spawn(async move {
+            corework::platform::spawn(async move {
                 record_focus_change_if_needed(&cluster, &ledger, "agent_2".into(), "concurrent")
                     .await
                     .unwrap();

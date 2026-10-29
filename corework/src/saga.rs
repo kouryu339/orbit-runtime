@@ -115,7 +115,7 @@ impl SimpleSaga {
                             delay_ms = delay.as_millis(),
                             "Step failed, retrying..."
                         );
-                        tokio::time::sleep(delay).await;
+                        crate::platform::time::sleep(delay).await;
                         attempt += 1;
                     } else {
                         return Err(e);

@@ -17,6 +17,7 @@ const CONVERSATION_INDEX_RESOURCE: &str = "manager:conversation_index";
 const RUNTIME_STATUS_RESOURCE: &str = "manager:runtime_status";
 
 pub struct ConversationManager {
+    framework: FrameworkState,
     unit: Arc<ExecutionUnit>,
     conversations: RwLock<HashMap<String, Arc<ConversationRuntime>>>,
     index_refresh: Mutex<()>,
@@ -61,7 +62,7 @@ impl ConversationManager {
     pub async fn new(framework: FrameworkState) -> Result<Self> {
         let unit = Arc::new(ExecutionUnit::new_root_in_scope(
             UnitType::Module,
-            framework,
+            framework.clone(),
             MANAGER_SCOPE_ID,
         ));
         let cache = unit.cache();
@@ -77,6 +78,7 @@ impl ConversationManager {
             .await?;
 
         Ok(Self {
+            framework,
             unit,
             conversations: RwLock::new(HashMap::new()),
             index_refresh: Mutex::new(()),
@@ -110,7 +112,9 @@ impl ConversationManager {
             }
         }
 
-        let conversation = Conversation::new_with_options(options, export_event_bus).await?;
+        let conversation =
+            Conversation::new_with_framework(options, export_event_bus, self.framework.clone())
+                .await?;
         let runtime = Arc::new(ConversationRuntime::new(
             conversation,
             Arc::clone(&self.runtime_llm_request_headers),
@@ -971,6 +975,75 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::Barrier;
 
+    struct MetadataProbe;
+
+    #[async_trait::async_trait]
+    impl corework::workflow::dynamic_node::DynamicExecute for MetadataProbe {
+        async fn execute_dynamic(
+            &self,
+            _: std::collections::HashMap<String, serde_json::Value>,
+            _: &corework::orchestration::Context,
+        ) -> corework::error::Result<serde_json::Value> {
+            Ok(serde_json::json!({"result":{},"to_ai":"fixture","error_code":0}))
+        }
+    }
+
+    fn publish_metadata(registry: &corework::system::SystemRegistry, name: &str) {
+        let metadata=serde_json::from_value(serde_json::json!({
+            "name":name,"description":"Runtime-owned metadata fixture", "readonly":true,
+            "endpoint_id":"fixture","service":corework::rpc_tool::RPC_TOOL_SERVICE_V1,"method":"Execute"
+        })).unwrap();
+        registry
+            .append_runtime_tools(vec![(metadata, Arc::new(MetadataProbe))])
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn agent_schema_inherits_initial_and_late_runtime_rpc_metadata() {
+        let mut framework = corework::world::FrameworkState::initialize().unwrap();
+        let registry = Arc::new(corework::system::SystemRegistry::isolated_runtime());
+        framework.registry = registry.clone();
+        publish_metadata(&registry, "InitialRpcMetadataProbe");
+        let manager = super::ConversationManager::new(framework).await.unwrap();
+        let id = format!("rpc-schema-{}", uuid::Uuid::new_v4());
+        manager
+            .create_conversation(
+                crate::ConversationOptions::new(&id, crate::AIAssistantConfig::default()),
+                Arc::new(corework::event::InMemoryEventBus::new()),
+            )
+            .await
+            .unwrap();
+        let runtime = manager.get(&id).await.unwrap();
+        let assistant = runtime.conversation.default_agent().lock().await;
+        let agent_context = assistant.state_machine().unwrap().unit().create_context();
+        drop(assistant);
+        assert!(std::ptr::eq(agent_context.registry(), registry.as_ref()));
+        publish_metadata(&registry, "LateRpcMetadataProbe");
+        let names = vec![
+            "InitialRpcMetadataProbe".to_string(),
+            "LateRpcMetadataProbe".to_string(),
+        ];
+        let definitions = crate::tool_schema::definitions_for_active_tools_in_registry(
+            &names,
+            true,
+            false,
+            Some(agent_context.registry()),
+        )
+        .unwrap();
+        assert_eq!(
+            definitions
+                .iter()
+                .map(|tool| tool.function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["InitialRpcMetadataProbe", "LateRpcMetadataProbe"]
+        );
+        assert!(
+            crate::runtime_tools::get_runtime_tool("InitialRpcMetadataProbe").is_none(),
+            "the fix must not leak instance tools into the global registry"
+        );
+        manager.close(&id).await.unwrap();
+    }
+
     #[tokio::test]
     async fn same_conversation_commands_are_serialized() {
         let gate = Arc::new(ConversationCommandGate::new());
@@ -982,11 +1055,11 @@ mod tests {
             let gate = Arc::clone(&gate);
             let active = Arc::clone(&active);
             let max_active = Arc::clone(&max_active);
-            tasks.push(tokio::spawn(async move {
+            tasks.push(corework::platform::spawn(async move {
                 let _guard = gate.lock("conversation-a").await.unwrap();
                 let current = active.fetch_add(1, Ordering::SeqCst) + 1;
                 max_active.fetch_max(current, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                corework::platform::time::sleep(Duration::from_millis(5)).await;
                 active.fetch_sub(1, Ordering::SeqCst);
             }));
         }
@@ -1006,7 +1079,7 @@ mod tests {
         let task_a = {
             let gate = Arc::clone(&gate_a);
             let barrier = Arc::clone(&barrier);
-            tokio::spawn(async move {
+            corework::platform::spawn(async move {
                 let _guard = gate.lock("conversation-a").await.unwrap();
                 barrier.wait().await;
             })
@@ -1014,13 +1087,13 @@ mod tests {
         let task_b = {
             let gate = Arc::clone(&gate_b);
             let barrier = Arc::clone(&barrier);
-            tokio::spawn(async move {
+            corework::platform::spawn(async move {
                 let _guard = gate.lock("conversation-b").await.unwrap();
                 barrier.wait().await;
             })
         };
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        corework::platform::time::timeout(Duration::from_secs(1), async {
             task_a.await.unwrap();
             task_b.await.unwrap();
         })

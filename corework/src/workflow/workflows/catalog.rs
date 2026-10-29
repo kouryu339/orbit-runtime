@@ -45,6 +45,31 @@ fn workflow_source_step(
 }
 
 pub(crate) const DRAFT_REGISTRY: &str = "wf:draft_registry";
+
+/// Opaque rollback point for a host durability transaction. Execution graphs
+/// already reserved by active runs retain their own immutable references.
+pub struct WorkflowCatalogCheckpoint {
+    registered: Vec<BlueprintEntry>,
+    drafts: Vec<DraftWorkflowEntry>,
+}
+
+impl WorkflowsModule {
+    pub fn checkpoint_catalog(&self) -> Result<WorkflowCatalogCheckpoint> {
+        let _guard = self.reference_lock.lock();
+        Ok(WorkflowCatalogCheckpoint {
+            registered: self.get_registry()?,
+            drafts: self.get_draft_registry()?,
+        })
+    }
+    pub fn restore_catalog(&self, checkpoint: WorkflowCatalogCheckpoint) -> Result<()> {
+        let _guard = self.reference_lock.lock();
+        self.unit
+            .set_resource(super::executor::REGISTRY, &checkpoint.registered, None)?;
+        self.unit
+            .set_resource(DRAFT_REGISTRY, &checkpoint.drafts, None)?;
+        Ok(())
+    }
+}
 pub const WORKFLOW_RESOURCE_CHANGED_EVENT: &str = "workflow.resource_changed";
 pub const WORKFLOW_EXECUTION_STARTED_EVENT: &str = "workflow.execution_started";
 pub const WORKFLOW_NODE_STARTED_EVENT: &str = "workflow.node_started";
@@ -498,7 +523,7 @@ impl WorkflowsModule {
                 self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
                 if let Some(path) = &entry.resource_path {
                     let path = std::path::Path::new(path);
-                    if let Err(error) = std::fs::remove_file(path) {
+                    if let Err(error) = self.source_store.remove(path) {
                         drafts.insert(position, entry.clone());
                         self.unit.set_resource(DRAFT_REGISTRY, &drafts, None)?;
                         return Err(FrameworkError::SystemError(error.to_string()));

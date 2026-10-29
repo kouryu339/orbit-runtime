@@ -6,6 +6,7 @@ use corework::cache::CacheExt;
 use corework::define_operation;
 use corework::error::FrameworkError;
 use corework::orchestration::Context;
+use corework::platform::time::Instant;
 use corework::rpc_tool::RuntimeToolMetadata;
 use corework::system::SystemOperation;
 use corework::workflow::execution::WorkflowToAiMode;
@@ -17,7 +18,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
-use std::time::Instant;
 
 #[derive(Clone, Default)]
 pub struct WorkflowRuntimeToolCatalog {
@@ -150,6 +150,7 @@ fn sync_selection(ctx: &Context, workflow_id: &str, revision: u64) {
     }
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn clear_selection_if_deleted(ctx: &Context, workflow_id: &str) {
     if let Some(session) = editor_session(ctx) {
         if session
@@ -161,6 +162,7 @@ fn clear_selection_if_deleted(ctx: &Context, workflow_id: &str) {
     }
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn required_revision(args: &SimpleArgs) -> Result<u64, AIOutput> {
     let raw = args
         .safe_require("expected_revision")?
@@ -513,6 +515,7 @@ impl SystemOperation for CompileWorkflow {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[define_operation(
     name = "promoteWorkflow",
     workflow_enabled = false,
@@ -531,6 +534,7 @@ impl SystemOperation for CompileWorkflow {
 )]
 pub struct PromoteWorkflow;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl SystemOperation for PromoteWorkflow {
     type Input = AIInput;
@@ -575,6 +579,7 @@ impl SystemOperation for PromoteWorkflow {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[define_operation(
     name = "removeWorkflow",
     workflow_enabled = false,
@@ -593,6 +598,7 @@ impl SystemOperation for PromoteWorkflow {
 )]
 pub struct RemoveWorkflow;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl SystemOperation for RemoveWorkflow {
     type Input = AIInput;
@@ -805,6 +811,7 @@ impl SystemOperation for ExecuteWorkflowScript {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[define_operation(
     name = "registerWorkflow",
     workflow_enabled = false,
@@ -816,6 +823,7 @@ impl SystemOperation for ExecuteWorkflowScript {
 )]
 pub struct RegisterWorkflow;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl SystemOperation for RegisterWorkflow {
     type Input = AIInput;

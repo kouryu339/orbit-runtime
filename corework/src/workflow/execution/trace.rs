@@ -1,10 +1,10 @@
 use crate::ai_system::AIOutput;
+use crate::platform::time::Instant;
 use crate::workflow::core::DataValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc::Sender;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -664,7 +664,7 @@ pub(crate) fn new_workflow_execution_id(prefix: &str) -> String {
 }
 
 fn now_timestamp() -> String {
-    chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()
+    chrono::DateTime::<chrono::Utc>::from(crate::platform::time::system_time_now()).to_rfc3339()
 }
 
 fn bounded_text(value: &str, max_bytes: usize) -> String {

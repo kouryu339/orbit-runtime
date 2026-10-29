@@ -810,7 +810,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut tasks = tokio::task::JoinSet::new();
+        let mut tasks = corework::platform::task::JoinSet::new();
         for index in 0..50usize {
             let ctx = ctx.clone();
             tasks.spawn(async move {

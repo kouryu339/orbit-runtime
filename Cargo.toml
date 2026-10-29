@@ -5,6 +5,7 @@ members = [
     "ai-gateway",
     "ai-assistant",
     "agent_runtime_ffi",
+    "agent_runtime_wasm",
     "sdk/runtime/rust",
     "sdk/rpctools/rust",
 ]

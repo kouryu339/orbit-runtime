@@ -7,11 +7,11 @@ use crate::ecs::entity::UnitEntityId;
 use crate::ecs::storage::ComponentStore;
 use crate::event_line::EventLinePolicy;
 use crate::execution_unit::{AccessMode, UnitType};
+use crate::platform::time::SystemTime;
 use crate::runtime_state::snapshots::{EventLineStateSnapshot, SharedComponentStateSnapshot};
 use dashmap::{DashMap, DashSet};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct EcsUnitSnapshot {
@@ -147,7 +147,7 @@ impl EcsWorld {
     }
 
     pub fn mark_unit_dropped(&self, unit_id: &str) -> bool {
-        self.mark_unit_dropped_at(unit_id, SystemTime::now())
+        self.mark_unit_dropped_at(unit_id, crate::platform::time::system_time_now())
     }
 
     pub fn mark_unit_dropped_at(&self, unit_id: &str, dropped_at: SystemTime) -> bool {
@@ -935,7 +935,10 @@ mod tests {
         );
         assert_eq!(world.all_units().len(), 2);
         assert!(world.unit("module:active").is_some());
-        assert_eq!(world.prune_dropped(SystemTime::now(), usize::MAX), 1);
+        assert_eq!(
+            world.prune_dropped(crate::platform::time::system_time_now(), usize::MAX),
+            1
+        );
         assert_eq!(world.all_units().len(), 1);
     }
 }

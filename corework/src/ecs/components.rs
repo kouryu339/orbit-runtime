@@ -1,8 +1,8 @@
 use crate::event_line::EventLinePolicy;
 use crate::execution_unit::{AccessMode, UnitType};
+use crate::platform::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnitIdentityComponent {
@@ -40,7 +40,7 @@ pub struct LifecycleComponent {
 impl LifecycleComponent {
     pub fn active() -> Self {
         Self {
-            created_at: SystemTime::now(),
+            created_at: crate::platform::time::system_time_now(),
             status: UnitLifecycleStatus::Active,
             dropped_at: None,
         }

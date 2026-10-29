@@ -30,105 +30,108 @@ async fn dispatch(
     force_tool_name: Option<&str>,
     force_json: bool,
 ) -> crate::error::Result<LlmResponse> {
-    let entry = crate::key_store::get(model_id).ok_or_else(|| {
-        ApiError::Fatal(FatalError::config_error(format!(
-            "未找到 model_id={} 的配置，请先在「设置 → AI 配置」中启用",
-            model_id
-        )))
-    })?;
-
-    let provider = providers::resolve(&entry.model_name);
-
-    let provider_runtime = crate::key_store::resolve_provider_runtime(entry.provider_uid)
-        .ok_or_else(|| {
+    corework::platform::local_future(crate::browser_http::deadline(async move {
+        let entry = crate::key_store::get(model_id).ok_or_else(|| {
             ApiError::Fatal(FatalError::config_error(format!(
-                "model_uid={} (provider_uid={}) 未配置 API Key，请先在设置中填写",
-                model_id, entry.provider_uid
+                "未找到 model_id={} 的配置，请先在「设置 → AI 配置」中启用",
+                model_id
             )))
         })?;
 
-    let base_url = if provider_runtime.base_url.is_empty() {
-        provider.base_url.clone()
-    } else {
-        provider_runtime.base_url.clone()
-    };
-    let api_key = provider_runtime.api_key;
-    let api_format = effective_api_format(provider.format, provider_runtime.api_paradigm)?;
-    let api_format_label = match api_format {
-        ApiFormat::OpenAI => "openai_chat_completions",
-        ApiFormat::Anthropic => "anthropic_messages",
-        ApiFormat::OpenAIResponses => "openai_responses",
-    };
+        let provider = providers::resolve(&entry.model_name);
 
-    tracing::debug!(
-        "路由到 {} [{}]: {}",
-        base_url,
+        let provider_runtime = crate::key_store::resolve_provider_runtime(entry.provider_uid)
+            .ok_or_else(|| {
+                ApiError::Fatal(FatalError::config_error(format!(
+                    "model_uid={} (provider_uid={}) 未配置 API Key，请先在设置中填写",
+                    model_id, entry.provider_uid
+                )))
+            })?;
+
+        let base_url = if provider_runtime.base_url.is_empty() {
+            provider.base_url.clone()
+        } else {
+            provider_runtime.base_url.clone()
+        };
+        let api_key = provider_runtime.api_key;
+        let api_format = effective_api_format(provider.format, provider_runtime.api_paradigm)?;
+        let api_format_label = match api_format {
+            ApiFormat::OpenAI => "openai_chat_completions",
+            ApiFormat::Anthropic => "anthropic_messages",
+            ApiFormat::OpenAIResponses => "openai_responses",
+        };
+
+        tracing::debug!(
+            "路由到 {} [{}]: {}",
+            base_url,
+            match api_format {
+                ApiFormat::OpenAI => "OpenAI",
+                ApiFormat::Anthropic => "Anthropic",
+                ApiFormat::OpenAIResponses => "OpenAI Responses",
+            },
+            entry.model_name
+        );
+        crate::diagnostics::log_chat_messages(
+            "dispatch",
+            model_id,
+            &entry.model_name,
+            api_format_label,
+            messages,
+            tools.len(),
+        );
+
         match api_format {
-            ApiFormat::OpenAI => "OpenAI",
-            ApiFormat::Anthropic => "Anthropic",
-            ApiFormat::OpenAIResponses => "OpenAI Responses",
-        },
-        entry.model_name
-    );
-    crate::diagnostics::log_chat_messages(
-        "dispatch",
-        model_id,
-        &entry.model_name,
-        api_format_label,
-        messages,
-        tools.len(),
-    );
-
-    match api_format {
-        ApiFormat::OpenAI => {
-            crate::openai_compat::call_inner_with_reasoning(
-                messages,
-                tools,
-                &entry.model_name,
-                &base_url,
-                &api_key,
-                entry.reasoning.as_ref(),
-                temperature,
-                top_p,
-                max_tokens,
-                force_tool_name,
-                provider.tool_choice_style,
-                false,
-                force_json,
-            )
-            .await
+            ApiFormat::OpenAI => {
+                crate::openai_compat::call_inner_with_reasoning(
+                    messages,
+                    tools,
+                    &entry.model_name,
+                    &base_url,
+                    &api_key,
+                    entry.reasoning.as_ref(),
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    force_tool_name,
+                    provider.tool_choice_style,
+                    false,
+                    force_json,
+                )
+                .await
+            }
+            ApiFormat::Anthropic => {
+                crate::anthropic_compat::call_inner_with_reasoning(
+                    messages,
+                    tools,
+                    &entry.model_name,
+                    &base_url,
+                    &api_key,
+                    entry.reasoning.as_ref(),
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    force_tool_name,
+                )
+                .await
+            }
+            ApiFormat::OpenAIResponses => {
+                crate::openai_responses::call_inner_with_reasoning(
+                    messages,
+                    tools,
+                    &entry.model_name,
+                    &base_url,
+                    &api_key,
+                    entry.reasoning.as_ref(),
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    force_tool_name,
+                )
+                .await
+            }
         }
-        ApiFormat::Anthropic => {
-            crate::anthropic_compat::call_inner_with_reasoning(
-                messages,
-                tools,
-                &entry.model_name,
-                &base_url,
-                &api_key,
-                entry.reasoning.as_ref(),
-                temperature,
-                top_p,
-                max_tokens,
-                force_tool_name,
-            )
-            .await
-        }
-        ApiFormat::OpenAIResponses => {
-            crate::openai_responses::call_inner_with_reasoning(
-                messages,
-                tools,
-                &entry.model_name,
-                &base_url,
-                &api_key,
-                entry.reasoning.as_ref(),
-                temperature,
-                top_p,
-                max_tokens,
-                force_tool_name,
-            )
-            .await
-        }
-    }
+    }))
+    .await
 }
 
 fn effective_api_format(
@@ -369,80 +372,83 @@ async fn dispatch_streaming_with_tools<F>(
 where
     F: FnMut(LlmStreamEvent) + Send,
 {
-    let entry = crate::key_store::get(model_id).ok_or_else(|| {
-        ApiError::Fatal(FatalError::config_error(format!(
-            "model_id={model_id} is not registered"
-        )))
-    })?;
-    let provider = providers::resolve(&entry.model_name);
-    let runtime =
-        crate::key_store::resolve_provider_runtime(entry.provider_uid).ok_or_else(|| {
+    corework::platform::local_future(crate::browser_http::deadline(async move {
+        let entry = crate::key_store::get(model_id).ok_or_else(|| {
             ApiError::Fatal(FatalError::config_error(format!(
-                "model_uid={model_id} has no provider runtime configuration"
+                "model_id={model_id} is not registered"
             )))
         })?;
-    let base_url = if runtime.base_url.is_empty() {
-        provider.base_url.clone()
-    } else {
-        runtime.base_url
-    };
-    let format = effective_api_format(provider.format, runtime.api_paradigm)?;
-    match format {
-        ApiFormat::OpenAI => {
-            crate::openai_compat::call_inner_streaming_with_reasoning(
-                messages,
-                tools,
-                &entry.model_name,
-                &base_url,
-                &runtime.api_key,
-                entry.reasoning.as_ref(),
-                temperature,
-                top_p,
-                max_tokens,
-                None,
-                provider.tool_choice_style,
-                require_tool_call,
-                false,
-                false,
-                on_event,
-            )
-            .await
+        let provider = providers::resolve(&entry.model_name);
+        let runtime =
+            crate::key_store::resolve_provider_runtime(entry.provider_uid).ok_or_else(|| {
+                ApiError::Fatal(FatalError::config_error(format!(
+                    "model_uid={model_id} has no provider runtime configuration"
+                )))
+            })?;
+        let base_url = if runtime.base_url.is_empty() {
+            provider.base_url.clone()
+        } else {
+            runtime.base_url
+        };
+        let format = effective_api_format(provider.format, runtime.api_paradigm)?;
+        match format {
+            ApiFormat::OpenAI => {
+                crate::openai_compat::call_inner_streaming_with_reasoning(
+                    messages,
+                    tools,
+                    &entry.model_name,
+                    &base_url,
+                    &runtime.api_key,
+                    entry.reasoning.as_ref(),
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    None,
+                    provider.tool_choice_style,
+                    require_tool_call,
+                    false,
+                    false,
+                    on_event,
+                )
+                .await
+            }
+            ApiFormat::OpenAIResponses => {
+                crate::openai_responses::call_inner_streaming_with_reasoning(
+                    messages,
+                    tools,
+                    &entry.model_name,
+                    &base_url,
+                    &runtime.api_key,
+                    entry.reasoning.as_ref(),
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    None,
+                    require_tool_call,
+                    on_event,
+                )
+                .await
+            }
+            ApiFormat::Anthropic => {
+                crate::anthropic_compat::call_inner_streaming_with_reasoning(
+                    messages,
+                    tools,
+                    &entry.model_name,
+                    &base_url,
+                    &runtime.api_key,
+                    entry.reasoning.as_ref(),
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    None,
+                    require_tool_call,
+                    on_event,
+                )
+                .await
+            }
         }
-        ApiFormat::OpenAIResponses => {
-            crate::openai_responses::call_inner_streaming_with_reasoning(
-                messages,
-                tools,
-                &entry.model_name,
-                &base_url,
-                &runtime.api_key,
-                entry.reasoning.as_ref(),
-                temperature,
-                top_p,
-                max_tokens,
-                None,
-                require_tool_call,
-                on_event,
-            )
-            .await
-        }
-        ApiFormat::Anthropic => {
-            crate::anthropic_compat::call_inner_streaming_with_reasoning(
-                messages,
-                tools,
-                &entry.model_name,
-                &base_url,
-                &runtime.api_key,
-                entry.reasoning.as_ref(),
-                temperature,
-                top_p,
-                max_tokens,
-                None,
-                require_tool_call,
-                on_event,
-            )
-            .await
-        }
-    }
+    }))
+    .await
 }
 
 // ============================================================================

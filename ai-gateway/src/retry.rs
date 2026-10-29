@@ -17,8 +17,8 @@
 //! ).await?;
 //! ```
 
+use corework::platform::time::{Duration, Instant};
 use std::future::Future;
-use std::time::{Duration, Instant};
 
 use crate::classify::fatalize_retry_exhausted;
 use crate::error::{ApiError, Result};
@@ -65,7 +65,7 @@ fn backoff(policy: &RetryPolicy, attempt: u32, retry_after: Option<Duration>) ->
     let capped = exp.min(policy.max_delay);
     // 简单 jitter（不依赖 rand crate，用纳秒时间戳低位）
     let jitter = if policy.jitter_ms > 0 {
-        let nanos = std::time::SystemTime::now()
+        let nanos = corework::platform::time::system_time_now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() as u64)
             .unwrap_or(0);
@@ -189,7 +189,7 @@ where
                     "上游可重试错误，{}ms 后重试",
                     delay.as_millis()
                 );
-                tokio::time::sleep(delay).await;
+                corework::platform::time::sleep(delay).await;
                 attempt = next_attempt;
             }
         }

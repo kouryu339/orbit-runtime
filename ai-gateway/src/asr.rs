@@ -5,8 +5,8 @@
 //! - `whisper-*`    → OpenAI Whisper（OPENAI_API_KEY）
 //! - 其他/空         → fallback qwen-audio-turbo
 
+use corework::platform::time::Instant;
 use std::sync::OnceLock;
-use std::time::Instant;
 
 use reqwest::Client;
 use serde_json::Value;
@@ -39,31 +39,34 @@ pub async fn call_asr(
     language: Option<&str>,
     prompt: Option<&str>,
 ) -> crate::error::Result<AsrResponse> {
-    let provider = resolve_asr(model.unwrap_or(""));
+    corework::platform::local_future(async move {
+        let provider = resolve_asr(model.unwrap_or(""));
 
-    let api_key = if provider.env_key.is_empty() {
-        String::new()
-    } else {
-        std::env::var(provider.env_key)
-            .map_err(|_| ApiError::AsrFailed(format!("未设置 {} 环境变量", provider.env_key)))?
-    };
+        let api_key = if provider.env_key.is_empty() {
+            String::new()
+        } else {
+            std::env::var(provider.env_key)
+                .map_err(|_| ApiError::AsrFailed(format!("未设置 {} 环境变量", provider.env_key)))?
+        };
 
-    let model_name = model.unwrap_or(provider.default_model);
+        let model_name = model.unwrap_or(provider.default_model);
 
-    // QwenAudio 忽略 prompt（服务端不支持），WhisperCompat 附加 prompt
-    let effective_prompt = match provider.api_style {
-        AsrApiStyle::QwenAudio => None,
-        AsrApiStyle::WhisperCompat => prompt,
-    };
+        // QwenAudio 忽略 prompt（服务端不支持），WhisperCompat 附加 prompt
+        let effective_prompt = match provider.api_style {
+            AsrApiStyle::QwenAudio => None,
+            AsrApiStyle::WhisperCompat => prompt,
+        };
 
-    call_transcription_inner(
-        media_path,
-        model_name,
-        &api_key,
-        provider.base_url,
-        language,
-        effective_prompt,
-    )
+        call_transcription_inner(
+            media_path,
+            model_name,
+            &api_key,
+            provider.base_url,
+            language,
+            effective_prompt,
+        )
+        .await
+    })
     .await
 }
 
@@ -84,7 +87,7 @@ async fn call_transcription_inner(
     let start = Instant::now();
 
     // 读取媒体文件
-    let file_bytes = tokio::fs::read(media_path)
+    let file_bytes = corework::platform::fs::read(media_path)
         .await
         .map_err(|e| ApiError::AsrFailed(format!("读取音频文件失败 [{}]: {e}", media_path)))?;
 

@@ -485,7 +485,8 @@ impl BlueprintNode for DelayNode {
             .and_then(|v| v.as_f64())
             .unwrap_or(1.0);
 
-        tokio::time::sleep(tokio::time::Duration::from_secs_f64(duration)).await;
+        crate::platform::time::sleep(crate::platform::time::Duration::from_secs_f64(duration))
+            .await;
 
         Ok(NodeOutput::ExecPin("completed".to_string()))
     }

@@ -201,6 +201,13 @@ impl Drop for ScopedCache {
             let tracked_keys = self.tracked_keys.read().clone();
             let scope_id = self.scope_id.clone();
 
+            #[cfg(target_arch = "wasm32")]
+            crate::platform::spawn(async move {
+                for key in tracked_keys.iter() {
+                    let _ = inner.delete(&format!("{}:{}", scope_id, key)).await;
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
                     for key in tracked_keys.iter() {
@@ -272,7 +279,7 @@ mod tests {
             assert_eq!(val, Some("temp_value".to_string()));
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        crate::platform::time::sleep(Duration::from_millis(100)).await;
 
         let result: Option<String> = cache.get("temp_scope:temp_key").await.unwrap();
         assert_eq!(result, None);

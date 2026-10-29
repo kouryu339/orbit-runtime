@@ -625,7 +625,7 @@ impl AIAssistant {
         let (tx, mut rx) = mpsc::channel::<String>(256);
 
         // spawn 一个转发 task：从 rx 读 chunk，调用 on_chunk
-        let forward = tokio::spawn(async move {
+        let forward = corework::platform::spawn(async move {
             while let Some(chunk) = rx.recv().await {
                 on_chunk(chunk);
             }

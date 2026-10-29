@@ -3,13 +3,13 @@
 //! Producers never perform file IO on an async execution path. Messages are
 //! sent to a bounded worker queue and dropped when the queue is saturated.
 
+use crate::platform::time::UNIX_EPOCH;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const DIAGNOSTIC_QUEUE_CAPACITY: usize = 4096;
 
@@ -57,7 +57,7 @@ fn start_writer(path: PathBuf) -> SyncSender<String> {
                 return;
             };
             while let Ok(line) = receiver.recv() {
-                let timestamp = SystemTime::now()
+                let timestamp = crate::platform::time::system_time_now()
                     .duration_since(UNIX_EPOCH)
                     .map(|duration| duration.as_secs())
                     .unwrap_or_default();

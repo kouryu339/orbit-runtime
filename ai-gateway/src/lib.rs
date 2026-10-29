@@ -57,6 +57,7 @@ pub mod types;
 
 pub mod anthropic_compat;
 pub mod asr;
+mod browser_http;
 pub mod classify;
 pub mod config;
 pub mod diagnostics;
@@ -67,6 +68,7 @@ pub mod openai_compat;
 pub mod openai_responses;
 pub mod providers;
 pub mod reasoning;
+pub mod registration;
 pub mod request_context;
 pub mod retry;
 mod stream_control;

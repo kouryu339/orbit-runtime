@@ -98,7 +98,10 @@ where
                 last_error = Some(e);
                 if attempt < policy.max_attempts - 1 {
                     let delay = policy.delay_for_attempt(attempt);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                    crate::platform::time::sleep(crate::platform::time::Duration::from_millis(
+                        delay,
+                    ))
+                    .await;
                 }
             }
         }

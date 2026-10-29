@@ -13,6 +13,12 @@ use crate::retry::{retry_with_backoff, RetryPolicy};
 use crate::types::{ChatMessage, LlmResponse, TokenUsage, ToolCall, ToolDefinition};
 use crate::ApiError;
 
+#[cfg(target_arch = "wasm32")]
+fn http_client() -> &'static Client {
+    static CLIENT: once_cell::sync::OnceCell<Client> = once_cell::sync::OnceCell::new();
+    CLIENT.get_or_init(Client::new)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn http_client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
@@ -25,6 +31,12 @@ fn http_client() -> &'static Client {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
+fn streaming_http_client() -> &'static Client {
+    static CLIENT: once_cell::sync::OnceCell<Client> = once_cell::sync::OnceCell::new();
+    CLIENT.get_or_init(Client::new)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn streaming_http_client() -> &'static Client {
     static CLIENT: OnceCell<Client> = OnceCell::new();
     CLIENT.get_or_init(|| {
@@ -342,7 +354,7 @@ pub async fn call_inner_streaming_with_reasoning<F>(
 where
     F: FnMut(crate::types::LlmStreamEvent) + Send,
 {
-    let request_started = std::time::Instant::now();
+    let request_started = corework::platform::time::Instant::now();
 
     let url = format!("{}/responses", base_url.trim_end_matches('/'));
     let mut body = build_request_body(

@@ -387,7 +387,7 @@ mod tests {
             )
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        crate::platform::time::sleep(Duration::from_millis(5)).await;
 
         let snapshot = cache.dump_raw().await.unwrap();
 
@@ -422,7 +422,7 @@ mod tests {
         cache.set("temp", &"value", Some(Duration::from_millis(100))).await.unwrap();
         assert!(cache.exists("temp").await.unwrap());
 
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        crate::platform::time::sleep(Duration::from_millis(150)).await;
 
         let result: Option<String> = cache.get("temp").await.unwrap();
         assert_eq!(result, None);

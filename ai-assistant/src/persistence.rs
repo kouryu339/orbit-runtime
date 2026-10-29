@@ -76,7 +76,7 @@ mod legacy_migration_tests {
             "ai-assistant-persistence-test-{}",
             std::process::id()
         ));
-        let _ = tokio::fs::remove_dir_all(&data_dir).await;
+        let _ = corework::platform::fs::remove_dir_all(&data_dir).await;
         set_data_dir(data_dir);
 
         let session_id = create_new_session("test-model", crate::ToolProtocol::NativeFc)
@@ -370,8 +370,8 @@ fn index_path() -> PathBuf {
 /// 确保目录存在
 async fn ensure_dirs() -> std::io::Result<()> {
     let base = conversations_dir();
-    tokio::fs::create_dir_all(base.join("sessions")).await?;
-    tokio::fs::create_dir_all(base.join("snapshots")).await?;
+    corework::platform::fs::create_dir_all(base.join("sessions")).await?;
+    corework::platform::fs::create_dir_all(base.join("snapshots")).await?;
     Ok(())
 }
 
@@ -446,7 +446,7 @@ pub async fn load_index() -> crate::Result<ConversationIndex> {
     if !path.exists() {
         return Ok(ConversationIndex::default());
     }
-    let content = tokio::fs::read_to_string(&path)
+    let content = corework::platform::fs::read_to_string(&path)
         .await
         .map_err(|e| crate::Error::Persistence(format!("读取 index.json 失败: {}", e)))?;
     let index: ConversationIndex = serde_json::from_str(&content)
@@ -461,7 +461,7 @@ pub async fn save_index(index: &ConversationIndex) -> crate::Result<()> {
         .map_err(|e| crate::Error::Persistence(format!("创建目录失败: {}", e)))?;
     let content = serde_json::to_string_pretty(index)
         .map_err(|e| crate::Error::Persistence(format!("序列化 index.json 失败: {}", e)))?;
-    tokio::fs::write(index_path(), content)
+    corework::platform::fs::write(index_path(), content)
         .await
         .map_err(|e| crate::Error::Persistence(format!("写入 index.json 失败: {}", e)))?;
     Ok(())
@@ -480,7 +480,7 @@ async fn append_jsonl(path: &PathBuf, msg: &PersistedMessage) -> crate::Result<(
         .map_err(|e| crate::Error::Persistence(format!("序列化消息失败: {}", e)))?;
     line.push('\n');
 
-    let mut file = tokio::fs::OpenOptions::new()
+    let mut file = corework::platform::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
@@ -502,9 +502,11 @@ async fn read_jsonl_full(path: &PathBuf) -> crate::Result<Vec<PersistedMessage>>
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-        crate::Error::Persistence(format!("读取 JSONL 失败 {}: {}", path.display(), e))
-    })?;
+    let content = corework::platform::fs::read_to_string(path)
+        .await
+        .map_err(|e| {
+            crate::Error::Persistence(format!("读取 JSONL 失败 {}: {}", path.display(), e))
+        })?;
 
     let mut records = Vec::new();
     for (i, line) in content.lines().enumerate() {
@@ -724,11 +726,11 @@ pub async fn delete_session(session_id: &str) -> crate::Result<()> {
         // 删除会话 Ledger（新路径 + 旧路径兼容）
         let ledger_path = session_ledger_path(session_id);
         if ledger_path.exists() {
-            let _ = tokio::fs::remove_file(&ledger_path).await;
+            let _ = corework::platform::fs::remove_file(&ledger_path).await;
         }
         let legacy_path = legacy_boss_session_path(session_id);
         if legacy_path.exists() {
-            let _ = tokio::fs::remove_file(&legacy_path).await;
+            let _ = corework::platform::fs::remove_file(&legacy_path).await;
         }
         // Agent 消息已合并进会话 Ledger JSONL，无独立消息文件需删除
     } else {
@@ -1022,7 +1024,8 @@ fn legacy_cache_snapshot_path(session_id: &str, participant_id: &str) -> PathBuf
 
 /// 确保 session 子目录存在
 async fn ensure_session_dir(session_id: &str) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(conversations_dir().join("snapshots").join(session_id)).await
+    corework::platform::fs::create_dir_all(conversations_dir().join("snapshots").join(session_id))
+        .await
 }
 
 /// 将 ScopedCache 的全部字段导出为快照并写入磁盘
@@ -1046,7 +1049,7 @@ pub async fn save_cache_snapshot(
     let path = cache_snapshot_path(session_id, participant_id);
     let json = serde_json::to_string_pretty(&snapshot)
         .map_err(|e| crate::Error::Persistence(format!("序列化 cache 快照失败: {}", e)))?;
-    tokio::fs::write(&path, json)
+    corework::platform::fs::write(&path, json)
         .await
         .map_err(|e| crate::Error::Persistence(format!("写入 cache 快照失败: {}", e)))?;
     Ok(())
@@ -1081,7 +1084,7 @@ pub async fn restore_cache_snapshot(
         legacy_path
     };
 
-    let content = tokio::fs::read_to_string(&path)
+    let content = corework::platform::fs::read_to_string(&path)
         .await
         .map_err(|e| crate::Error::Persistence(format!("读取 cache 快照失败: {}", e)))?;
     let mut snapshot: std::collections::HashMap<String, serde_json::Value> =
