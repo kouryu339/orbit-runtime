@@ -91,7 +91,9 @@ impl RuntimeFacade {
                     } else {
                         "configured"
                     },
-                    "verification_scope": if startup_verified {
+                    "verification_scope": if self.dynamic_rpc_endpoint_ids.contains(&endpoint.endpoint_id) {
+                        "add_list_tools"
+                    } else if startup_verified {
                         "startup_list_tools"
                     } else {
                         "deferred_until_invoke"
@@ -112,7 +114,8 @@ impl RuntimeFacade {
         serde_json::to_string(&json!({
             "schema": "agent-runtime-rpc-endpoint-definitions/v1",
             "runtime_started": self.started,
-            "health_scope": "startup_only",
+            "health_scope": if self.dynamic_rpc_endpoint_ids.is_empty() { "startup_only" } else { "discovery_only" },
+            "catalog_revision": self.tool_registry.runtime_catalog_revision(),
             "sensitive_connection_details_included": false,
             "endpoints": endpoints
         }))

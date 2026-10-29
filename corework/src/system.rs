@@ -60,6 +60,8 @@ pub trait AutoRegisterSystem: SystemOperation + Sized + 'static {
 
 ///
 pub struct SystemRegistry {
+    runtime_catalog: crate::runtime_tool_catalog::RuntimeToolCatalog,
+    isolated_runtime: bool,
     operations: Arc<parking_lot::RwLock<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>>,
     dynamic_executors: Arc<
         parking_lot::RwLock<
@@ -71,8 +73,51 @@ pub struct SystemRegistry {
 }
 
 impl SystemRegistry {
+    pub fn isolated_runtime() -> Self {
+        let mut registry = Self::new();
+        registry.isolated_runtime = true;
+        registry.auto_register_all();
+        registry
+    }
+
+    pub fn is_runtime_isolated(&self) -> bool {
+        self.isolated_runtime
+    }
+    pub fn runtime_tools(&self) -> Vec<crate::rpc_tool::RuntimeToolMetadata> {
+        self.runtime_catalog.tools()
+    }
+    pub fn runtime_catalog_revision(&self) -> u64 {
+        self.runtime_catalog.revision()
+    }
+    pub fn append_runtime_tools(
+        &self,
+        entries: Vec<crate::runtime_tool_catalog::RuntimeToolEntry>,
+    ) -> crate::error::Result<u64> {
+        let conflicts: Vec<_> = entries
+            .iter()
+            .filter(|(metadata, _)| {
+                metadata.name.starts_with("WorkflowRef_")
+                    || self.get_dynamic(&metadata.name).is_some()
+                    || crate::workflow::registry::NodeRegistry::get(&metadata.name).is_some()
+                    || Self::list_ai_systems()
+                        .iter()
+                        .any(|m| m.name == metadata.name)
+            })
+            .map(|(m, _)| m.name.clone())
+            .collect();
+        if !conflicts.is_empty() {
+            return Err(FrameworkError::InvalidOperation(format!(
+                "tool_name_conflict: {}",
+                conflicts.join(", ")
+            )));
+        }
+        self.runtime_catalog.append(entries)
+    }
+
     pub fn new() -> Self {
         Self {
+            runtime_catalog: Default::default(),
+            isolated_runtime: false,
             operations: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             dynamic_executors: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             dynamic_metadata: Arc::new(parking_lot::RwLock::new(HashMap::new())),
@@ -248,7 +293,9 @@ impl SystemRegistry {
         &self,
         name: &str,
     ) -> Option<Arc<dyn crate::workflow::dynamic_node::DynamicExecute>> {
-        self.dynamic_executors.read().get(name).map(Arc::clone)
+        self.runtime_catalog
+            .executor(name)
+            .or_else(|| self.dynamic_executors.read().get(name).map(Arc::clone))
     }
 
     ///
@@ -273,7 +320,9 @@ impl SystemRegistry {
     }
 
     pub fn get_dynamic_metadata(&self, name: &str) -> Option<crate::rpc_tool::RuntimeToolMetadata> {
-        self.dynamic_metadata.read().get(name).cloned()
+        self.runtime_catalog
+            .metadata(name)
+            .or_else(|| self.dynamic_metadata.read().get(name).cloned())
     }
     ///
     /// ## Example

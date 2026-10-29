@@ -120,6 +120,8 @@ AGENT_RUNTIME_EXPORT int agent_runtime_start_v1(AgentRuntimeHandle handle);
  * - runtime.get_workflow_node_definitions for the registered graph-node catalog
  * Command availability must still be checked through capabilities JSON.
  * Dynamic cluster commands:
+ * - runtime.add_rpc_endpoint discovers and atomically appends an external gRPC
+ *   endpoint after start. Existing endpoint IDs and tool names cannot be replaced.
  * - runtime.add_agent_cluster accepts a registration object after start.
  * - runtime.update_agent_cluster also requires expected_version and rejects
  *   updates while any conversation of that cluster is live.

@@ -758,6 +758,16 @@ impl RuntimeApp {
         self.invoke("runtime.get_agent_cluster_definitions", json!({}))
     }
 
+    /// Discover and atomically append an external gRPC endpoint after start.
+    pub fn add_rpc_endpoint(&self, endpoint: Value) -> Result<Value> {
+        self.invoke(
+            "runtime.add_rpc_endpoint",
+            json!({
+                "schema": "agent-runtime-rpc-endpoint-add/v1", "endpoint": endpoint,
+            }),
+        )
+    }
+
     pub fn add_agent_cluster(&self, registration: Value) -> Result<Value> {
         self.invoke(
             "runtime.add_agent_cluster",

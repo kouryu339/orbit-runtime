@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orbit:runtime:rpc-endpoint-add:v1",
+  "title": "Runtime RPC endpoint addition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "endpoint"],
+  "properties": {
+    "schema": {"const": "agent-runtime-rpc-endpoint-add/v1"},
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "endpoint"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "protocol": {"const": "grpc", "default": "grpc"},
+        "endpoint": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 60000, "default": 30000},
+        "to_ai_max_chars": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 600},
+        "toAiMaxChars": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      },
+      "not": {"required": ["to_ai_max_chars", "toAiMaxChars"]}
+    }
+  }
+}

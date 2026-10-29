@@ -45,6 +45,7 @@ pub const STATE_DELTA_EVENT_TYPE: &str = "conversation.state_delta";
 pub const STATE_DELTA_SCHEMA: &str = "agent-runtime-state-delta/v1";
 pub const FRONTEND_STATE_SNAPSHOT_EVENT_TYPE: &str = "frontend:state_snapshot";
 pub const WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE: &str = "workflow.resource_changed";
+pub const RPC_CATALOG_CHANGED_EVENT_TYPE: &str = "runtime.rpc_catalog_changed";
 pub const WORKFLOW_EXECUTION_STARTED_EVENT_TYPE: &str = "workflow.execution_started";
 pub const WORKFLOW_NODE_STARTED_EVENT_TYPE: &str = "workflow.node_started";
 pub const WORKFLOW_NODE_COMPLETED_EVENT_TYPE: &str = "workflow.node_completed";
@@ -687,6 +688,16 @@ impl Runtime {
     }
 
     /// Add a cluster after start. Its primary agent must reference a Role Skill.
+    /// Discover and atomically append an external gRPC endpoint after start.
+    pub fn add_rpc_endpoint(&mut self, endpoint: Value) -> Result<Value> {
+        self.invoke(
+            "runtime.add_rpc_endpoint",
+            json!({
+                "schema": "agent-runtime-rpc-endpoint-add/v1", "endpoint": endpoint,
+            }),
+        )
+    }
+
     pub fn add_agent_cluster(&mut self, registration: Value) -> Result<Value> {
         self.invoke(
             "runtime.add_agent_cluster",

@@ -88,6 +88,10 @@ impl Context {
         }
     }
 
+    pub fn registry(&self) -> &SystemRegistry {
+        &self.registry
+    }
+
     pub fn set_registry(mut self, registry: Arc<SystemRegistry>) -> Self {
         self.registry = registry;
         self

@@ -534,7 +534,7 @@ async fn authorize_tool(
     agent_id: &str,
     turn_id: u64,
 ) -> Result<(), crate::decision::ToolResult> {
-    let metadata = tool_runner::permission_metadata(tool_name)
+    let metadata = tool_runner::permission_metadata_in_registry(tool_name, Some(ctx.registry()))
         .map_err(|_| denied_tool_result(command, tool_name, "tool_unavailable"))?;
     let broker = ctx
         .resolve_shared_component::<PermissionBroker>()

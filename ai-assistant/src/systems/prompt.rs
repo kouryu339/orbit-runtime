@@ -198,7 +198,15 @@ pub(crate) fn workflow_authoring_enabled(tool_names: &[String]) -> bool {
 }
 
 /// Format tool metadata as prompt text for EXEC line-protocol usage.
+#[cfg(test)]
 pub(crate) fn format_tools_section(tool_names: &[String], include_outputs: bool) -> String {
+    format_tools_section_in_registry(tool_names, include_outputs, None)
+}
+pub(crate) fn format_tools_section_in_registry(
+    tool_names: &[String],
+    include_outputs: bool,
+    registry: Option<&corework::system::SystemRegistry>,
+) -> String {
     if tool_names.is_empty() {
         return String::new();
     }
@@ -304,7 +312,9 @@ pub(crate) fn format_tools_section(tool_names: &[String], include_outputs: bool)
             }
 
             output.push('\n');
-        } else if let Some(meta) = crate::runtime_tools::get_runtime_tool(name) {
+        } else if let Some(meta) =
+            crate::runtime_tools::get_runtime_tool_in_registry(registry, name)
+        {
             push_runtime_tool_section(&mut output, &meta, include_outputs);
         } else {
             output.push_str(&format!("### {}\n(no description)\n\n", name));
@@ -485,7 +495,11 @@ impl SystemOperation for BuildSystemPromptSystem {
 
         let all_tools = AssistantContext::all_active_tools(&ctx.cache).await?;
         let workflow_authoring_enabled = workflow_authoring_enabled(&all_tools);
-        let tools_section = format_tools_section(&all_tools, workflow_authoring_enabled);
+        let tools_section = format_tools_section_in_registry(
+            &all_tools,
+            workflow_authoring_enabled,
+            Some(ctx.registry()),
+        );
         if !tools_section.is_empty() {
             sections.push(PromptSection::new(tools_section));
         }

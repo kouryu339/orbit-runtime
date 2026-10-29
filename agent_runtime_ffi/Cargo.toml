@@ -1,6 +1,6 @@
 [package]
 name = "agent-runtime-ffi"
-version = "0.5.2"
+version = "0.5.3-beta.1"
 edition = "2021"
 authors = ["kouryu339@163.com"]
 description = "Stable C ABI and JSON command/event boundary for the Corework Agent Runtime"
@@ -30,3 +30,6 @@ sha2 = "0.10"
 image = "0.25"
 
 [dev-dependencies]
+corework-agent-tool = { path = "../sdk/rpctools/rust" }
+tonic = { version = "0.14", features = ["transport"] }
+tokio-stream = { version = "0.1", features = ["net"] }

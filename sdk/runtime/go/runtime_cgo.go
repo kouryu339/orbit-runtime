@@ -358,6 +358,13 @@ func (r *Runtime) RegisterAgentClusterFile(ctx context.Context, path string) (js
 	})
 }
 
+// AddRPCEndpoint discovers and adds an external gRPC endpoint without replacing names.
+func (r *Runtime) AddRPCEndpoint(ctx context.Context, endpoint json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.add_rpc_endpoint", map[string]any{
+		"schema": "agent-runtime-rpc-endpoint-add/v1", "endpoint": endpoint,
+	})
+}
+
 func (r *Runtime) AddAgentCluster(ctx context.Context, registration json.RawMessage) (json.RawMessage, error) {
 	return r.invoke(ctx, "runtime.add_agent_cluster", map[string]any{"registration": registration})
 }

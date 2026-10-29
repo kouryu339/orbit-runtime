@@ -19,6 +19,7 @@ LEDGER_DELTA_SCHEMA = "agent-runtime-ledger-delta/v1"
 STATE_DELTA_EVENT_TYPE = "conversation.state_delta"
 STATE_DELTA_SCHEMA = "agent-runtime-state-delta/v1"
 WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE = "workflow.resource_changed"
+RPC_CATALOG_CHANGED_EVENT_TYPE = "runtime.rpc_catalog_changed"
 WORKFLOW_EXECUTION_STARTED_EVENT_TYPE = "workflow.execution_started"
 WORKFLOW_NODE_STARTED_EVENT_TYPE = "workflow.node_started"
 WORKFLOW_NODE_COMPLETED_EVENT_TYPE = "workflow.node_completed"
@@ -33,6 +34,7 @@ PUBLIC_RUNTIME_EVENT_TYPES = frozenset(
         STATE_DELTA_EVENT_TYPE,
         FRONTEND_STATE_SNAPSHOT_EVENT_TYPE,
         WORKFLOW_RESOURCE_CHANGED_EVENT_TYPE,
+        RPC_CATALOG_CHANGED_EVENT_TYPE,
         WORKFLOW_EXECUTION_STARTED_EVENT_TYPE,
         WORKFLOW_NODE_STARTED_EVENT_TYPE,
         WORKFLOW_NODE_COMPLETED_EVENT_TYPE,
@@ -901,6 +903,12 @@ class Runtime:
 
     def set_current_model(self, model_uid: int) -> Any:
         return self.invoke("runtime.set_current_model", {"model_uid": model_uid})
+
+    def add_rpc_endpoint(self, endpoint: Mapping[str, Any]) -> Any:
+        """Discover and add an external gRPC endpoint. Existing IDs/names are rejected."""
+        return self.invoke("runtime.add_rpc_endpoint", {
+            "schema": "agent-runtime-rpc-endpoint-add/v1", "endpoint": endpoint,
+        })
 
     def add_agent_cluster(self, registration: Mapping[str, Any]) -> Any:
         """Add a cluster after start; its primary agent must reference a Role Skill."""

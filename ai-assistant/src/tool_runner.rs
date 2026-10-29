@@ -30,7 +30,11 @@ pub async fn execute_single_with_call_id(
         system_name,
         cmd,
         tool_call_id,
-        validate_param_names(system_name, args_str),
+        validate_param_name_list_using(
+            system_name,
+            &extract_param_names(args_str),
+            Some(ctx.registry()),
+        ),
         build_tool_input_map(args_str),
         ctx,
     )
@@ -54,7 +58,7 @@ pub async fn execute_parsed_with_call_id(
         &call.name,
         &command,
         tool_call_id,
-        validate_param_name_list(&call.name, &used_names),
+        validate_param_name_list_using(&call.name, &used_names, Some(ctx.registry())),
         Ok(build_parsed_tool_input_map(call)),
         ctx,
     )
@@ -69,12 +73,13 @@ async fn execute_prepared(
     input_map: corework::error::Result<HashMap<String, serde_json::Value>>,
     ctx: &Context,
 ) -> ToolResult {
-    let tool_kind = tool_kind(system_name);
+    let registry = Some(ctx.registry());
+    let tool_kind = tool_kind(system_name, registry);
     let agent_enabled = inventory::iter::<AISystemFactory>()
         .find(|factory| factory.metadata.name == system_name)
         .map(|factory| factory.metadata.agent_enabled)
         .or_else(|| {
-            crate::runtime_tools::get_runtime_tool(system_name)
+            crate::runtime_tools::get_runtime_tool_in_registry(registry, system_name)
                 .map(|metadata| metadata.agent_enabled)
         })
         .unwrap_or(false);
@@ -240,6 +245,12 @@ pub struct ToolPermissionMetadata {
 }
 
 pub fn permission_metadata(system_name: &str) -> Result<ToolPermissionMetadata, String> {
+    permission_metadata_in_registry(system_name, None)
+}
+pub fn permission_metadata_in_registry(
+    system_name: &str,
+    registry: Option<&corework::system::SystemRegistry>,
+) -> Result<ToolPermissionMetadata, String> {
     let (display_name, readonly, destructive, secret) = if let Some(factory) =
         inventory::iter::<AISystemFactory>().find(|factory| factory.metadata.name == system_name)
     {
@@ -249,7 +260,9 @@ pub fn permission_metadata(system_name: &str) -> Result<ToolPermissionMetadata, 
             factory.metadata.destructive,
             factory.metadata.secret,
         )
-    } else if let Some(metadata) = crate::runtime_tools::get_runtime_tool(system_name) {
+    } else if let Some(metadata) =
+        crate::runtime_tools::get_runtime_tool_in_registry(registry, system_name)
+    {
         (
             metadata.display_name_or_name().to_string(),
             metadata.readonly,
@@ -318,8 +331,8 @@ impl ToolKind {
     }
 }
 
-fn tool_kind(system_name: &str) -> ToolKind {
-    if let Some(meta) = crate::runtime_tools::get_runtime_tool(system_name) {
+fn tool_kind(system_name: &str, registry: Option<&corework::system::SystemRegistry>) -> ToolKind {
+    if let Some(meta) = crate::runtime_tools::get_runtime_tool_in_registry(registry, system_name) {
         return match meta.tool_kind.as_str() {
             "rpc" => ToolKind::Rpc,
             "local" => ToolKind::Local,
@@ -410,6 +423,7 @@ fn is_valid_param_name(name: &str, valid_names: &[String]) -> bool {
         || (valid_names.iter().any(|valid| valid == "inputs") && name.starts_with("input."))
 }
 
+#[cfg(test)]
 fn validate_param_names(system_name: &str, args_str: &str) -> Option<String> {
     if args_str.is_empty() {
         return None;
@@ -418,7 +432,15 @@ fn validate_param_names(system_name: &str, args_str: &str) -> Option<String> {
     validate_param_name_list(system_name, &extract_param_names(args_str))
 }
 
+#[cfg(test)]
 fn validate_param_name_list(system_name: &str, used: &[String]) -> Option<String> {
+    validate_param_name_list_using(system_name, used, None)
+}
+fn validate_param_name_list_using(
+    system_name: &str,
+    used: &[String],
+    registry: Option<&corework::system::SystemRegistry>,
+) -> Option<String> {
     let valid_names: Vec<String> = if let Some(factory) =
         inventory::iter::<AISystemFactory>().find(|f| f.metadata.name == system_name)
     {
@@ -428,7 +450,9 @@ fn validate_param_name_list(system_name: &str, used: &[String]) -> Option<String
             .iter()
             .map(|p| p.name.to_string())
             .collect()
-    } else if let Some(meta) = crate::runtime_tools::get_runtime_tool(system_name) {
+    } else if let Some(meta) =
+        crate::runtime_tools::get_runtime_tool_in_registry(registry, system_name)
+    {
         meta.parameters.iter().map(|p| p.name.clone()).collect()
     } else {
         return None;

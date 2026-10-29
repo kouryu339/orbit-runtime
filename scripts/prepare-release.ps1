@@ -47,6 +47,9 @@
 .PARAMETER Clean
   Remove existing output and staging directories before packaging.
 
+.PARAMETER LocalPreview
+  Mark local preview packages and preserve stable SDK online-download pins.
+
 .EXAMPLE
   .\scripts\prepare-release.ps1
 
@@ -74,7 +77,9 @@ param(
 
     [switch]$SkipFrontendBuild,
 
-    [switch]$Clean
+    [switch]$Clean,
+
+    [switch]$LocalPreview
 )
 
 $ErrorActionPreference = 'Stop'
@@ -140,6 +145,7 @@ function Write-PackageReadme($path, $platformId, $versionLabel, $artifacts) {
 Package: $PackageName
 Version: $versionLabel
 Platform: $platformId
+Distribution: $(if ($LocalPreview) { 'local-preview' } else { 'release' })
 
 This package contains the native Runtime FFI library and the matching C header.
 Host SDKs should load the library from this package and call
@@ -161,10 +167,15 @@ runtime.commit_skill_transaction. See docs/zh/14-skill-candidate-transactions.md
 (also available in en) and schemas/skill-transaction.schema.json.
 Existing Workflow edits become drafts; active runs block edits to their complete
 reference chain. Detect these features through capabilities rather than base version.
+Dynamic RPC additions: runtime.add_rpc_endpoint accepts an external gRPC endpoint
+after start. Existing endpoint IDs and tool names cannot be replaced. See
+docs/zh/17-dynamic-rpc-additions.md (also available in en) and
+schemas/rpc-endpoint-add.schema.json. Hosts persist accepted endpoint configuration.
 Matching SDK sources are distributed separately as $PackageName-sdk-$versionLabel.zip.
 Extract that archive's sdk directory here to use the included verification scripts.
 The Svelte frontend is a separate platform-independent release asset.
 See build-info.json for the source branch, commit, and dirty-worktree status.
+$(if ($LocalPreview) { 'Local preview: load this native library by explicit path. SDK online-download defaults still point to the published stable release.' })
 
 Artifacts:
 $artifactLines
@@ -233,6 +244,7 @@ function New-ReleasePackage($platform) {
         Copy-RequiredFile (Join-Path $repo "corework\src\workflow\$schema") (Join-Path $packageRoot "schemas\$schema")
     }
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/skill-transaction.schema.json') (Join-Path $packageRoot 'schemas/skill-transaction.schema.json')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/rpc-endpoint-add.schema.json') (Join-Path $packageRoot 'schemas/rpc-endpoint-add.schema.json')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\workflow-json-update.zh-CN.md') (Join-Path $packageRoot 'docs\workflow-json-update.zh-CN.md')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
     $releaseNotes = Join-Path $repo "agent_runtime_ffi/docs/releases/v$($Version.TrimStart('v'))/release-notes.md"
@@ -241,6 +253,7 @@ function New-ReleasePackage($platform) {
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\12-workflow-resource-api.md") (Join-Path $packageRoot "docs\$language\12-workflow-resource-api.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\13-dynamic-agent-clusters.md") (Join-Path $packageRoot "docs\$language\13-dynamic-agent-clusters.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/14-skill-candidate-transactions.md") (Join-Path $packageRoot "docs/$language/14-skill-candidate-transactions.md")
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/17-dynamic-rpc-additions.md") (Join-Path $packageRoot "docs/$language/17-dynamic-rpc-additions.md")
         Copy-RequiredFile (Join-Path $repo "ai-assistant\prompts\$language\workflow_tool_rules.md") (Join-Path $packageRoot "docs\$language\workflow-json-source-syntax.md")
     }
     New-Directory (Join-Path $packageRoot 'examples\workflows')
@@ -251,6 +264,7 @@ function New-ReleasePackage($platform) {
     $buildInfo = [ordered]@{
         schema = 'orbit-runtime-build/v1'
         runtime_version = $Version.TrimStart('v')
+        distribution = $(if ($LocalPreview) { 'local-preview' } else { 'release' })
         platform = $platformId
         branch = (git -C $repo branch --show-current)
         commit = (git -C $repo rev-parse HEAD)
@@ -420,7 +434,8 @@ if (-not $FrontendOnly) {
 }
 $results += New-FrontendPackage
 if (-not $FrontendOnly) {
-    if ($Targets -eq 'all') { Update-SdkReleaseMetadata }
+    if ($LocalPreview) { Write-Warning 'Local preview: stable SDK online-download pins are unchanged; load the packaged library explicitly.' }
+    elseif ($Targets -eq 'all') { Update-SdkReleaseMetadata }
     else { Write-Warning 'Single-platform preview: SDK download pins are unchanged; load the packaged library explicitly.' }
     $results += New-SdkPackage
 }

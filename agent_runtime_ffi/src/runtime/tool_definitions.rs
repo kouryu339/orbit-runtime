@@ -12,8 +12,7 @@ impl RuntimeFacade {
         for metadata in SystemRegistry::list_ai_systems() {
             tools.insert(metadata.name.to_string(), static_tool_definition(metadata));
         }
-        // Dynamic definitions are the effective implementation if a runtime
-        // provider intentionally replaces a statically known tool name.
+        // RPC discovery is append-only; these names cannot replace built-ins.
         for metadata in &self.runtime_tools {
             tools.insert(metadata.name.clone(), runtime_tool_definition(metadata));
         }
@@ -22,6 +21,7 @@ impl RuntimeFacade {
             "schema": "agent-runtime-tool-definitions/v1",
             "catalog_scope": "runtime_registered",
             "authorization_scope": "definitions_only",
+            "catalog_revision": self.tool_registry.runtime_catalog_revision(),
             "tools": tools.into_values().collect::<Vec<_>>()
         }))
         .map_err(|error| {

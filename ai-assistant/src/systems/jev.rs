@@ -31,7 +31,10 @@ impl JevToolExecutor for AgentJevToolExecutor {
         context: &Context,
         jev: &JevExecutionContext,
     ) -> corework::error::Result<JevToolResult> {
-        let metadata = match crate::tool_runner::permission_metadata(tool) {
+        let metadata = match crate::tool_runner::permission_metadata_in_registry(
+            tool,
+            Some(context.registry()),
+        ) {
             Ok(metadata) => metadata,
             Err(_) => return Ok(permission_denied_result(tool, "tool_unavailable")),
         };

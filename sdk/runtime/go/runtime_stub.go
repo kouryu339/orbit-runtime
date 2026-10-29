@@ -359,3 +359,7 @@ func (*Runtime) RPCEndpointDefinitions(context.Context) (json.RawMessage, error)
 }
 
 func LastError() string { return "runtimehost requires linux and cgo" }
+
+func (*Runtime) AddRPCEndpoint(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}

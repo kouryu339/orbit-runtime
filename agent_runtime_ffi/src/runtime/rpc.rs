@@ -3,7 +3,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use corework::prelude::FrameworkState;
 use corework::rpc_tool::{
     validate_runtime_tool_for_endpoint, GrpcRpcToolClient, GrpcRpcToolDiscoveryClient,
     JsonLineRpcToolClient, JsonLineRpcToolDiscoveryClient, RpcEndpointInfo, RpcEndpointRegistry,
@@ -95,20 +94,32 @@ impl Drop for ManagedSidecar {
 
 pub(super) async fn install_rpc_tools_from_config(
     configs: Vec<RpcToolEndpointConfig>,
+    registry: &corework::system::SystemRegistry,
 ) -> Result<(Vec<ManagedSidecar>, Vec<RuntimeToolMetadata>), RuntimeError> {
-    if configs.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
+    let prepared = prepare_rpc_tools(configs).await?;
+    registry
+        .append_runtime_tools(prepared.entries)
+        .map_err(|e| RuntimeError::InvalidConfig(e.to_string()))?;
+    Ok((prepared.sidecars, prepared.tools))
+}
 
-    let framework = FrameworkState::initialize()
-        .map_err(|e| RuntimeError::Internal(format!("initialize framework failed: {e}")))?;
-    let system_registry = framework.registry();
+pub(super) struct PreparedRpcTools {
+    pub sidecars: Vec<ManagedSidecar>,
+    pub tools: Vec<RuntimeToolMetadata>,
+    pub entries: Vec<corework::runtime_tool_catalog::RuntimeToolEntry>,
+}
+
+/// Discovery only: no shared registry is changed until the entire batch is valid.
+pub(super) async fn prepare_rpc_tools(
+    configs: Vec<RpcToolEndpointConfig>,
+) -> Result<PreparedRpcTools, RuntimeError> {
     let endpoint_registry = Arc::new(RpcEndpointRegistry::new());
     let tool_registry = Arc::new(RuntimeToolRegistry::new());
     let discovery = GrpcRpcToolDiscoveryClient::default();
     let json_line_discovery = JsonLineRpcToolDiscoveryClient;
     let mut active_tools = Vec::new();
     let mut sidecar_children = Vec::new();
+    let mut entries: Vec<corework::runtime_tool_catalog::RuntimeToolEntry> = Vec::new();
 
     for endpoint_config in configs {
         if endpoint_config.endpoint_id.trim().is_empty() {
@@ -210,9 +221,7 @@ pub(super) async fn install_rpc_tools_from_config(
             tool_registry
                 .insert(tool.clone())
                 .map_err(|e| RuntimeError::Rpc(e.to_string()))?;
-            ai_assistant::runtime_tools::register_runtime_tool(tool.clone());
-
-            system_registry.register_dynamic_with_metadata(
+            entries.push((
                 tool.clone(),
                 Arc::new(RpcStubSystem::new(
                     tool.name.clone(),
@@ -220,12 +229,16 @@ pub(super) async fn install_rpc_tools_from_config(
                     Arc::clone(&tool_registry),
                     client.clone(),
                 )),
-            );
+            ));
             active_tools.push(tool);
         }
     }
 
-    Ok((sidecar_children, active_tools))
+    Ok(PreparedRpcTools {
+        sidecars: sidecar_children,
+        tools: active_tools,
+        entries,
+    })
 }
 
 fn launch_sidecar_process(

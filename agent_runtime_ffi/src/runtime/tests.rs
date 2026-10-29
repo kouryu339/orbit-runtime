@@ -2,6 +2,8 @@ use super::*;
 use std::sync::{MutexGuard, OnceLock};
 use tokio::time::sleep;
 
+mod rpc_additions_tests;
+
 static RUNTIME_START_TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
 fn dynamic_cluster_runtime(root: &std::path::Path) -> RuntimeFacade {
@@ -2661,13 +2663,13 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         service: "browser.Browser".to_string(),
         method: "OpenPage".to_string(),
     };
-    FrameworkState::initialize()
-        .unwrap()
-        .registry()
-        .register_dynamic_with_metadata(
+    facade
+        .tool_registry
+        .append_runtime_tools(vec![(
             browser_tool.clone(),
             Arc::new(WorkflowResultExpansionSystem),
-        );
+        )])
+        .unwrap();
     facade.runtime_tools.push(browser_tool);
 
     let definitions = invoke(&mut facade, "runtime.get_tool_definitions", json!({}));

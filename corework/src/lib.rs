@@ -63,6 +63,7 @@ pub mod retry;
 pub mod rpc_proto;
 pub mod rpc_tool;
 pub mod runtime_state;
+pub mod runtime_tool_catalog;
 pub mod saga;
 pub mod scoped_cache;
 pub mod statemachine; // 基于 ExecutionUnit 的状态机封装

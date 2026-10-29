@@ -158,6 +158,15 @@ pub fn definitions_for_active_tools(
     strict: bool,
     workflow_authoring_enabled: bool,
 ) -> Result<Vec<llm_gateway::ToolDefinition>, String> {
+    definitions_for_active_tools_in_registry(names, strict, workflow_authoring_enabled, None)
+}
+
+pub fn definitions_for_active_tools_in_registry(
+    names: &[String],
+    strict: bool,
+    workflow_authoring_enabled: bool,
+    registry: Option<&corework::system::SystemRegistry>,
+) -> Result<Vec<llm_gateway::ToolDefinition>, String> {
     let factories = inventory::iter::<AISystemFactory>
         .into_iter()
         .collect::<Vec<_>>();
@@ -199,7 +208,7 @@ pub fn definitions_for_active_tools(
             ));
             continue;
         }
-        if let Some(metadata) = crate::runtime_tools::get_runtime_tool(name) {
+        if let Some(metadata) = crate::runtime_tools::get_runtime_tool_in_registry(registry, name) {
             if !metadata.agent_enabled {
                 continue;
             }
@@ -286,6 +295,13 @@ pub(crate) fn compact_summary(description: &str) -> String {
 }
 
 pub fn describe_registered_tools(names: &[String]) -> Result<Vec<Value>, String> {
+    describe_registered_tools_in_registry(names, None)
+}
+
+pub fn describe_registered_tools_in_registry(
+    names: &[String],
+    registry: Option<&corework::system::SystemRegistry>,
+) -> Result<Vec<Value>, String> {
     let factories = inventory::iter::<AISystemFactory>
         .into_iter()
         .collect::<Vec<_>>();
@@ -332,7 +348,9 @@ pub fn describe_registered_tools(names: &[String]) -> Result<Vec<Value>, String>
                 add_descriptor_identity(&mut descriptor);
                 return Ok(descriptor);
             }
-            if let Some(metadata) = crate::runtime_tools::get_runtime_tool(name) {
+            if let Some(metadata) =
+                crate::runtime_tools::get_runtime_tool_in_registry(registry, name)
+            {
                 let mut descriptor = json!({
                     "name": metadata.name,
                     "display_name": metadata.display_name,

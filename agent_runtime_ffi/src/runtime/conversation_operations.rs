@@ -484,8 +484,8 @@ impl RuntimeFacade {
             ai_assistant::systems::workflow::WorkflowModuleHandle::new(&workflow_module),
         );
         let workflow_tool_catalog = Arc::new(
-            ai_assistant::systems::workflow::WorkflowRuntimeToolCatalog::new(
-                self.runtime_tools.clone(),
+            ai_assistant::systems::workflow::WorkflowRuntimeToolCatalog::from_registry(
+                self.tool_registry.clone(),
             ),
         );
         let jev_manager = self.jev_manager.clone();

@@ -156,6 +156,7 @@ impl WorkflowExecutionContext {
 /// - `workflows_dir`：本地工作流持久化目录（`app_local_data_dir/workflows/`）
 #[derive(Clone)]
 pub struct WorkflowsModule {
+    runtime_registry: Option<Arc<crate::system::SystemRegistry>>,
     pub(crate) unit: Module,
     pub(crate) workflows_dir: PathBuf,
     pub(crate) event_bus: Arc<dyn EventBus>,
@@ -226,6 +227,7 @@ impl WorkflowsModule {
         );
 
         Ok(Self {
+            runtime_registry: None,
             unit,
             workflows_dir,
             event_bus,
@@ -241,8 +243,16 @@ impl WorkflowsModule {
     }
 
     /// 创建与模块绑定的执行上下文（包含 World、Registry、EventBus）。
+    pub fn with_runtime_registry(mut self, registry: Arc<crate::system::SystemRegistry>) -> Self {
+        self.runtime_registry = Some(registry);
+        self
+    }
     pub fn create_context(&self) -> corework::orchestration::Context {
-        self.unit.create_context()
+        let ctx = self.unit.create_context();
+        match &self.runtime_registry {
+            Some(registry) => ctx.set_registry(registry.clone()),
+            None => ctx,
+        }
     }
 
     pub(crate) fn create_run_context(&self) -> corework::orchestration::Context {

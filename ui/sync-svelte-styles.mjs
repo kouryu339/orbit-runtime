@@ -14,7 +14,7 @@ for (const [source, name, scope] of targets) {
   const text = readFileSync(
     path.join(root, 'lit/src/components', source),
     'utf8',
-  );
+  ).replace(/\r\n/g, '\n');
   const css = text.match(/static styles = css`([\s\S]*?)`;/)?.[1];
   if (!css) throw new Error(`Missing styles: ${source}`);
   const output =
@@ -48,7 +48,7 @@ for (const [source, name, scope] of targets) {
     '\n';
   const target = path.join(root, 'svelte/src/lib', `${name}.css`);
   if (process.argv.includes('--check')) {
-    if (readFileSync(target, 'utf8') !== output)
+    if (readFileSync(target, 'utf8').replace(/\r\n/g, '\n') !== output)
       throw new Error(`Styles out of sync: ${target}`);
   } else writeFileSync(target, output);
 }

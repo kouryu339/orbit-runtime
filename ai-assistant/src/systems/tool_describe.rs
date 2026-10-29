@@ -62,7 +62,10 @@ impl SystemOperation for ToolDescribeSystem {
                 ),
             ));
         }
-        let descriptors = match crate::tool_schema::describe_registered_tools(&names) {
+        let descriptors = match crate::tool_schema::describe_registered_tools_in_registry(
+            &names,
+            Some(ctx.registry()),
+        ) {
             Ok(descriptors) => descriptors,
             Err(message) => return Ok(AIOutput::error(404, message)),
         };

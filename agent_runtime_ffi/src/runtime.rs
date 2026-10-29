@@ -57,6 +57,7 @@ mod recovery;
 mod resource_definitions;
 mod resources;
 mod rpc;
+mod rpc_additions;
 mod skill_transactions;
 mod tool_definitions;
 mod workflow_node_definitions;
@@ -100,6 +101,7 @@ use crate::agent_test_studio::tools::{
 };
 
 const CONVERSATION_CREATED_EVENT: &str = "runtime:conversation_created";
+const RPC_CATALOG_CHANGED_EVENT: &str = "runtime.rpc_catalog_changed";
 const CONVERSATION_CLOSED_EVENT: &str = "runtime:conversation_closed";
 const WORKFLOW_RESOURCE_CHANGED_EVENT: &str = "workflow.resource_changed";
 const WORKFLOW_EXECUTION_STARTED_EVENT: &str = "workflow.execution_started";
@@ -117,6 +119,11 @@ const JEV_EXECUTION_COMPLETED_EVENT: &str = "jev.execution_completed";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error("{kind}: {names:?}")]
+    RpcAdditionConflict {
+        kind: &'static str,
+        names: Vec<String>,
+    },
     #[error("invalid config: {0}")]
     InvalidConfig(String),
     #[error("agent cluster '{cluster_id}' is used by live conversations: {conversation_ids:?}")]
@@ -155,7 +162,8 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn code(&self) -> i32 {
         match self {
-            Self::InvalidConfig(_)
+            Self::RpcAdditionConflict { .. }
+            | Self::InvalidConfig(_)
             | Self::ClusterInUse { .. }
             | Self::ClusterVersionConflict { .. } => ffi_error_code_invalid_config(),
             Self::SkillInUse { .. }
@@ -270,6 +278,8 @@ pub struct RuntimeFacade {
     workflow_studio_conversation_id: Option<String>,
     workflow_studio_projector_name: Option<String>,
     runtime_tools: Vec<RuntimeToolMetadata>,
+    tool_registry: Arc<corework::system::SystemRegistry>,
+    dynamic_rpc_endpoint_ids: BTreeSet<String>,
     sidecar_children: Vec<ManagedSidecar>,
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
@@ -337,6 +347,8 @@ impl RuntimeFacade {
             workflow_studio_conversation_id: None,
             workflow_studio_projector_name: None,
             runtime_tools: Vec::new(),
+            tool_registry: Arc::new(corework::system::SystemRegistry::isolated_runtime()),
+            dynamic_rpc_endpoint_ids: BTreeSet::new(),
             sidecar_children: Vec::new(),
             event_sender: Arc::new(Mutex::new(None)),
             event_log: Arc::new(StdMutex::new(VecDeque::new())),
@@ -718,6 +730,8 @@ impl RuntimeFacade {
         let event_sender = Arc::clone(&self.event_sender);
         let event_log = Arc::clone(&self.event_log);
         let workflow_runs = Arc::clone(&self.workflow_runs);
+        let next_tool_registry = Arc::new(corework::system::SystemRegistry::isolated_runtime());
+        let tool_registry = next_tool_registry.clone();
         let rpc_tools = self.config.rpc_tools.clone();
         let mut retrieval_configs = self
             .config
@@ -772,11 +786,12 @@ impl RuntimeFacade {
             state_store,
             sequence_backend,
         ) = self.rt.block_on(async move {
-            let framework = FrameworkState::initialize_with_runtime_state_config(
+            let mut framework = FrameworkState::initialize_with_runtime_state_config(
                 core_cache_backend_config,
                 core_runtime_state_config,
             )
             .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+            framework.registry = tool_registry.clone();
             tracing::info!(
                 backend = ?framework.runtime_state().backend_kind(),
                 "runtime state backend initialized"
@@ -817,13 +832,17 @@ impl RuntimeFacade {
                 }
             });
 
-            let workflow_module =
-                install_workflow_runtime_from_config(workflow_auto_load_dir, event_bus.clone())?;
+            let workflow_module = Arc::new(
+                (*install_workflow_runtime_from_config(workflow_auto_load_dir, event_bus.clone())?)
+                    .clone()
+                    .with_runtime_registry(tool_registry.clone()),
+            );
             let (sidecar_children, mut runtime_tools) =
-                install_rpc_tools_from_config(rpc_tools).await?;
+                install_rpc_tools_from_config(rpc_tools, &tool_registry).await?;
             runtime_tools.extend(install_retrieval_system_from_config(
                 &retrieval_configs,
                 &retrieval_endpoints,
+                &tool_registry,
             )?);
             let restored = workflow_module
                 .restore_local_sources(&runtime_tools)
@@ -874,6 +893,8 @@ impl RuntimeFacade {
         self.install_jev_manager()?;
         self.sidecar_children = sidecar_children;
         self.runtime_tools = runtime_tools;
+        self.tool_registry = next_tool_registry;
+        self.dynamic_rpc_endpoint_ids.clear();
         self.state_store = state_store;
         self.sequence_backend = sequence_backend;
         self.coordination_backend = coordination_backend;

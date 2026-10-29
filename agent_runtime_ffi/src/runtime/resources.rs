@@ -217,7 +217,7 @@ pub struct RuntimeRpcEndpointPool {
 }
 
 impl RuntimeRpcEndpointPool {
-    fn insert(&mut self, endpoint: RpcToolEndpointConfig) -> Result<(), RuntimeError> {
+    pub(super) fn insert(&mut self, endpoint: RpcToolEndpointConfig) -> Result<(), RuntimeError> {
         if self.endpoints.contains_key(&endpoint.endpoint_id) {
             return Err(RuntimeError::InvalidConfig(format!(
                 "resource rpc endpoint '{}' is duplicated",
@@ -399,7 +399,7 @@ fn build_agent_profile_registry(
     Ok(registry)
 }
 
-fn resource_rpc_endpoint_to_runtime(
+pub(super) fn resource_rpc_endpoint_to_runtime(
     endpoint: ResourceRpcEndpointConfig,
     base_dir: Option<&Path>,
 ) -> Result<RpcToolEndpointConfig, RuntimeError> {
@@ -485,6 +485,7 @@ fn normalize_resource_path(base_dir: Option<&Path>, path: PathBuf) -> PathBuf {
 pub(super) fn install_retrieval_system_from_config(
     retrieval_configs: &[RetrievalConfig],
     endpoints: &[RpcToolEndpointConfig],
+    system_registry: &corework::system::SystemRegistry,
 ) -> Result<Vec<RuntimeToolMetadata>, RuntimeError> {
     let enabled = retrieval_configs
         .iter()
@@ -493,8 +494,6 @@ pub(super) fn install_retrieval_system_from_config(
     if enabled.is_empty() {
         return Ok(Vec::new());
     }
-    let framework = FrameworkState::initialize()
-        .map_err(|e| RuntimeError::Internal(format!("initialize framework failed: {e}")))?;
     let endpoint_map = Arc::new(
         endpoints
             .iter()
@@ -572,15 +571,16 @@ pub(super) fn install_retrieval_system_from_config(
             service: "runtime.retrieval".to_string(),
             method: "Retrieve".to_string(),
         };
-        ai_assistant::runtime_tools::register_runtime_tool(metadata.clone());
-        tools.push(metadata);
-        framework.registry().register_dynamic(
-            tool_name.clone(),
-            Arc::new(JsonLineRetrievalSystem {
-                tool_name,
-                endpoints: Arc::clone(&endpoint_map),
-            }),
-        );
+        tools.push(metadata.clone());
+        system_registry
+            .append_runtime_tools(vec![(
+                metadata,
+                Arc::new(JsonLineRetrievalSystem {
+                    tool_name,
+                    endpoints: Arc::clone(&endpoint_map),
+                }),
+            )])
+            .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))?;
     }
     Ok(tools)
 }

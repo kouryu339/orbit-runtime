@@ -39,6 +39,7 @@ constexpr const char* kConversationCreatedEventType = "conversation:created";
 constexpr const char* kConversationClosedEventType = "conversation:closed";
 constexpr const char* kFrontendStateSnapshotEventType = "frontend:state_snapshot";
 constexpr const char* kWorkflowResourceChangedEventType = "workflow.resource_changed";
+constexpr const char* kRpcCatalogChangedEventType = "runtime.rpc_catalog_changed";
 constexpr const char* kWorkflowExecutionStartedEventType = "workflow.execution_started";
 constexpr const char* kWorkflowNodeStartedEventType = "workflow.node_started";
 constexpr const char* kWorkflowNodeCompletedEventType = "workflow.node_completed";
@@ -356,6 +357,7 @@ inline bool is_public_runtime_event(const RuntimeEvent& event)
         || event.type == kStateDeltaEventType
         || event.type == kFrontendStateSnapshotEventType
         || event.type == kWorkflowResourceChangedEventType
+        || event.type == kRpcCatalogChangedEventType
         || event.type == kWorkflowExecutionStartedEventType
         || event.type == kWorkflowNodeStartedEventType
         || event.type == kWorkflowNodeCompletedEventType
@@ -929,6 +931,12 @@ public:
     void register_agent_cluster_json(const std::string& registration_json)
     {
         invoke("runtime.register_agent_cluster", registration_payload(registration_json));
+    }
+
+    std::string add_rpc_endpoint_json(const std::string& endpoint_json)
+    {
+        return invoke("runtime.add_rpc_endpoint", std::string("{\"schema\":\"agent-runtime-rpc-endpoint-add/v1\",\"endpoint\":")
+            + object_or_empty(endpoint_json) + "}");
     }
 
     std::string add_agent_cluster_json(const std::string& registration_json)

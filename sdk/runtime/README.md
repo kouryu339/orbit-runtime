@@ -237,6 +237,16 @@ then calls the language SDK's `resolve_tool_permission` /
 `ResolveToolPermission` method with the conversation id, tool call id, and
 `allow` or `deny`. A stale or duplicate response returns `resolved: false`.
 
+## Dynamic RPC Endpoints
+
+After start, `add_rpc_endpoint` (Python/Rust), `add_rpc_endpoint_json` (C++) or
+`AddRPCEndpoint` (Go) accepts an external gRPC endpoint object. Discovery appends
+the complete tool set atomically; any existing endpoint ID or tool name rejects
+the request. No update/remove/refresh is provided, and agent access is not granted.
+The host persists accepted endpoint configuration and restores it before start.
+Check `features.dynamic_rpc_additions` first. See the
+[dynamic RPC contract](../../agent_runtime_ffi/docs/en/17-dynamic-rpc-additions.md).
+
 ## Dynamic Agent Cluster Configuration
 
 After start, `runtime.add_agent_cluster` accepts the existing cluster registration

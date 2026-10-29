@@ -6,6 +6,7 @@ const ConversationCreatedEventType = "conversation:created"
 const ConversationClosedEventType = "conversation:closed"
 const FrontendStateSnapshotEventType = "frontend:state_snapshot"
 const WorkflowResourceChangedEventType = "workflow.resource_changed"
+const RPCCatalogChangedEventType = "runtime.rpc_catalog_changed"
 const WorkflowExecutionStartedEventType = "workflow.execution_started"
 const WorkflowNodeStartedEventType = "workflow.node_started"
 const WorkflowNodeCompletedEventType = "workflow.node_completed"
@@ -25,6 +26,7 @@ func IsPublicRuntimeEvent(event json.RawMessage) bool {
 		StateDeltaEventType,
 		FrontendStateSnapshotEventType,
 		WorkflowResourceChangedEventType,
+		RPCCatalogChangedEventType,
 		WorkflowExecutionStartedEventType,
 		WorkflowNodeStartedEventType,
 		WorkflowNodeCompletedEventType,

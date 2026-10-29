@@ -10,7 +10,7 @@ use crate::events::{
 use crate::skills::systems::mgr;
 use crate::systems::prompt::{
     build_env_context_section, build_system_prompt_text_for_protocol,
-    format_immutable_cache_entries_section, format_tools_section, format_workflows_section,
+    format_immutable_cache_entries_section, format_workflows_section,
 };
 use corework::cache::{Cache, CacheExt};
 use corework::event::{BaseEvent, EventBus};
@@ -776,7 +776,11 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     let workflow_authoring_enabled =
         workflow_authoring_enabled && tool_protocol != crate::ToolProtocol::Disabled;
     let tools_section = if tool_protocol == crate::ToolProtocol::ExecLegacy {
-        format_tools_section(&all_tools, workflow_authoring_enabled)
+        crate::systems::prompt::format_tools_section_in_registry(
+            &all_tools,
+            workflow_authoring_enabled,
+            Some(&sm_ctx.registry()),
+        )
     } else {
         String::new()
     };
@@ -843,13 +847,14 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
         .map(|provider| provider.prompt_cache_control)
         .unwrap_or(false);
     let native_tool_definitions = if tool_protocol == crate::ToolProtocol::NativeFc {
-        crate::tool_schema::definitions_for_active_tools(
+        crate::tool_schema::definitions_for_active_tools_in_registry(
             &all_tools,
             provider_runtime
                 .as_ref()
                 .map(|provider| provider.strict_tool_schema)
                 .unwrap_or(false),
             workflow_authoring_enabled,
+            Some(&sm_ctx.registry()),
         )
         .map_err(corework::error::FrameworkError::InvalidOperation)?
     } else {

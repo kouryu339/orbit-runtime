@@ -19,18 +19,32 @@ use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct WorkflowRuntimeToolCatalog {
+    registry: Option<Arc<corework::system::SystemRegistry>>,
     tools: Vec<RuntimeToolMetadata>,
 }
 
 impl WorkflowRuntimeToolCatalog {
     pub fn new(tools: Vec<RuntimeToolMetadata>) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            registry: None,
+        }
     }
 
-    fn tools(&self) -> &[RuntimeToolMetadata] {
-        &self.tools
+    pub fn from_registry(registry: Arc<corework::system::SystemRegistry>) -> Self {
+        Self {
+            registry: Some(registry),
+            tools: Vec::new(),
+        }
+    }
+    /// Read the current metadata catalog; this does not grant tool access.
+    pub fn tools(&self) -> Vec<RuntimeToolMetadata> {
+        self.registry
+            .as_ref()
+            .map(|registry| registry.runtime_tools())
+            .unwrap_or_else(|| self.tools.clone())
     }
 }
 
@@ -68,7 +82,7 @@ fn editor_session(ctx: &Context) -> Option<Arc<WorkflowEditorSession>> {
 
 fn runtime_tools(ctx: &Context) -> Vec<RuntimeToolMetadata> {
     ctx.resolve_shared_component::<WorkflowRuntimeToolCatalog>()
-        .map(|catalog| catalog.tools().to_vec())
+        .map(|catalog| catalog.tools())
         .unwrap_or_default()
 }
 

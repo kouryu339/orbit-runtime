@@ -35,6 +35,7 @@ contracts.
 | Provider config contract | [en](en/03-runtime-provider-config-contract.md) | [zh](zh/03-runtime-provider-config-contract.md) |
 | Diagnostics contract | [en](en/08-runtime-diagnostics-contract.md) | [zh](zh/08-runtime-diagnostics-contract.md) |
 | RPC tool authoring guide | [en](en/09-runtime-rpc-tool-authoring-guide.md) | [zh](zh/09-runtime-rpc-tool-authoring-guide.md) |
+| Dynamic RPC additions | [en](en/17-dynamic-rpc-additions.md) | [zh](zh/17-dynamic-rpc-additions.md) |
 | Skill authoring guide | [en](en/10-runtime-skill-authoring-guide.md) | [zh](zh/10-runtime-skill-authoring-guide.md) |
 | Authorized local Grep (AI only) | [en](en/15-authorized-local-grep.md) | [zh](zh/15-authorized-local-grep.md) |
 | Workflow catalog and execution contract | [en](en/11-runtime-workflow-execution-contract.md) | [zh](zh/11-runtime-workflow-execution-contract.md) |

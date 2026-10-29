@@ -156,6 +156,15 @@ impl FfiError {
 impl From<RuntimeError> for FfiError {
     fn from(error: RuntimeError) -> Self {
         match error {
+            RuntimeError::RpcAdditionConflict { kind, names } => {
+                let mut error = Self::new(
+                    AGENT_RUNTIME_ERR_BAD_STATE,
+                    kind,
+                    "RPC additions cannot replace existing endpoints or tools",
+                );
+                error.details = Some(json!({"conflicts": names}));
+                error
+            }
             RuntimeError::SkillVersionConflict {
                 name,
                 expected,
@@ -1258,15 +1267,15 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
                 .expect("capabilities commands must be an array");
             commands.retain(|command| !command.as_str().is_some_and(|command| command.starts_with("workflow.") || DEPRECATED_STUDIO_COMMANDS.contains(&command)));
             commands.extend(PUBLIC_WORKFLOW_COMMANDS.iter().map(|command| Value::String((*command).into())));
-            for command in ["jev.configure", "jev.register", "jev.list", "jev.run", "runtime.add_agent_cluster", "runtime.update_agent_cluster", "runtime.read_skill", "runtime.validate_skill_transaction", "runtime.commit_skill_transaction"] {
+            for command in ["jev.configure", "jev.register", "jev.list", "jev.run", "runtime.add_agent_cluster", "runtime.update_agent_cluster", "runtime.add_rpc_endpoint", "runtime.read_skill", "runtime.validate_skill_transaction", "runtime.commit_skill_transaction"] {
                 commands.push(Value::String(command.to_string()));
             }
-            capabilities["features"] = json!({"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"skill_candidate_transactions":1});
+            capabilities["features"] = json!({"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"skill_candidate_transactions":1,"dynamic_rpc_additions":1});
             let event_types = capabilities["events"]["types"]
                 .as_array_mut()
                 .expect("capabilities event types must be an array");
             for event_type in [
-                "jev.execution_started", "jev.decision", "jev.tool_started",
+                "runtime.rpc_catalog_changed", "jev.execution_started", "jev.decision", "jev.tool_started",
                 "jev.tool_completed", "jev.snapshot_updated", "jev.execution_completed",
             ] {
                 event_types.push(Value::String(event_type.to_string()));
@@ -1379,7 +1388,34 @@ pub extern "C" fn agent_runtime_invoke_v1(
             .map(str::to_owned)
             .unwrap_or_else(next_command_id);
         let guard = acquire_call(handle)?;
-        let command_result = {
+        let command_result = if command_type == "runtime.add_rpc_endpoint" {
+            // Discovery waits on the network without blocking other handle calls.
+            (|| -> Result<Value, FfiError> {
+                let addition = guard
+                    .entry
+                    .facade
+                    .read()
+                    .map_err(|_| FfiError::bad_state("runtime lock poisoned"))?
+                    .prepare_rpc_endpoint_addition(Value::Object(payload.clone()))?;
+                let discovered = addition.discover()?;
+                let mut facade = guard
+                    .entry
+                    .facade
+                    .write()
+                    .map_err(|_| FfiError::bad_state("runtime lock poisoned"))?;
+                let lifecycle = guard
+                    .entry
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| FfiError::bad_state("lifecycle lock poisoned"))?;
+                if lifecycle.state != LifecycleState::Open {
+                    return Err(FfiError::bad_state("runtime is shutting down"));
+                }
+                facade
+                    .commit_rpc_endpoint_addition(discovered, &command_id)
+                    .map_err(FfiError::from)
+            })()
+        } else {
             let mut facade = guard.entry.facade.write().map_err(|_| {
                 FfiError::new(
                     AGENT_RUNTIME_ERR_RUNTIME,
