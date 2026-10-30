@@ -59,7 +59,7 @@ pub fn capabilities() -> Value {
     json!({"schema":"agent-runtime-capabilities/v1","platform":"browser-wasm","abi":{"major":1,"minor":3},"commands":COMMANDS,
         "events":{"schema":"agent-runtime-event/v1","transport":"worker"},
         "features":{"dynamic_rpc_additions":1,"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"host_tool_transport":1,"browser_resource_transactions":1},
-        "unsupported":["native_filesystem","managed_process","native_grpc","ambient_environment","conversation_recovery","skill_content_update","cluster_update","image_path_import","agent_workflow_editing","workflow_edits_with_live_conversations"]})
+        "unsupported":["rpc_event_sources","native_filesystem","managed_process","native_grpc","ambient_environment","conversation_recovery","skill_content_update","cluster_update","image_path_import","agent_workflow_editing","workflow_edits_with_live_conversations"]})
 }
 
 pub struct Runtime {

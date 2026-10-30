@@ -1271,6 +1271,10 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
                 commands.push(Value::String(command.to_string()));
             }
             capabilities["features"] = json!({"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"skill_candidate_transactions":1,"dynamic_rpc_additions":1});
+            capabilities["commands"].as_array_mut().unwrap().extend(
+                corework::rpc_event::COMMANDS.iter().map(|v| json!(v)));
+            capabilities["features"]["rpc_event_sources"] = json!(1);
+            capabilities["source_events"] = json!({"schema":"corework-source-event/v1","transport":"runtime.poll_source_events","explicit_ack":true,"max_subscriptions":16,"max_capacity":128,"max_data_bytes":65536});
             let event_types = capabilities["events"]["types"]
                 .as_array_mut()
                 .expect("capabilities event types must be an array");
@@ -1388,7 +1392,19 @@ pub extern "C" fn agent_runtime_invoke_v1(
             .map(str::to_owned)
             .unwrap_or_else(next_command_id);
         let guard = acquire_call(handle)?;
-        let command_result = if command_type == "runtime.add_rpc_endpoint" {
+        let command_result = if corework::rpc_event::COMMANDS.contains(&command_type) {
+            (|| -> Result<Value, FfiError> {
+                let (runtime, hub) = guard
+                    .entry
+                    .facade
+                    .read()
+                    .map_err(|_| FfiError::bad_state("runtime lock poisoned"))?
+                    .event_ingestion()?;
+                runtime
+                    .block_on(hub.invoke(command_type, Value::Object(payload.clone())))
+                    .map_err(|e| FfiError::new(ffi_error_code_rpc_failed(), e.kind, e.message))
+            })()
+        } else if command_type == "runtime.add_rpc_endpoint" {
             // Discovery waits on the network without blocking other handle calls.
             (|| -> Result<Value, FfiError> {
                 let addition = guard

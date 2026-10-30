@@ -910,6 +910,26 @@ class Runtime:
             "schema": "agent-runtime-rpc-endpoint-add/v1", "endpoint": endpoint,
         })
 
+    def add_event_source(self, endpoint: Mapping[str, Any]) -> Any:
+        """Register an independent, append-only event endpoint (no AI tools required)."""
+        return self.invoke("runtime.add_event_source", endpoint)
+
+    def get_event_source_definitions(self) -> Any:
+        return self.invoke("runtime.get_event_source_definitions", {})
+
+    def subscribe_events(self, subscription: Mapping[str, Any]) -> Any:
+        return self.invoke("runtime.subscribe_events", subscription)
+
+    def poll_source_events(self, subscription_id: str, limit: int = 32) -> Any:
+        return self.invoke("runtime.poll_source_events", {"subscription_id": subscription_id, "limit": limit})
+
+    def acknowledge_events(self, subscription_id: str, cursor: str) -> Any:
+        """Confirm durable acceptance, cumulatively through an already polled cursor."""
+        return self.invoke("runtime.acknowledge_events", {"subscription_id": subscription_id, "cursor": cursor})
+
+    def unsubscribe_events(self, subscription_id: str) -> Any:
+        return self.invoke("runtime.unsubscribe_events", {"subscription_id": subscription_id})
+
     def add_agent_cluster(self, registration: Mapping[str, Any]) -> Any:
         """Add a cluster after start; its primary agent must reference a Role Skill."""
         return self.invoke("runtime.add_agent_cluster", {"registration": registration})

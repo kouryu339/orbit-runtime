@@ -698,6 +698,39 @@ impl Runtime {
         )
     }
 
+    pub fn add_event_source(&mut self, payload: Value) -> Result<Value> {
+        self.invoke("runtime.add_event_source", payload)
+    }
+
+    pub fn subscribe_source_events(&mut self, payload: Value) -> Result<Value> {
+        self.invoke("runtime.subscribe_events", payload)
+    }
+
+    pub fn get_event_source_definitions(&mut self) -> Result<Value> {
+        self.invoke("runtime.get_event_source_definitions", json!({}))
+    }
+
+    pub fn poll_source_events(&mut self, subscription_id: &str, limit: usize) -> Result<Value> {
+        self.invoke(
+            "runtime.poll_source_events",
+            json!({"subscription_id":subscription_id,"limit":limit}),
+        )
+    }
+
+    pub fn acknowledge_events(&mut self, subscription_id: &str, cursor: &str) -> Result<Value> {
+        self.invoke(
+            "runtime.acknowledge_events",
+            json!({"subscription_id":subscription_id,"cursor":cursor}),
+        )
+    }
+
+    pub fn unsubscribe_events(&mut self, subscription_id: &str) -> Result<Value> {
+        self.invoke(
+            "runtime.unsubscribe_events",
+            json!({"subscription_id":subscription_id}),
+        )
+    }
+
     pub fn add_agent_cluster(&mut self, registration: Value) -> Result<Value> {
         self.invoke(
             "runtime.add_agent_cluster",

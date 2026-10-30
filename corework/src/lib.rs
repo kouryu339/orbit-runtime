@@ -61,6 +61,8 @@ pub mod orchestration;
 pub mod platform;
 pub mod rag; // RAG 类型/trait 骨架，尚未实现检索链路
 pub mod retry;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rpc_event;
 pub mod rpc_proto;
 pub mod rpc_tool;
 pub mod runtime_state;

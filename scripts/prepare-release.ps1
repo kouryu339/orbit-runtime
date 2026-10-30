@@ -43,6 +43,9 @@
 .PARAMETER FrontendOnly
   Build and package only the standalone Svelte JS and its distribution archive.
 
+.PARAMETER NativeOnly
+  Build native libraries and matching SDK sources, without frontend or browser packages.
+
 .PARAMETER SkipFrontendBuild
   Reuse the already built and verified ui/svelte/dist-library output.
 
@@ -79,6 +82,8 @@ param(
     [switch]$SkipBuild,
 
     [switch]$FrontendOnly,
+
+    [switch]$NativeOnly,
 
     [switch]$SkipFrontendBuild,
 
@@ -254,6 +259,9 @@ function New-ReleasePackage($platform) {
     }
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/skill-transaction.schema.json') (Join-Path $packageRoot 'schemas/skill-transaction.schema.json')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/rpc-endpoint-add.schema.json') (Join-Path $packageRoot 'schemas/rpc-endpoint-add.schema.json')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/event-source.schema.json') (Join-Path $packageRoot 'schemas/event-source.schema.json')
+    Copy-RequiredFile (Join-Path $repo 'corework/proto/corework_event_source_v1.proto') (Join-Path $packageRoot 'proto/corework_event_source_v1.proto')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/zh/18-rpc-event-sources.md') (Join-Path $packageRoot 'docs/zh/18-rpc-event-sources.md')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\workflow-json-update.zh-CN.md') (Join-Path $packageRoot 'docs\workflow-json-update.zh-CN.md')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
     $releaseNotes = Join-Path $repo "agent_runtime_ffi/docs/releases/v$($Version.TrimStart('v'))/release-notes.md"
@@ -440,6 +448,8 @@ function Update-SdkReleaseMetadata {
 
 Set-Location $repo
 
+if ($NativeOnly -and $FrontendOnly) { throw 'NativeOnly and FrontendOnly cannot be combined' }
+
 if (-not $Version) {
     $Version = Get-RuntimeVersion
 }
@@ -471,9 +481,9 @@ $results = @()
 if (-not $FrontendOnly) {
     $results += foreach ($target in Get-SelectedTargets) { New-ReleasePackage $target }
 }
-$results += New-FrontendPackage
+if (-not $NativeOnly) { $results += New-FrontendPackage }
 if (-not $FrontendOnly) {
-    $results += New-BrowserPackage
+    if (-not $NativeOnly) { $results += New-BrowserPackage }
     if ($LocalPreview) { Write-Warning 'Local preview: stable SDK online-download pins are unchanged; load the packaged library explicitly.' }
     elseif ($Targets -eq 'all') { Update-SdkReleaseMetadata }
     else { Write-Warning 'Single-platform preview: SDK download pins are unchanged; load the packaged library explicitly.' }

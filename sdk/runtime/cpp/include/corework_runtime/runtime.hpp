@@ -939,6 +939,36 @@ public:
             + object_or_empty(endpoint_json) + "}");
     }
 
+    std::string add_event_source_json(const std::string& payload_json)
+    {
+        return invoke("runtime.add_event_source", object_or_empty(payload_json));
+    }
+
+    std::string subscribe_events_json(const std::string& payload_json)
+    {
+        return invoke("runtime.subscribe_events", object_or_empty(payload_json));
+    }
+
+    std::string poll_source_events_json(const std::string& payload_json)
+    {
+        return invoke("runtime.poll_source_events", object_or_empty(payload_json));
+    }
+
+    std::string acknowledge_events_json(const std::string& payload_json)
+    {
+        return invoke("runtime.acknowledge_events", object_or_empty(payload_json));
+    }
+
+    std::string unsubscribe_events_json(const std::string& payload_json)
+    {
+        return invoke("runtime.unsubscribe_events", object_or_empty(payload_json));
+    }
+
+    std::string get_event_source_definitions()
+    {
+        return invoke("runtime.get_event_source_definitions", "{}");
+    }
+
     std::string add_agent_cluster_json(const std::string& registration_json)
     {
         return invoke("runtime.add_agent_cluster", registration_payload(registration_json));

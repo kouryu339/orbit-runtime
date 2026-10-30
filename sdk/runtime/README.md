@@ -5,6 +5,12 @@ Browser JS/TS hosts use the independent [WASM Worker SDK](./js/README.md)
 Native hosts continue using DLL/SO SDKs below. Browser capabilities differ;
 see the [browser usage contract](./js/USAGE.zh-CN.md).
 
+Native hosts can discover and subscribe to independent RPC event sources when
+`capabilities.features.rpc_event_sources == 1`. Events use a separate bounded
+poll queue and explicit host acknowledgement. See the
+[event source contract](../../agent_runtime_ffi/docs/zh/18-rpc-event-sources.md).
+The host owns durable inbox/checkpoints and business task dispatch.
+
 > Workflow resources now expose list, register, remove, validate, promote and execute. Legacy API descriptions below are historical. See [the current contract](../../agent_runtime_ffi/docs/en/12-workflow-resource-api.md).
 
 

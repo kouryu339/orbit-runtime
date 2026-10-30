@@ -56,6 +56,9 @@ def main() -> None:
             assert files[f"schemas/{schema}"] == (repo / "corework/src/workflow" / schema).read_bytes()
         assert files["schemas/skill-transaction.schema.json"] == (repo / "agent_runtime_ffi/docs/skill-transaction.schema.json").read_bytes()
         assert files["schemas/rpc-endpoint-add.schema.json"] == (repo / "agent_runtime_ffi/docs/rpc-endpoint-add.schema.json").read_bytes()
+        assert files["schemas/event-source.schema.json"] == (repo / "agent_runtime_ffi/docs/event-source.schema.json").read_bytes()
+        assert files["proto/corework_event_source_v1.proto"] == (repo / "corework/proto/corework_event_source_v1.proto").read_bytes()
+        assert files["docs/zh/18-rpc-event-sources.md"] == (repo / "agent_runtime_ffi/docs/zh/18-rpc-event-sources.md").read_bytes()
         for language in ("zh", "en"):
             assert files[f"docs/{language}/workflow-json-source-syntax.md"] == (repo / f"ai-assistant/prompts/{language}/workflow_tool_rules.md").read_bytes()
             assert files[f"docs/{language}/17-dynamic-rpc-additions.md"] == (repo / f"agent_runtime_ffi/docs/{language}/17-dynamic-rpc-additions.md").read_bytes()

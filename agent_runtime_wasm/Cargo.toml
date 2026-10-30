@@ -1,6 +1,6 @@
 [package]
 name = "orbit-runtime-wasm"
-version = "0.5.3"
+version = "0.5.4-beta.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Browser Worker entry point for the shared Orbit Runtime"

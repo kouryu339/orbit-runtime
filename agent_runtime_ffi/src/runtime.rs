@@ -253,6 +253,7 @@ pub use llm_gateway::registration::RuntimeLlmRegistry;
 
 pub struct RuntimeFacade {
     rt: Runtime,
+    event_sources: Arc<corework::rpc_event::EventSourceHub>,
     config: RuntimeConfig,
     event_bus: Arc<InMemoryEventBus>,
     state_store: Arc<dyn RuntimeStateStore>,
@@ -298,6 +299,21 @@ impl Drop for RuntimeFacade {
 }
 
 impl RuntimeFacade {
+    pub(crate) fn event_ingestion(
+        &self,
+    ) -> Result<
+        (
+            tokio::runtime::Handle,
+            Arc<corework::rpc_event::EventSourceHub>,
+        ),
+        RuntimeError,
+    > {
+        if !self.started {
+            return Err(RuntimeError::NotStarted);
+        }
+        Ok((self.rt.handle().clone(), self.event_sources.clone()))
+    }
+
     #[allow(dead_code)]
     pub fn create_default() -> Result<Self, RuntimeError> {
         Self::create_inner(RuntimeConfig::default())
@@ -322,6 +338,7 @@ impl RuntimeFacade {
 
         let mut facade = Self {
             rt,
+            event_sources: Arc::new(corework::rpc_event::EventSourceHub::default()),
             config,
             event_bus: Arc::new(InMemoryEventBus::new()),
             state_store: Arc::new(LocalRuntimeStateStore::default()),
@@ -1183,6 +1200,7 @@ impl RuntimeFacade {
     }
 
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
+        self.event_sources.close();
         self.workflow_studio_server = None;
         self.agent_test_studio_server = None;
 

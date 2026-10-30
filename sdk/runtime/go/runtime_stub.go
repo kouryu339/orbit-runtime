@@ -363,3 +363,27 @@ func LastError() string { return "runtimehost requires linux and cgo" }
 func (*Runtime) AddRPCEndpoint(context.Context, json.RawMessage) (json.RawMessage, error) {
 	return nil, errors.New("runtimehost requires cgo")
 }
+
+func (*Runtime) AddEventSource(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) GetEventSourceDefinitions(context.Context) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) SubscribeEvents(context.Context, json.RawMessage) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) PollSourceEvents(context.Context, string, int) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) AcknowledgeEvents(context.Context, string, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}
+
+func (*Runtime) UnsubscribeEvents(context.Context, string) (json.RawMessage, error) {
+	return nil, errors.New("runtimehost requires cgo")
+}

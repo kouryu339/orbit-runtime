@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orbit:runtime:event-source:v1",
+  "title": "RPC event source commands v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "agent-runtime-command/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime.add_event_source"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          },
+          "required": [
+            "id",
+            "endpoint"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "agent-runtime-command/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime.get_event_source_definitions"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "required": []
+        }
+      },
+      "required": [
+        "schema",
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "agent-runtime-command/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime.subscribe_events"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "subscription_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "consumer_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "event_types": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "capacity": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 128
+            },
+            "after_cursor": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "stream_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "endpoint_id",
+            "subscription_id",
+            "consumer_id"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "agent-runtime-command/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime.poll_source_events"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subscription_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 128
+            }
+          },
+          "required": [
+            "subscription_id"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "agent-runtime-command/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime.acknowledge_events"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subscription_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "subscription_id",
+            "cursor"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "agent-runtime-command/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime.unsubscribe_events"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subscription_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "subscription_id"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "type",
+        "payload"
+      ]
+    }
+  ]
+}

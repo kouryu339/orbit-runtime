@@ -1,0 +1,58 @@
+syntax = "proto3";
+package corework.event_source.v1;
+
+// Independent of AgentToolService. One endpoint may implement either or both.
+service EventSourceService {
+  rpc ListEventTypes(ListEventTypesRequest) returns (ListEventTypesResponse);
+  rpc Subscribe(SubscribeRequest) returns (stream EventFrame);
+  rpc Acknowledge(AcknowledgeRequest) returns (AcknowledgeResponse);
+}
+message ListEventTypesRequest { repeated string accepted_schema = 1; }
+message EventType {
+  string name = 1;
+  string description = 2;
+  string data_schema_json = 3;
+  string schema_version = 4;
+}
+message ListEventTypesResponse {
+  string schema = 1; // corework-event-source/v1
+  string source_id = 2; // stable source/account identity
+  string stream_id = 3; // changes on journal reset; never resume across epochs
+  repeated EventType event_types = 4;
+  bool replayable = 5;
+  string durability = 6; // live, memory, durable
+  uint64 retention_ms = 7;
+}
+message SubscribeRequest {
+  string source_id = 1;
+  string stream_id = 2;
+  string consumer_id = 3;
+  repeated string event_types = 4;
+  // Exclusive opaque cursor. Empty means oldest retained for replayable sources,
+  // or now for live-only sources. Never silently advance an expired cursor.
+  string after_cursor = 5;
+}
+message SourceEvent {
+  string source_id = 1;
+  string stream_id = 2;
+  string event_id = 3;
+  string event_type = 4;
+  string schema_version = 5;
+  string occurred_at = 6; // RFC3339
+  string cursor = 7;
+  string data_json = 8;
+}
+message Heartbeat {}
+message EventFrame {
+  oneof message { SourceEvent event = 1; Heartbeat heartbeat = 2; }
+}
+message AcknowledgeRequest {
+  string source_id = 1;
+  string stream_id = 2;
+  string consumer_id = 3;
+  string cursor = 4; // cumulative: host durably accepted all deliveries through this cursor
+}
+message AcknowledgeResponse { string cursor = 1; }
+// OUT_OF_RANGE = cursor_expired; FAILED_PRECONDITION = stream changed.
+// INVALID_ARGUMENT/PERMISSION_DENIED/UNIMPLEMENTED are terminal.
+// Delivery is at-least-once within the declared journal retention, not exactly-once.

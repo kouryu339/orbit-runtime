@@ -909,3 +909,27 @@ func LastError() string {
 	}
 	return C.GoString(ptr)
 }
+
+func (r *Runtime) AddEventSource(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.add_event_source", payload)
+}
+
+func (r *Runtime) GetEventSourceDefinitions(ctx context.Context) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.get_event_source_definitions", map[string]any{})
+}
+
+func (r *Runtime) SubscribeEvents(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.subscribe_events", payload)
+}
+
+func (r *Runtime) PollSourceEvents(ctx context.Context, subscriptionID string, limit int) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.poll_source_events", map[string]any{"subscription_id": subscriptionID, "limit": limit})
+}
+
+func (r *Runtime) AcknowledgeEvents(ctx context.Context, subscriptionID string, cursor string) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.acknowledge_events", map[string]any{"subscription_id": subscriptionID, "cursor": cursor})
+}
+
+func (r *Runtime) UnsubscribeEvents(ctx context.Context, subscriptionID string) (json.RawMessage, error) {
+	return r.invoke(ctx, "runtime.unsubscribe_events", map[string]any{"subscription_id": subscriptionID})
+}

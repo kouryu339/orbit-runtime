@@ -5,8 +5,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(false)
         .build_client(std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("wasm32"))
-        .compile_protos(&["proto/corework_agent_tool_v1.proto"], &["proto"])?;
+        .compile_protos(
+            &[
+                "proto/corework_agent_tool_v1.proto",
+                "proto/corework_event_source_v1.proto",
+            ],
+            &["proto"],
+        )?;
 
     println!("cargo:rerun-if-changed=proto/corework_agent_tool_v1.proto");
+    println!("cargo:rerun-if-changed=proto/corework_event_source_v1.proto");
     Ok(())
 }

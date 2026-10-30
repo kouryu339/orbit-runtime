@@ -16,6 +16,10 @@ pub mod proto {
     tonic::include_proto!("corework.agent_tool.v1");
 }
 
+pub mod events_proto {
+    tonic::include_proto!("corework.event_source.v1");
+}
+
 use proto::agent_tool_service_server::{AgentToolService, AgentToolServiceServer};
 use proto::tool_stream_message;
 use proto::{

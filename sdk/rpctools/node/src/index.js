@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import grpc from "@grpc/grpc-js";
 import protoLoader from "@grpc/proto-loader";
+import { eventSourceService } from './events.js';
+export { EVENT_SOURCE_SCHEMA, MemoryEventSource, eventSourceService, serveEventSource } from './events.js';
 
 export const SCHEMA = "corework-agent-tool/v1";
 
@@ -100,7 +102,7 @@ export function registerTool(metadata, handler) {
   registeredTools.push({ metadata, handler });
 }
 
-export async function serve(address = "127.0.0.1:50051") {
+export async function serve(address = "127.0.0.1:50051", {eventSource} = {}) {
   if (typeof address === "object" && address !== null) {
     address = `${address.host ?? "127.0.0.1"}:${address.port ?? 50051}`;
   }
@@ -111,6 +113,10 @@ export async function serve(address = "127.0.0.1:50051") {
     Execute: execute,
   });
 
+  if (eventSource) {
+    const {service, implementation} = await eventSourceService(eventSource);
+    server.addService(service, implementation);
+  }
   await new Promise((resolve, reject) => {
     server.bindAsync(address, grpc.ServerCredentials.createInsecure(), (error) => {
       if (error) reject(error);

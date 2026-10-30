@@ -5,10 +5,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(true)
         .compile_protos(
-            &["../../../corework/proto/corework_agent_tool_v1.proto"],
+            &[
+                "../../../corework/proto/corework_agent_tool_v1.proto",
+                "../../../corework/proto/corework_event_source_v1.proto",
+            ],
             &["../../../corework/proto"],
         )?;
 
     println!("cargo:rerun-if-changed=../../../corework/proto/corework_agent_tool_v1.proto");
+    println!("cargo:rerun-if-changed=../../../corework/proto/corework_event_source_v1.proto");
     Ok(())
 }
