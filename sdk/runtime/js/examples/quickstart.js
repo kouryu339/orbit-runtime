@@ -87,6 +87,7 @@ tools: [WebEcho]
           content,
         }),
       pause: () => runtime.invoke("conversation.pause", { conversation_id }),
+      resume: () => runtime.invoke("conversation.resume", { conversation_id }),
       async close() {
         try {
           await runtime.invoke("conversation.close", { conversation_id });

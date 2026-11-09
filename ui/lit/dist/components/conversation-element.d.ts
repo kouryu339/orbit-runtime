@@ -1,5 +1,5 @@
 import { LitElement } from 'lit';
-import type { AgentRuntimeConversationPublicApi, CommandResult, ConversationDensity, ConversationExtension, ConversationHostCapabilities, ConversationComposerController, PresetMarkdown, ConversationProviderControlsPolicy, ConversationPersistencePolicy, ConversationPresentationItem, ConversationThemeName, ConversationTransport, PersistedConversation, PresentationItemPatch, SendOptions, SendResult } from '../host/types.js';
+import type { AgentRuntimeConversationPublicApi, CommandResult, ConversationDensity, ConversationExtension, ConversationHostCapabilities, ConversationComposerController, ConversationComposerAction, PresetMarkdown, ConversationProviderControlsPolicy, ConversationPersistencePolicy, ConversationPresentationItem, ConversationThemeName, ConversationTransport, PersistedConversation, PresentationItemPatch, SendOptions, SendResult } from '../host/types.js';
 import { type ConversationState } from '../protocol/index.js';
 import './rich-content.js';
 import './plan-card.js';
@@ -14,6 +14,12 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
         };
         composerController: {
             attribute: boolean;
+        };
+        composerActions: {
+            attribute: boolean;
+        };
+        composerActionPending: {
+            state: boolean;
         };
         composerPanel: {
             state: boolean;
@@ -141,6 +147,8 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     transport: ConversationTransport | null;
     capabilities: ConversationHostCapabilities;
     composerController: ConversationComposerController | null;
+    composerActions: readonly ConversationComposerAction[];
+    private composerActionPending;
     private composerPanel;
     private composerPanelPosition;
     private composerSession;
@@ -221,6 +229,11 @@ export declare class AgentRuntimeConversationElement extends LitElement implemen
     protected updated(changed: Map<PropertyKey, unknown>): void;
     protected render(): import("lit-html").TemplateResult<1>;
     private renderComposerControls;
+    private canAttachComposerImage;
+    private focusComposerAdd;
+    private openComposerImagePicker;
+    private runComposerAction;
+    private renderComposerAdd;
     private toggleComposerPanel;
     private renderComposerMenu;
     private renderPersistenceActions;

@@ -58,6 +58,7 @@ mod resource_definitions;
 mod resources;
 mod rpc;
 mod rpc_additions;
+mod skill_recovery;
 mod skill_transactions;
 mod tool_definitions;
 mod workflow_node_definitions;
@@ -685,6 +686,26 @@ impl RuntimeFacade {
         self.config.rpc_tools = registry.rpc_pool.endpoints().cloned().collect();
         self.registries.resources = Some(registry);
         Ok(())
+    }
+
+    pub fn register_file_decoder(
+        &self,
+        registration: ai_assistant::systems::file_decode::DecoderRegistration,
+    ) -> Result<Value, RuntimeError> {
+        if self.started || self.registries.frozen {
+            return Err(RuntimeError::InvalidConfig(
+                "register file decoders before runtime start".into(),
+            ));
+        }
+        let resources = self
+            .registered_resources()
+            .ok_or_else(|| RuntimeError::InvalidConfig("register resources first".into()))?;
+        resources
+            .grep
+            .decoders
+            .register(registration)
+            .map_err(RuntimeError::InvalidConfig)?;
+        Ok(json!({"registered":true}))
     }
 
     pub fn start(&mut self) -> Result<(), RuntimeError> {

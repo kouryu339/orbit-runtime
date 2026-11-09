@@ -737,11 +737,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
             body
         };
 
-        let imported_refs: Vec<&str> = imported_names.iter().map(|s| s.as_str()).collect();
-        let active = if imported_refs.is_empty() {
+        let capability_refs: Vec<&str> = all_names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| {
+                m.get(name)
+                    .is_some_and(|s| !s.metadata.is_role() && !s.metadata.system_layer)
+            })
+            .collect();
+        let active = if capability_refs.is_empty() {
             String::new()
         } else {
-            m.active_skills_prompt(&imported_refs)
+            m.active_skills_prompt(&capability_refs)
         };
 
         let skill_workflows = m.collect_workflows_for_skills(&all_refs);
@@ -772,6 +779,18 @@ async fn on_enter(sm_ctx: Arc<ExecutionUnit>) -> corework::error::Result<()> {
     };
     if tool_protocol == crate::ToolProtocol::Disabled {
         all_tools.clear();
+    }
+    if let Ok(broker) = sm_ctx
+        .create_context()
+        .resolve_shared_component::<crate::permission::PermissionBroker>()
+    {
+        all_tools.retain(|name| {
+            crate::tool_runner::permission_metadata_in_registry(name, Some(&sm_ctx.registry()))
+                .is_ok_and(|metadata| {
+                    broker.policy().mode_for(metadata.effect)
+                        != crate::permission::ToolPermissionMode::Deny
+                })
+        });
     }
     let workflow_authoring_enabled =
         workflow_authoring_enabled && tool_protocol != crate::ToolProtocol::Disabled;

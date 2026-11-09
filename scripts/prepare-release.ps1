@@ -262,6 +262,7 @@ function New-ReleasePackage($platform) {
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/event-source.schema.json') (Join-Path $packageRoot 'schemas/event-source.schema.json')
     Copy-RequiredFile (Join-Path $repo 'corework/proto/corework_event_source_v1.proto') (Join-Path $packageRoot 'proto/corework_event_source_v1.proto')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/zh/18-rpc-event-sources.md') (Join-Path $packageRoot 'docs/zh/18-rpc-event-sources.md')
+    Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi/docs/zh/19-grep-read-access.md') (Join-Path $packageRoot 'docs/zh/19-grep-read-access.md')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\workflow-json-update.zh-CN.md') (Join-Path $packageRoot 'docs\workflow-json-update.zh-CN.md')
     Copy-RequiredFile (Join-Path $repo 'agent_runtime_ffi\docs\dynamic-clusters-update.zh-CN.md') (Join-Path $packageRoot 'docs\dynamic-clusters-update.zh-CN.md')
     $releaseNotes = Join-Path $repo "agent_runtime_ffi/docs/releases/v$($Version.TrimStart('v'))/release-notes.md"

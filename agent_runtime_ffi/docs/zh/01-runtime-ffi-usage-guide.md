@@ -188,6 +188,9 @@ LLM 和 Agent Cluster 三类注册配置表达。
 | `conversation.send_message` | `conversation_id`, `content` | admission decision |
 | `conversation.set_model` | `conversation_id`, `model_uid:uint32` | admission decision |
 | `conversation.pause` | `conversation_id`, `mode?:"wait_for_tool"|"detach_tool"` | admission decision；默认等待在途 LLM 或工具结束再暂停，不启动后续工作；`detach_tool` 丢弃在途 LLM，已启动工具脱离后生成 `interrupted_unknown` 且要求外部验证 |
+| `conversation.resume` | `conversation_id` | admission decision。继续已明确暂停的焦点 Agent，沿用现有上下文。空闲、运行中、正在暂停时返回 `not_paused`，整理上下文期间返回 `compact_in_progress`。快照用 `can_resume` 标明可继续状态。 |
+| `conversation.set_read_access` | `conversation_id`, `grants:[{root_id,subpath}]` | 原子替换 Grep／GrepJson 会话读取范围，受集群 `grep_root_ids` 限制，见《19-grep-read-access.md》。 |
+| `conversation.revoke_read_access` | `conversation_id` | 撤销会话 API 读取授权，后续读取不回退到全局目录。 |
 | `conversation.close` | `conversation_id` | `{}` |
 | `conversation.export_snapshot` | `conversation_id`, `options?` object/string | conversation snapshot |
 | `conversation.agent_tasks` | `conversation_id` | `agent-runtime-agent-tasks/v1` |

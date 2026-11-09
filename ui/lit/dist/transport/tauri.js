@@ -162,7 +162,11 @@ function normalizeCommandResult(value) {
     if (!value || typeof value !== 'object')
         return { accepted: true };
     const record = value;
-    const accepted = record.accepted !== false && record.resolved !== false;
+    const decision = record.decision && typeof record.decision === 'object'
+        ? record.decision
+        : undefined;
+    const accepted = record.accepted !== false && record.resolved !== false &&
+        record.decision !== 'rejected' && decision?.decision !== 'rejected';
     return {
         accepted,
         commandId: typeof record.command_id === 'string'
@@ -176,7 +180,11 @@ function normalizeCommandResult(value) {
             ? record.reject_reason
             : typeof record.rejectReason === 'string'
                 ? record.rejectReason
-                : undefined,
+                : typeof record.reason === 'string'
+                    ? record.reason
+                    : typeof decision?.reason === 'string'
+                        ? decision.reason
+                        : undefined,
         metadata: record,
     };
 }

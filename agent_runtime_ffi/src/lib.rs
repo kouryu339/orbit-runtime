@@ -730,6 +730,16 @@ fn invoke_command_inner(
             facade.register_resources_input(&registration_input(payload)?)?;
             json!({})
         }
+        "runtime.register_file_decoder" => {
+            let registration = serde_json::from_value(
+                payload
+                    .get("registration")
+                    .cloned()
+                    .ok_or_else(|| FfiError::invalid_argument("registration required"))?,
+            )
+            .map_err(|_| FfiError::invalid_argument("invalid decoder registration"))?;
+            facade.register_file_decoder(registration)?
+        }
         "runtime.register_llm" => {
             facade.register_llm_input(&registration_input(payload)?)?;
             json!({})
@@ -985,6 +995,7 @@ fn invoke_command_inner(
                 "user_id": info.user_id,
                 "created_at": info.created_at,
                 "restored": true,
+                "recovery": facade.conversation_restore_report(&info.conversation_id)?,
             })
         }
         "conversation.import_image" => {
@@ -1075,6 +1086,28 @@ fn invoke_command_inner(
             )?;
             admission_json(admission)
         }
+        "conversation.resume" => {
+            let conversation_id = required_string(payload, "conversation_id")?;
+            admission_json(
+                facade
+                    .resume_conversation_with_admission(&conversation_id, command_id.to_owned())?,
+            )
+        }
+        "conversation.set_read_access" => {
+            let conversation_id = required_string(payload, "conversation_id")?;
+            let grants: Vec<ai_assistant::systems::grep::ReadAccessGrant> = serde_json::from_value(
+                payload
+                    .get("grants")
+                    .cloned()
+                    .ok_or_else(|| FfiError::invalid_argument("grants is required"))?,
+            )
+            .map_err(|error| FfiError::invalid_argument(format!("invalid read grants: {error}")))?;
+            facade.set_conversation_read_access(&conversation_id, &grants)?
+        }
+        "conversation.revoke_read_access" => {
+            let conversation_id = required_string(payload, "conversation_id")?;
+            facade.set_conversation_read_access(&conversation_id, &[])?
+        }
         "conversation.close" => {
             facade.close_conversation(&required_string(payload, "conversation_id")?)?;
             json!({})
@@ -1107,7 +1140,9 @@ fn invoke_command_inner(
                 .ok_or_else(|| FfiError::invalid_argument("payload.snapshot is required"))?;
             let options = optional_object_json(payload, "options")?;
             facade.import_conversation_snapshot(&snapshot.to_string(), &options)?;
-            json!({})
+            let target: Value = serde_json::from_str(&options)
+                .map_err(|e| FfiError::invalid_argument(e.to_string()))?;
+            json!({"recovery":facade.conversation_restore_report(target["conversation_id"].as_str().unwrap_or_default())?})
         }
         "conversation.set_dynamic_snapshot" => {
             facade.set_agent_dynamic_snapshot_field(
@@ -1256,7 +1291,7 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
     CAPABILITIES
         .get_or_init(|| {
             let legacy =
-            CString::new(r#"{"schema":"agent-runtime-capabilities/v1","abi":{"major":1,"minor":3},"commands":["runtime.register_resources","runtime.register_llm","runtime.reload_llm","runtime.register_agent_cluster","runtime.set_auth_context","runtime.configure_providers","runtime.get_provider_definitions","runtime.get_tool_definitions","runtime.get_workflow_node_definitions","runtime.get_agent_cluster_definitions","runtime.get_rpc_endpoint_definitions","runtime.set_current_model","runtime.set_language","runtime.export_snapshot","workflow.get_reference_node","workflow.create","workflow.read","workflow.register","workflow.update","workflow.revise","workflow.validate_revision","workflow.compile","workflow.delete","workflow.list","workflow.convert.script_to_blueprint","workflow.convert.blueprint_to_script","workflow.execute","workflow.execute_script","workflow.start","workflow.run","conversation.spawn","conversation.spawn_from_snapshot","conversation.import_image","conversation.send_message","conversation.pause","conversation.close","conversation.export_snapshot","conversation.agent_tasks","conversation.materialize","conversation.import_snapshot","conversation.set_dynamic_snapshot","conversation.resolve_tool_permission","conversation.set_model","conversation.set_summary_model","conversation.compact_history","studio.open_workflow","studio.open_agent_test"],"events":{"transport":"pull","schema":"agent-runtime-event/v1","types":["conversation:created","conversation:closed","conversation.ledger_delta","conversation.state_delta","frontend:state_snapshot","workflow.resource_changed","workflow.execution_started","workflow.node_started","workflow.node_completed","workflow.node_failed","workflow.trace_event","workflow.execution_completed"],"lines":{"workflow":{"selector":"event_line=workflow","aggregate_id":"payload.workflow_id","conversation_scoped":false},"workflow_run":{"selector":"payload.workflow_run_id","aggregate_id":"payload.workflow_run_id","conversation_scoped":false}},"drain_after_shutdown":true},"ledger":{"delta_schema":"agent-runtime-ledger-delta/v1","ops":["append"],"idempotency":["conversation_id","record_id"]},"state":{"delta_schema":"agent-runtime-state-delta/v1","ops":["focus.set","conversation.model.set","agent.upsert","agent.retired","dynamic_snapshot.set","agent_task.upsert","agent_skills.set","agent_plan.set"],"agent_scoped":["agent.upsert","agent.retired","dynamic_snapshot.set","agent_skills.set","agent_plan.set"],"conversation_scoped":["focus.set","conversation.model.set","agent_task.upsert"],"host_owned":["dynamic_snapshot.set"]},"shutdown":{"timeout":true,"retryable":true},"threading":{"handle_calls":"safe_serialized","callbacks":false}}"#)
+            CString::new(r#"{"schema":"agent-runtime-capabilities/v1","abi":{"major":1,"minor":3},"commands":["runtime.register_resources","runtime.register_llm","runtime.reload_llm","runtime.register_agent_cluster","runtime.set_auth_context","runtime.configure_providers","runtime.get_provider_definitions","runtime.get_tool_definitions","runtime.get_workflow_node_definitions","runtime.get_agent_cluster_definitions","runtime.get_rpc_endpoint_definitions","runtime.set_current_model","runtime.set_language","runtime.export_snapshot","workflow.get_reference_node","workflow.create","workflow.read","workflow.register","workflow.update","workflow.revise","workflow.validate_revision","workflow.compile","workflow.delete","workflow.list","workflow.convert.script_to_blueprint","workflow.convert.blueprint_to_script","workflow.execute","workflow.execute_script","workflow.start","workflow.run","conversation.spawn","conversation.spawn_from_snapshot","conversation.import_image","conversation.send_message","conversation.pause","conversation.resume","conversation.close","conversation.export_snapshot","conversation.agent_tasks","conversation.materialize","conversation.import_snapshot","conversation.set_dynamic_snapshot","conversation.resolve_tool_permission","conversation.set_model","conversation.set_summary_model","conversation.compact_history","studio.open_workflow","studio.open_agent_test"],"events":{"transport":"pull","schema":"agent-runtime-event/v1","types":["conversation:created","conversation:closed","conversation.ledger_delta","conversation.state_delta","frontend:state_snapshot","workflow.resource_changed","workflow.execution_started","workflow.node_started","workflow.node_completed","workflow.node_failed","workflow.trace_event","workflow.execution_completed"],"lines":{"workflow":{"selector":"event_line=workflow","aggregate_id":"payload.workflow_id","conversation_scoped":false},"workflow_run":{"selector":"payload.workflow_run_id","aggregate_id":"payload.workflow_run_id","conversation_scoped":false}},"drain_after_shutdown":true},"ledger":{"delta_schema":"agent-runtime-ledger-delta/v1","ops":["append"],"idempotency":["conversation_id","record_id"]},"state":{"delta_schema":"agent-runtime-state-delta/v1","ops":["focus.set","conversation.model.set","agent.upsert","agent.retired","dynamic_snapshot.set","agent_task.upsert","agent_skills.set","agent_plan.set"],"agent_scoped":["agent.upsert","agent.retired","dynamic_snapshot.set","agent_skills.set","agent_plan.set"],"conversation_scoped":["focus.set","conversation.model.set","agent_task.upsert"],"host_owned":["dynamic_snapshot.set"]},"shutdown":{"timeout":true,"retryable":true},"threading":{"handle_calls":"safe_serialized","callbacks":false}}"#)
                 .expect("static capabilities JSON contains no NUL");
             let mut capabilities: Value = serde_json::from_str(
                 legacy.to_str().expect("capabilities JSON must be UTF-8"),
@@ -1267,6 +1302,8 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
                 .expect("capabilities commands must be an array");
             commands.retain(|command| !command.as_str().is_some_and(|command| command.starts_with("workflow.") || DEPRECATED_STUDIO_COMMANDS.contains(&command)));
             commands.extend(PUBLIC_WORKFLOW_COMMANDS.iter().map(|command| Value::String((*command).into())));
+            commands.extend(["conversation.set_read_access", "conversation.revoke_read_access"]
+                .iter().map(|command| json!(command)));
             for command in ["jev.configure", "jev.register", "jev.list", "jev.run", "runtime.add_agent_cluster", "runtime.update_agent_cluster", "runtime.add_rpc_endpoint", "runtime.read_skill", "runtime.validate_skill_transaction", "runtime.commit_skill_transaction"] {
                 commands.push(Value::String(command.to_string()));
             }
@@ -1274,6 +1311,9 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
             capabilities["commands"].as_array_mut().unwrap().extend(
                 corework::rpc_event::COMMANDS.iter().map(|v| json!(v)));
             capabilities["features"]["rpc_event_sources"] = json!(1);
+            capabilities["features"]["conversation_read_access"] = json!(1);
+            capabilities["features"]["file_decoders"] = json!({"version":1,"representations":["text","json"],"transport":"loopback-length-prefixed-json/v1","registration":"before_start","defaults_preserved":true});
+            capabilities["commands"].as_array_mut().unwrap().push(json!("runtime.register_file_decoder"));
             capabilities["source_events"] = json!({"schema":"corework-source-event/v1","transport":"runtime.poll_source_events","explicit_ack":true,"max_subscriptions":16,"max_capacity":128,"max_data_bytes":65536});
             let event_types = capabilities["events"]["types"]
                 .as_array_mut()

@@ -17,6 +17,16 @@ describe('TauriConversationTransport', () => {
       args: { conversationId: 'one' },
     });
   });
+  it('preserves a rejected Runtime resume result', async () => {
+    const transport = new TauriConversationTransport({
+      invoke: vi.fn(async () => ({ decision: 'rejected', reason: 'not_paused' })) as never,
+      listen: vi.fn() as never,
+      commands: { resume: 'host_continue' },
+    });
+    expect(await transport.resume!({ conversationId: 'one' })).toMatchObject({
+      accepted: false, rejectReason: 'not_paused',
+    });
+  });
   it('prepares, hydrates, restores pending messages, and releases listeners', async () => {
     const handlers = new Map<string, (event: { payload: unknown }) => void>();
     const unlistenRuntime = vi.fn();

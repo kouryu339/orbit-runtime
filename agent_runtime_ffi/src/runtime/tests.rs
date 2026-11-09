@@ -2,7 +2,9 @@ use super::*;
 use std::sync::{MutexGuard, OnceLock};
 use tokio::time::sleep;
 
+mod read_access_tests;
 mod rpc_additions_tests;
+mod skill_recovery_tests;
 
 static RUNTIME_START_TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
@@ -199,23 +201,24 @@ fn dynamic_cluster_update_rejects_every_live_conversation_then_accepts_after_clo
         facade.update_agent_cluster(&replacement, version),
         Err(RuntimeError::ClusterVersionConflict { .. })
     ));
-    // A stale archive must fail before allocating/publishing a replacement conversation.
-    assert!(matches!(
-        facade.spawn_conversation_from_snapshot(&spawn, &old_snapshot),
-        Err(RuntimeError::ClusterVersionConflict { .. })
-    ));
+    // Recovery uses current definitions; stale-editor checks above remain strict.
+    let restored_old = facade
+        .spawn_conversation_from_snapshot(&spawn, &old_snapshot)
+        .unwrap();
+    facade
+        .close_conversation(&restored_old.conversation_id)
+        .unwrap();
     assert!(facade.rt.block_on(manager.list()).is_empty());
     let fresh = facade.spawn_conversation(&spawn).unwrap();
     let snapshot = facade
         .export_conversation_snapshot(&fresh.conversation_id, "{}")
         .unwrap();
-    assert!(matches!(
-        facade.import_conversation_snapshot(
+    facade
+        .import_conversation_snapshot(
             &old_snapshot,
-            &json!({"conversation_id": fresh.conversation_id}).to_string()
-        ),
-        Err(RuntimeError::ClusterVersionConflict { .. })
-    ));
+            &json!({"conversation_id": fresh.conversation_id}).to_string(),
+        )
+        .unwrap();
     facade.close_conversation(&fresh.conversation_id).unwrap();
     let restored = facade
         .spawn_conversation_from_snapshot(&spawn, &snapshot)
@@ -270,14 +273,15 @@ fn dynamic_cluster_ffi_commands_are_exposed_and_reject_unknown_payload_fields() 
     )
     .is_err());
     let legacy_snapshot = json!({"schema": "agent-runtime-conversation-snapshot/v1", "ledger": []});
-    assert!(facade
+    let legacy_restored = facade
         .spawn_conversation_from_snapshot(
             &json!({"cluster_id": "ffi-team"}).to_string(),
-            &legacy_snapshot.to_string()
+            &legacy_snapshot.to_string(),
         )
-        .unwrap_err()
-        .to_string()
-        .contains("cluster_version_missing"));
+        .unwrap();
+    facade
+        .close_conversation(&legacy_restored.conversation_id)
+        .unwrap();
     facade.shutdown().unwrap();
 }
 
@@ -313,10 +317,10 @@ fn dynamic_cluster_snapshot_version_is_stable_across_runtime_restart() {
             accepted["cluster"]["version"].as_str().unwrap(),
         )
         .unwrap();
-    assert!(matches!(
-        second.spawn_conversation_from_snapshot(&spawn, &snapshot),
-        Err(RuntimeError::ClusterVersionConflict { .. })
-    ));
+    let latest = second
+        .spawn_conversation_from_snapshot(&spawn, &snapshot)
+        .unwrap();
+    second.close_conversation(&latest.conversation_id).unwrap();
     second.shutdown().unwrap();
 }
 
@@ -480,7 +484,7 @@ fn dynamic_cluster_skill_reload_tracks_registered_children_and_imported_features
 }
 
 #[test]
-fn dynamic_cluster_skill_reload_is_atomic_and_rejects_stale_skill_archives() {
+fn dynamic_cluster_skill_reload_is_atomic_and_recovers_archives_with_current_skills() {
     let _guard = runtime_start_test_guard();
     let root = unique_test_dir("skill-reload-transaction");
     let mut facade = dynamic_cluster_runtime(&root);
@@ -540,11 +544,12 @@ fn dynamic_cluster_skill_reload_is_atomic_and_rejects_stale_skill_archives() {
             &["cluster_role_a".into(), "cluster_feature".into()],
         )
         .unwrap();
-    assert!(facade
+    let restored = facade
         .spawn_conversation_from_snapshot(r#"{"cluster_id":"team"}"#, &snapshot)
-        .unwrap_err()
-        .to_string()
-        .contains("skill_version_conflict"));
+        .unwrap();
+    facade
+        .close_conversation(&restored.conversation_id)
+        .unwrap();
     assert!(facade
         .rt
         .block_on(facade.manager().unwrap().list())
@@ -552,14 +557,12 @@ fn dynamic_cluster_skill_reload_is_atomic_and_rejects_stale_skill_archives() {
     let fresh = facade
         .spawn_conversation(r#"{"cluster_id":"team"}"#)
         .unwrap();
-    assert!(facade
+    facade
         .import_conversation_snapshot(
             &snapshot,
-            &json!({"conversation_id":fresh.conversation_id}).to_string()
+            &json!({"conversation_id":fresh.conversation_id}).to_string(),
         )
-        .unwrap_err()
-        .to_string()
-        .contains("skill_version_conflict"));
+        .unwrap();
     facade.close_conversation(&fresh.conversation_id).unwrap();
     facade.shutdown().unwrap();
 }
@@ -631,11 +634,12 @@ fn skill_transaction_creates_updates_and_restores_role_and_cluster_together() {
     let changed = facade.skill_transaction(&update, true).unwrap();
     assert_eq!(changed["store_revision"], 2);
     assert_ne!(changed["skills"][0]["version"], version);
-    assert!(facade
+    let restored_old = facade
         .spawn_conversation_from_snapshot(r#"{"cluster_id":"employee-team"}"#, &old_snapshot)
-        .unwrap_err()
-        .to_string()
-        .contains("skill_version_conflict"));
+        .unwrap();
+    facade
+        .close_conversation(&restored_old.conversation_id)
+        .unwrap();
     let fresh = facade
         .spawn_conversation(r#"{"cluster_id":"employee-team"}"#)
         .unwrap();
@@ -4467,6 +4471,7 @@ fn studio_target_agent_resolves_runtime_cluster_focus_and_profile_ids() {
             agents: vec![cluster_agent],
             max_thinking_rounds: 0,
             permissions: ai_assistant::ToolPermissionPolicy::default(),
+            grep_root_ids: None,
         },
     );
 
@@ -5037,7 +5042,7 @@ fn spawn_conversation_from_snapshot_allocates_a_new_runtime_id_and_restores_ledg
         .unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].conversation_id, info.conversation_id);
-    assert_eq!(records[0].record_id, 1);
+    assert_eq!(records[0].record_id, 41);
     assert_eq!(records[0].content, "restored message");
     let restored_protocol = facade.rt.block_on(async {
         manager
@@ -5095,15 +5100,15 @@ fn spawn_conversation_from_snapshot_allocates_a_new_runtime_id_and_restores_ledg
         ))
         .unwrap();
     assert_eq!(repaired_records.len(), 2);
-    assert_eq!(repaired_records[0].record_id, 1);
-    assert_eq!(repaired_records[1].record_id, 2);
+    assert_eq!(repaired_records[0].record_id, 2);
+    assert_eq!(repaired_records[1].record_id, 3);
     assert_eq!(
         repaired_records[1].metadata.extra.get("call_id"),
         Some(&json!("call-from-snapshot"))
     );
     assert_eq!(
         repaired_records[1].metadata.extra.get("status"),
-        Some(&json!("recovery_interrupted"))
+        Some(&json!("interrupted_unknown"))
     );
 
     facade.close_conversation(&info.conversation_id).unwrap();
@@ -5277,15 +5282,15 @@ fn spawn_conversation_from_persisted_json_replays_state_deltas_and_repairs_open_
             .unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].conversation_id, info.conversation_id);
-        assert_eq!(records[0].record_id, 1);
-        assert_eq!(records[1].record_id, 2);
+        assert_eq!(records[0].record_id, 7);
+        assert_eq!(records[1].record_id, 8);
         assert_eq!(
             records[1].metadata.extra.get("call_id"),
             Some(&json!("call-open-after-pod-crash"))
         );
         assert_eq!(
             records[1].metadata.extra.get("status"),
-            Some(&json!("recovery_interrupted"))
+            Some(&json!("interrupted_unknown"))
         );
         assert_eq!(
             records[1].metadata.extra.get("effect"),
@@ -5293,7 +5298,7 @@ fn spawn_conversation_from_persisted_json_replays_state_deltas_and_repairs_open_
         );
         assert!(records[1]
             .content
-            .contains("tool_call_id: call-open-after-pod-crash"));
+            .contains("call_id=call-open-after-pod-crash"));
 
         let status = manager
             .conversation_status(&info.conversation_id)
@@ -5333,15 +5338,18 @@ fn spawn_conversation_from_persisted_json_replays_state_deltas_and_repairs_open_
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(imported_skills, vec!["browser_operator".to_string()]);
+        assert!(
+            imported_skills.is_empty(),
+            "Role cannot be replayed as an imported capability"
+        );
         let active_tools = cache
             .get::<Vec<String>>(ai_assistant::context::keys::ACTIVE_TOOLS)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(
-            active_tools,
-            vec!["QueryLedgerSystem".to_string(), "WriteScript".to_string()]
+        assert!(
+            !active_tools.iter().any(|name| name == "WriteScript"),
+            "Snapshot cannot restore obsolete tool authority"
         );
         let plan = AssistantContext::get_current_plan(&cache)
             .await
@@ -7123,9 +7131,7 @@ fn conversation_model_switch_is_scoped_and_keeps_global_default_unchanged() {
     let legacy_restored = facade
         .spawn_conversation_from_snapshot(&spawn, &legacy_snapshot.to_string())
         .unwrap();
-    let materialized = facade
-        .materialize_conversation("materialized-model-restore", "{}")
-        .unwrap();
+    let materialized = facade.spawn_conversation(&spawn).unwrap();
     facade
         .import_conversation_snapshot(
             &snapshot_json,

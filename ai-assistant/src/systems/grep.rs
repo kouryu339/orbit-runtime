@@ -18,7 +18,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, RwLock,
     },
     time::{Duration, Instant},
 };
@@ -28,16 +28,22 @@ use std::{
 pub struct GrepRoot {
     pub id: String,
     pub path: PathBuf,
+    /// Host-only directory containing per-conversation grants.
+    #[serde(default)]
+    pub conversation_grants: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GrepConfig {
     pub roots: Vec<GrepRoot>,
+    /// Require an explicit cluster ceiling and host API grant for every conversation.
+    pub require_conversation_grants: bool,
     pub timeout_ms: u64,
     pub max_results: usize,
     pub max_output_bytes: usize,
     pub max_file_bytes: usize,
+    pub max_decoded_bytes: usize,
     pub max_pattern_bytes: usize,
     pub max_regex_bytes: usize,
     pub max_line_bytes: usize,
@@ -48,10 +54,12 @@ impl Default for GrepConfig {
     fn default() -> Self {
         Self {
             roots: vec![],
+            require_conversation_grants: false,
             timeout_ms: 10_000,
             max_results: 200,
             max_output_bytes: 65_536,
             max_file_bytes: 2 * 1024 * 1024,
+            max_decoded_bytes: 16 * 1024 * 1024,
             max_pattern_bytes: 16 * 1024,
             max_regex_bytes: 8 * 1024 * 1024,
             max_line_bytes: 4096,
@@ -61,10 +69,26 @@ impl Default for GrepConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Root {
-    dir: Dir,
+    dir: Arc<Dir>,
     path: PathBuf,
+    grants: Option<Arc<Dir>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadAccessGrant {
+    pub root_id: String,
+    pub subpath: String,
+}
+
+#[derive(Debug)]
+struct ConversationAccess {
+    conversation_id: String,
+    required: bool,
+    /// None selects legacy file grants only when not required. Some(empty) denies all.
+    roots: RwLock<Option<BTreeMap<String, Root>>>,
 }
 
 #[derive(Debug)]
@@ -72,6 +96,9 @@ pub struct GrepService {
     pub(super) config: GrepConfig,
     roots: BTreeMap<String, Root>,
     pub(super) permits: Arc<tokio::sync::Semaphore>,
+    access: Option<Arc<ConversationAccess>>,
+    pub decoders: Arc<super::file_decode::DecoderRegistry>,
+    identity: Option<String>,
 }
 impl GrepService {
     /// Called by the host at registration. Open directory capabilities pin authority.
@@ -80,6 +107,8 @@ impl GrepService {
             || config.max_results == 0
             || config.max_output_bytes < 1024
             || config.max_file_bytes == 0
+            || config.max_decoded_bytes == 0
+            || config.max_decoded_bytes > 64 * 1024 * 1024
             || config.max_pattern_bytes == 0
             || config.max_regex_bytes == 0
             || config.max_line_bytes == 0
@@ -118,11 +147,27 @@ impl GrepService {
                 .map_err(|e| format!("grep root '{}': {e}", root.id))?;
             let dir = Dir::open_ambient_dir(&root.path, cap_std::ambient_authority())
                 .map_err(|e| format!("grep root '{}': {e}", root.id))?;
+            let grants = root
+                .conversation_grants
+                .as_ref()
+                .map(|path| {
+                    let path = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        base.ok_or("relative grep grants require a resource base directory")?
+                            .join(path)
+                    };
+                    Dir::open_ambient_dir(&path, cap_std::ambient_authority())
+                        .map(Arc::new)
+                        .map_err(|error| format!("grep grants '{}': {error}", root.id))
+                })
+                .transpose()?;
             roots.insert(
                 root.id.clone(),
                 Root {
-                    dir,
+                    dir: Arc::new(dir),
                     path: root.path.clone(),
+                    grants,
                 },
             );
         }
@@ -130,7 +175,257 @@ impl GrepService {
             permits: Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_searches)),
             config,
             roots,
+            access: None,
+            decoders: Arc::new(super::file_decode::DecoderRegistry::default()),
+            identity: None,
         })
+    }
+
+    /// Bind the trusted conversation and its cluster ceiling before any tools run.
+    pub fn bind_conversation(
+        &self,
+        conversation_id: &str,
+        root_ids: Option<&[String]>,
+    ) -> Result<Self, String> {
+        self.decoders.freeze();
+        let mut roots = BTreeMap::new();
+        if let Some(ids) = root_ids {
+            for id in ids {
+                let root = self
+                    .roots
+                    .get(id)
+                    .ok_or_else(|| format!("unknown Grep root: {id}"))?;
+                if roots.insert(id.clone(), root.clone()).is_some() {
+                    return Err(format!("duplicate Grep root: {id}"));
+                }
+            }
+        } else if !self.config.require_conversation_grants {
+            roots = self.roots.clone();
+        }
+        Ok(Self {
+            config: self.config.clone(),
+            roots,
+            permits: self.permits.clone(),
+            decoders: self.decoders.clone(),
+            identity: Some(conversation_id.to_owned()),
+            access: Some(Arc::new(ConversationAccess {
+                conversation_id: conversation_id.to_string(),
+                required: self.config.require_conversation_grants || root_ids.is_some(),
+                roots: RwLock::new(None),
+            })),
+        })
+    }
+
+    /// Host-only atomic replacement. Validate the whole candidate before publishing.
+    /// Holding the write lock also waits for reads admitted under the previous grant.
+    pub fn set_read_access(
+        &self,
+        conversation_id: &str,
+        grants: &[ReadAccessGrant],
+    ) -> Result<(), String> {
+        let access = self
+            .access
+            .as_ref()
+            .filter(|access| access.conversation_id == conversation_id)
+            .ok_or("Grep service is not bound to this conversation")?;
+        let mut candidate = BTreeMap::new();
+        for grant in grants {
+            let root = self.roots.get(&grant.root_id).ok_or_else(|| {
+                format!(
+                    "root_id is outside the cluster's Grep scope: {}",
+                    grant.root_id
+                )
+            })?;
+            if candidate.contains_key(&grant.root_id) {
+                return Err(format!(
+                    "one subpath per root_id is supported: {}",
+                    grant.root_id
+                ));
+            }
+            let relative = checked_relative(&grant.subpath)?;
+            let mut dir = root.dir.try_clone().map_err(|e| e.to_string())?;
+            let mut ancestor = PathBuf::new();
+            for component in relative.components() {
+                ancestor.push(component);
+                let metadata = dir
+                    .symlink_metadata(component.as_os_str())
+                    .map_err(|e| e.to_string())?;
+                if is_link(&metadata) || !metadata.is_dir() || hidden(&ancestor) {
+                    return Err("grant subpath must be an existing directory without hidden components or links".into());
+                }
+                // Open each component without following links, so replacing a
+                // directory between inspection and open cannot broaden a grant.
+                let parent = dir.into_std_file();
+                let child = cap_primitives::fs::open_dir_nofollow(
+                    &parent,
+                    Path::new(component.as_os_str()),
+                )
+                .map_err(|e| e.to_string())?;
+                dir = Dir::from_std_file(child);
+            }
+            candidate.insert(
+                grant.root_id.clone(),
+                Root {
+                    dir: Arc::new(dir),
+                    path: root.path.join(relative),
+                    grants: None,
+                },
+            );
+        }
+        *access
+            .roots
+            .write()
+            .map_err(|_| "Grep authorization lock poisoned")? = Some(candidate);
+        tracing::info!(
+            conversation_id,
+            grant_count = grants.len(),
+            "Grep read access replaced"
+        );
+        Ok(())
+    }
+
+    pub fn revoke_read_access(&self, conversation_id: &str) -> Result<(), String> {
+        self.set_read_access(conversation_id, &[])
+    }
+
+    /// Recovery invalidates host API grants instead of replaying them from history.
+    pub fn invalidate_restored_read_access(&self) -> Result<(), String> {
+        if let Some(access) = &self.access {
+            let mut roots = access
+                .roots
+                .write()
+                .map_err(|_| "Grep authorization lock poisoned")?;
+            if access.required || roots.is_some() {
+                *roots = Some(BTreeMap::new());
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep the grant read lock through the complete blocking read, including paging.
+    pub(super) fn with_conversation<T>(
+        &self,
+        conversation_id: Option<&str>,
+        read: impl FnOnce(&Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if let Some(access) = &self.access {
+            if conversation_id != Some(access.conversation_id.as_str()) {
+                return Err("read_access_denied: conversation identity mismatch".into());
+            }
+            let guard = access
+                .roots
+                .read()
+                .map_err(|_| "Grep authorization lock poisoned")?;
+            if let Some(roots) = guard.as_ref() {
+                let scoped = Self {
+                    config: self.config.clone(),
+                    roots: roots.clone(),
+                    permits: self.permits.clone(),
+                    access: None,
+                    decoders: self.decoders.clone(),
+                    identity: self.identity.clone(),
+                };
+                return read(&scoped);
+            }
+            if access.required {
+                return Err(
+                    "read_access_required: host must grant this conversation read access".into(),
+                );
+            }
+            return read(&self.for_conversation(conversation_id));
+        }
+        if self.config.require_conversation_grants {
+            return Err("read_access_required: trusted conversation binding is missing".into());
+        }
+        read(&self.for_conversation(conversation_id))
+    }
+
+    /// Derive directory capabilities from the trusted runtime conversation identity.
+    /// Model arguments never participate in grant resolution.
+    fn for_conversation(&self, conversation_id: Option<&str>) -> Self {
+        fn component(value: &str) -> bool {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+        }
+        let grant_path = conversation_id
+            .filter(|id| component(id))
+            .map(|id| format!("{id}.txt"));
+        let exclusive = grant_path.as_ref().is_some_and(|path| {
+            self.roots.values().filter_map(|root| root.grants.as_ref()).any(|grants| {
+                !matches!(grants.symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+            })
+        });
+        let roots = self
+            .roots
+            .iter()
+            .filter_map(|(id, root)| {
+                let Some(grants) = &root.grants else {
+                    return (!exclusive).then(|| {
+                        (
+                            id.clone(),
+                            Root {
+                                dir: root.dir.clone(),
+                                path: root.path.clone(),
+                                grants: None,
+                            },
+                        )
+                    });
+                };
+                let grant_path = grant_path.as_ref()?;
+                let metadata = grants.symlink_metadata(grant_path).ok()?;
+                if is_link(&metadata) || !metadata.is_file() {
+                    return None;
+                }
+                let bytes = read_bounded(grants, Path::new(grant_path), 256).ok()??;
+                let project = std::str::from_utf8(&bytes).ok()?.trim();
+                if !component(project) {
+                    return None;
+                }
+                let metadata = root.dir.symlink_metadata(project).ok()?;
+                if is_link(&metadata) || !metadata.is_dir() {
+                    return None;
+                }
+                let dir = Arc::new(root.dir.open_dir(project).ok()?);
+                Some((
+                    id.clone(),
+                    Root {
+                        dir,
+                        path: root.path.join(project),
+                        grants: None,
+                    },
+                ))
+            })
+            .collect();
+        Self {
+            config: self.config.clone(),
+            roots,
+            permits: self.permits.clone(),
+            access: None,
+            decoders: self.decoders.clone(),
+            identity: conversation_id.map(str::to_owned),
+        }
+    }
+
+    pub(super) fn decode_file(
+        &self,
+        path: &Path,
+        bytes: Vec<u8>,
+        representation: &str,
+        cancel: &AtomicBool,
+        deadline: Instant,
+    ) -> Result<super::file_decode::Decoded, String> {
+        self.decoders.decode(
+            path,
+            bytes,
+            representation,
+            self.identity.as_deref(),
+            cancel,
+            deadline,
+            self.config.max_decoded_bytes,
+        )
     }
 
     pub(super) fn authorized_ids(&self) -> Vec<&str> {
@@ -356,7 +651,15 @@ impl GrepService {
                     continue;
                 }
             };
-            let text = match std::str::from_utf8(&bytes) {
+            let decoded = self.decode_file(
+                &path,
+                bytes,
+                "text",
+                cancel,
+                start + Duration::from_millis(self.config.timeout_ms),
+            )?;
+            let bytes = &decoded.bytes;
+            let text = match std::str::from_utf8(bytes) {
                 Ok(t) if !bytes.contains(&0) => t,
                 _ => {
                     result.skipped_binary += 1;
@@ -370,19 +673,33 @@ impl GrepService {
                     result.stop("timeout_or_canceled");
                     break 'scan;
                 }
-                if !regex.is_match(line) {
+                if index + 1 < request.start_line || !regex.is_match(line) {
                     continue;
                 }
                 count += 1;
                 if request.output_mode == "count" {
                     continue;
                 }
-                let item = if request.output_mode == "files_with_matches" {
+                let mut item = if request.output_mode == "files_with_matches" {
                     json!({"path":path})
                 } else {
                     let (snippet, cut) = clip(line, self.config.max_line_bytes);
                     json!({"path":path,"line":index+1,"text":snippet,"line_truncated":cut})
                 };
+                if let Some(decoder) = &decoded.decoder {
+                    item["decoder"] = json!(decoder);
+                    item["revision"] = json!(decoded.revision);
+                    if let Some(location) = decoded.locations.iter().find(|loc| {
+                        loc["start_line"]
+                            .as_u64()
+                            .is_some_and(|v| v <= (index + 1) as u64)
+                            && loc["end_line"]
+                                .as_u64()
+                                .is_some_and(|v| v >= (index + 1) as u64)
+                    }) {
+                        item["location"] = location["location"].clone();
+                    }
+                }
                 if !result.push(item, limit, self.config.max_output_bytes, &mut output_bytes) {
                     break 'scan;
                 }
@@ -549,10 +866,11 @@ struct Request {
     ignore_case: bool,
     output_mode: String,
     limit: usize,
+    start_line: usize,
 }
 
 #[define_operation(
-    name = "Grep", display_name = "搜索{root_id}/{path}，模式{pattern}，过滤{glob}，字面量{literal}，忽略大小写{ignore_case}，输出{output_mode}，上限{limit}",
+    name = "Grep", display_name = "搜索{root_id}/{path}，模式{pattern}，过滤{glob}，字面量{literal}，忽略大小写{ignore_case}，输出{output_mode}，上限{limit}，起始行{start_line}",
     category = "Search", system_only,
     description = "Search UTF-8 text in host-authorized local roots. Omit root_id to list authorized IDs. Supply root_id, relative path (forward slashes) and pattern to search. Literal or Rust regex; modes content/files_with_matches/count. Hidden, ignored, binary and link files are skipped. Results report incompleteness. AI-only, unavailable in Workflow scripts.",
     params {
@@ -563,7 +881,8 @@ struct Request {
         literal: "bool@Match literal text instead of regex. Default true.",
         ignore_case: "bool@Case insensitive, default false.",
         output_mode: "String@content (default), files_with_matches, or count (matching lines).",
-        limit: "u64@Positive result limit, capped by host configuration."
+        limit: "u64@Positive result limit, capped by host configuration.",
+        start_line: "u64@First 1-based line to search in the selected file; use last result line plus one to continue."
     }, destructive = false, readonly = true, idempotent = true, open_world = false
 )]
 pub struct GrepSystem;
@@ -594,6 +913,7 @@ mod tests {
             config.roots = vec![GrepRoot {
                 id: "project".into(),
                 path: self.0.clone(),
+                conversation_grants: None,
             }];
             GrepService::new(config, None).unwrap()
         }
@@ -615,6 +935,55 @@ mod tests {
     }
     fn search(service: &GrepService, request: Request) -> Value {
         service.search(request, &AtomicBool::new(false)).unwrap()
+    }
+
+    #[test]
+    fn a_conversation_grant_is_exclusive_and_paginates_its_own_files() {
+        let f = Fixture::new();
+        f.write("logs/a/turn.txt", "needle first\nneedle second\n");
+        f.write("logs/b/turn.txt", "needle other project");
+        f.write("global/log.txt", "needle global");
+        f.write("grants/own.txt", "a");
+        f.write("grants/revoked.txt", "");
+        let service = GrepService::new(
+            GrepConfig {
+                roots: vec![
+                    GrepRoot {
+                        id: "project".into(),
+                        path: f.0.join("logs"),
+                        conversation_grants: Some(f.0.join("grants")),
+                    },
+                    GrepRoot {
+                        id: "global".into(),
+                        path: f.0.join("global"),
+                        conversation_grants: None,
+                    },
+                ],
+                ..GrepConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            service.for_conversation(Some("unknown")).authorized_ids(),
+            ["global"]
+        );
+        assert!(service
+            .for_conversation(Some("revoked"))
+            .authorized_ids()
+            .is_empty());
+        let own = service.for_conversation(Some("own"));
+        assert_eq!(own.authorized_ids(), ["project"]);
+        assert!(own.read_authorized_file("global", "log.txt").is_err());
+        assert!(own
+            .read_authorized_file("project", "../b/turn.txt")
+            .is_err());
+        let mut page = request();
+        page.path = "turn.txt".into();
+        page.start_line = 2;
+        let result = search(&own, page);
+        assert_eq!(result["results"].as_array().unwrap().len(), 1);
+        assert_eq!(result["results"][0]["text"], "needle second");
     }
 
     #[test]
@@ -658,6 +1027,127 @@ mod tests {
             search(&service, req)["results"].as_array().unwrap().len(),
             2
         );
+    }
+
+    #[test]
+    fn host_read_access_is_conversation_scoped_atomic_and_bounded_by_cluster() {
+        let f = Fixture::new();
+        f.write("a/nested/data.json", r#"{"project":"A"}"#);
+        f.write("b/data.json", r#"{"project":"B"}"#);
+        let global = f.service(GrepConfig {
+            require_conversation_grants: true,
+            ..Default::default()
+        });
+        let a = global
+            .bind_conversation("conv-a", Some(&["project".into()]))
+            .unwrap();
+        let b = global
+            .bind_conversation("conv-b", Some(&["project".into()]))
+            .unwrap();
+        let missing_cluster = global.bind_conversation("no-cluster", None).unwrap();
+        let read = |service: &GrepService, id: &str| {
+            service.with_conversation(Some(id), |scoped| {
+                scoped.read_authorized_file("project", "data.json")
+            })
+        };
+        assert!(read(&a, "conv-a")
+            .unwrap_err()
+            .contains("read_access_required"));
+        let grants = [ReadAccessGrant {
+            root_id: "project".into(),
+            subpath: "a/nested".into(),
+        }];
+        assert!(missing_cluster
+            .set_read_access("no-cluster", &grants)
+            .is_err());
+        a.set_read_access("conv-a", &grants).unwrap();
+        assert_eq!(read(&a, "conv-a").unwrap(), br#"{"project":"A"}"#);
+        assert!(read(&a, "conv-b")
+            .unwrap_err()
+            .contains("identity mismatch"));
+        assert!(read(&b, "conv-b").is_err());
+        assert!(a
+            .set_read_access(
+                "conv-a",
+                &[
+                    ReadAccessGrant {
+                        root_id: "project".into(),
+                        subpath: "b".into()
+                    },
+                    ReadAccessGrant {
+                        root_id: "missing".into(),
+                        subpath: "".into()
+                    },
+                ]
+            )
+            .is_err());
+        for path in ["../b", "/b", "C:/b", r"a\nested", "a/missing"] {
+            assert!(a
+                .set_read_access(
+                    "conv-a",
+                    &[ReadAccessGrant {
+                        root_id: "project".into(),
+                        subpath: path.into(),
+                    }]
+                )
+                .is_err());
+        }
+        assert_eq!(read(&a, "conv-a").unwrap(), br#"{"project":"A"}"#);
+        a.revoke_read_access("conv-a").unwrap();
+        assert!(read(&a, "conv-a").is_err());
+        let fresh = global
+            .bind_conversation("conv-a", Some(&["project".into()]))
+            .unwrap();
+        assert!(read(&fresh, "conv-a")
+            .unwrap_err()
+            .contains("read_access_required"));
+    }
+
+    #[test]
+    fn revoke_waits_for_admitted_reads_and_prevents_new_reads() {
+        let f = Fixture::new();
+        f.write("a/data.json", "{}");
+        let service = Arc::new(
+            f.service(GrepConfig::default())
+                .bind_conversation("conv", Some(&["project".into()]))
+                .unwrap(),
+        );
+        service
+            .set_read_access(
+                "conv",
+                &[ReadAccessGrant {
+                    root_id: "project".into(),
+                    subpath: "a".into(),
+                }],
+            )
+            .unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let reader = service.clone();
+        let reading = std::thread::spawn(move || {
+            reader.with_conversation(Some("conv"), |scoped| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                scoped.read_authorized_file("project", "data.json")
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (revoked_tx, revoked_rx) = std::sync::mpsc::channel();
+        let writer = service.clone();
+        let revoking = std::thread::spawn(move || {
+            writer.revoke_read_access("conv").unwrap();
+            revoked_tx.send(()).unwrap();
+        });
+        assert!(revoked_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        release_tx.send(()).unwrap();
+        assert_eq!(reading.join().unwrap().unwrap(), b"{}");
+        revoked_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        revoking.join().unwrap();
+        assert!(service
+            .with_conversation(Some("conv"), |scoped| {
+                scoped.read_authorized_file("project", "data.json")
+            })
+            .is_err());
     }
 
     #[test]
@@ -893,6 +1383,11 @@ impl SystemOperation for GrepSystem {
                 literal: boolean("literal", true)?,
                 ignore_case: boolean("ignore_case", false)?,
                 output_mode: args.get("output_mode").unwrap_or("content").into(),
+                start_line: args
+                    .get("start_line")
+                    .unwrap_or("1")
+                    .parse()
+                    .map_err(|_| "start_line must be a line number")?,
                 limit: args
                     .get("limit")
                     .map(|v| {
@@ -918,16 +1413,26 @@ impl SystemOperation for GrepSystem {
         let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
         let flag = cancel.0.clone();
         let timeout = Duration::from_millis(service.config.timeout_ms);
+        let conversation_id = ctx.conversation_id.clone();
         let task = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            service.search(request, &flag)
+            service.with_conversation(conversation_id.as_deref(), |scoped| {
+                scoped.search(request, &flag)
+            })
         });
         match corework::platform::time::timeout(timeout, task).await {
             Ok(Ok(Ok(value))) => {
                 let text = value.to_string();
                 Ok(AIOutput::success(value, text))
             }
-            Ok(Ok(Err(e))) => Ok(AIOutput::error(400, e)),
+            Ok(Ok(Err(e))) => Ok(AIOutput::error(
+                if e.starts_with("read_access_") {
+                    403
+                } else {
+                    400
+                },
+                e,
+            )),
             Ok(Err(e)) => Ok(AIOutput::error(500, format!("Search worker failed: {e}"))),
             Err(_) => Ok(AIOutput::error(
                 408,

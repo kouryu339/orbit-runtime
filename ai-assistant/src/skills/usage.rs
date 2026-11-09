@@ -71,12 +71,20 @@ pub async fn references(cache: &Arc<dyn Cache>) -> crate::Result<BTreeSet<String
         .await?
         .unwrap_or_default();
     names.extend(system.values().cloned());
-    names.insert(
-        system
-            .get("thinking")
-            .cloned()
-            .unwrap_or_else(|| "thinking".into()),
-    );
+    let configured = system
+        .get("thinking")
+        .map(String::as_str)
+        .unwrap_or("thinking");
+    let protocol = cache
+        .get::<crate::ToolProtocol>(keys::TOOL_PROTOCOL)
+        .await?
+        .unwrap_or_default();
+    let thinking = match (protocol, configured) {
+        (crate::ToolProtocol::NativeFc, "thinking") => "thinking-fc",
+        (crate::ToolProtocol::NativeFc, "thinking-pro") => "thinking-pro-fc",
+        (_, name) => name,
+    };
+    names.insert(thinking.to_string());
     Ok(names)
 }
 

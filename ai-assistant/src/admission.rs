@@ -27,6 +27,8 @@ pub enum Command {
     },
     /// 暂停当前会话。
     Pause,
+    /// 继续显式暂停的当前 Agent，不添加用户消息。
+    Resume,
     /// 切换会话级推理模型。
     SetConversationModel {
         model: String,
@@ -50,6 +52,7 @@ impl Command {
         match self {
             Command::SendMessage { .. } => "send_message",
             Command::Pause => "pause",
+            Command::Resume => "resume",
             Command::SetConversationModel { .. } => "set_conversation_model",
             Command::SetConversationSummaryModel { .. } => "set_conversation_summary_model",
             Command::SetConversationLanguage { .. } => "set_conversation_language",
@@ -100,6 +103,7 @@ impl Decision {
 #[serde(rename_all = "snake_case")]
 pub enum RejectReason {
     AlreadySuspended,
+    NotPaused,
     /// The active conversation is currently compacting history.
     CompactInProgress,
     /// Manual compaction is only valid while the whole conversation is waiting.
@@ -110,6 +114,7 @@ impl RejectReason {
     pub fn as_str(&self) -> &'static str {
         match self {
             RejectReason::AlreadySuspended => "already_suspended",
+            RejectReason::NotPaused => "not_paused",
             RejectReason::CompactInProgress => "compact_in_progress",
             RejectReason::ConversationNotWaiting => "conversation_not_waiting",
         }
@@ -128,6 +133,17 @@ impl AdmissionPolicy {
         match command {
             Command::SendMessage { .. } => decide_send_message(current_state),
             Command::Pause => decide_pause(current_state),
+            Command::Resume => {
+                if current_state == states::SUSPENDED {
+                    Decision::Accepted {
+                        inserted_during_state: None,
+                    }
+                } else {
+                    Decision::Rejected {
+                        reason: RejectReason::NotPaused,
+                    }
+                }
+            }
             Command::SetConversationModel { .. }
             | Command::SetConversationSummaryModel { .. }
             | Command::SetConversationLanguage { .. } => Decision::Accepted {

@@ -814,6 +814,13 @@
       font: 14px/1.5 var(--conversation-font-body);
     }.orbit-svelte-conversation textarea::placeholder {
       color: var(--conversation-text-muted);
+    }.orbit-svelte-conversation .composer > textarea,
+.orbit-svelte-conversation .composer > textarea:focus,
+.orbit-svelte-conversation .composer > textarea:focus-visible {
+      appearance: none;
+      border: 0;
+      outline: none;
+      box-shadow: none;
     }.orbit-svelte-conversation .image-input {
       display: none;
     }.orbit-svelte-conversation .image-attachments {

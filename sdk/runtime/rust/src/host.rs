@@ -55,6 +55,7 @@ pub struct RuntimeHostBuilder {
     library_path: PathBuf,
     create_options: RuntimeCreateOptions,
     resources: Option<RuntimeRegistration>,
+    file_decoders: Vec<crate::FileDecoder>,
     llm: Option<RuntimeRegistration>,
     empty_llm_registration_id: String,
     agent_clusters: Vec<RuntimeRegistration>,
@@ -70,6 +71,7 @@ impl RuntimeHostBuilder {
             library_path: library_path.into(),
             create_options: RuntimeCreateOptions::default(),
             resources: None,
+            file_decoders: vec![],
             llm: None,
             empty_llm_registration_id: DEFAULT_EMPTY_LLM_REGISTRATION_ID.to_string(),
             agent_clusters: Vec::new(),
@@ -122,6 +124,11 @@ impl RuntimeHostBuilder {
         self
     }
 
+    pub fn file_decoder(mut self, decoder: crate::FileDecoder) -> Self {
+        self.file_decoders.push(decoder);
+        self
+    }
+
     pub fn start_event_pump(mut self, value: bool) -> Self {
         self.start_event_pump = value;
         self
@@ -155,6 +162,22 @@ impl RuntimeHostBuilder {
         let mut runtime = Runtime::load(&self.library_path)?;
         runtime.create_with_options(&self.create_options)?;
         resources.register_resources(&mut runtime)?;
+        if !self.file_decoders.is_empty()
+            && runtime.capabilities()["features"]["file_decoders"]["version"] != 1
+        {
+            return Err(RuntimeError::new(
+                "Runtime does not support host file decoders",
+            ));
+        }
+        let file_decoder_bridge = crate::file_decoder::DecoderBridge::start(self.file_decoders)?;
+        if let Some(bridge) = &file_decoder_bridge {
+            for registration in bridge.registrations() {
+                runtime.invoke(
+                    "runtime.register_file_decoder",
+                    json!({"registration":registration}),
+                )?;
+            }
+        }
         match self.llm {
             Some(llm) => {
                 register_llm(&mut runtime, &llm, &self.empty_llm_registration_id)?;
@@ -187,6 +210,7 @@ impl RuntimeHostBuilder {
                 event_pump: Mutex::new(event_pump),
                 diagnostics: self.diagnostics,
                 slow_invoke_threshold: self.slow_invoke_threshold,
+                file_decoder_bridge: Mutex::new(file_decoder_bridge),
             }),
         })
     }
@@ -198,6 +222,7 @@ pub struct RuntimeApp {
 }
 
 struct RuntimeAppInner {
+    file_decoder_bridge: Mutex<Option<crate::file_decoder::DecoderBridge>>,
     runtime: Mutex<Runtime>,
     event_bus: RuntimeEventBus,
     event_pump: Mutex<Option<RuntimeEventPumpHandle>>,
@@ -887,13 +912,25 @@ impl RuntimeApp {
 
     pub fn destroy(&self) -> Result<()> {
         self.stop_event_pump();
-        self.lock_runtime()?.destroy()
+        self.lock_runtime()?.destroy()?;
+        self.inner
+            .file_decoder_bridge
+            .lock()
+            .map_err(|_| RuntimeError::new("decoder lifecycle lock poisoned"))?
+            .take();
+        Ok(())
     }
 
     pub fn close(&self, timeout_ms: u32) -> Result<()> {
         self.lock_runtime()?.shutdown(timeout_ms)?;
         self.drain_event_pump();
-        self.lock_runtime()?.destroy()
+        self.lock_runtime()?.destroy()?;
+        self.inner
+            .file_decoder_bridge
+            .lock()
+            .map_err(|_| RuntimeError::new("decoder lifecycle lock poisoned"))?
+            .take();
+        Ok(())
     }
 
     pub fn stop_event_pump(&self) {

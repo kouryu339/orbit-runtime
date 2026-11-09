@@ -353,6 +353,7 @@ export class AcceptanceEnvironment implements ConversationTransport {
         revision: ++this.revision,
         conversation_state: this
           .state as FrontendSnapshotPayload['conversation_state'],
+        can_resume: this.state === 'waiting' && this.session.paused,
         active_agent_id: 'demo-agent',
         ledger_records: structuredClone(this.session.records),
         pending_permissions: structuredClone(this.session.permissions),

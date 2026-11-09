@@ -732,6 +732,22 @@ impl AgentRuntime {
             self.push_user_message(input).await?;
         }
 
+        let recovery_pending = self
+            .sm
+            .unit()
+            .cache()
+            .get::<bool>("recovery_execution_pending")
+            .await?
+            .unwrap_or(false);
+        if recovery_pending {
+            self.sm
+                .unit()
+                .cache()
+                .delete("recovery_execution_pending")
+                .await?;
+            self.sm.recover_enter_state(states::EXECUTING).await?;
+        }
+
         if self.sm.current_state() == states::SAYING {
             self.sm.tick().await?;
         }

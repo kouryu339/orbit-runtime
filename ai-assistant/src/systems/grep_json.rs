@@ -153,7 +153,15 @@ fn query(service: &GrepService, req: &Request, cancel: &AtomicBool) -> Result<Va
         .transpose()?;
     let bytes = service.read_authorized_file(&req.root_id, &req.path)?;
     budget.check()?;
-    let revision = document_revision(&bytes);
+    let decoded = service.decode_file(
+        std::path::Path::new(&req.path),
+        bytes,
+        "json",
+        cancel,
+        budget.started + budget.timeout,
+    )?;
+    let bytes = decoded.bytes;
+    let revision = decoded.revision;
     if !req.expected_revision.is_empty() && req.expected_revision != revision {
         return Err(format!(
             "revision_conflict: current_revision={revision}; read again before using old pointers"
@@ -166,6 +174,16 @@ fn query(service: &GrepService, req: &Request, cancel: &AtomicBool) -> Result<Va
         "root_id":req.root_id,"path":req.path,"revision":revision,
         "pointer":req.pointer,"action":req.action,"complete":true
     });
+    if let Some(decoder) = decoded.decoder {
+        result["decoder"] = json!(decoder);
+    }
+    if let Some(location) = decoded
+        .locations
+        .iter()
+        .find(|loc| loc["pointer"].as_str() == Some(req.pointer.as_str()))
+    {
+        result["location"] = location["location"].clone();
+    }
     let max = config.max_output_bytes;
     if !fits(&result, max / 2) {
         return Err(
@@ -538,9 +556,12 @@ impl SystemOperation for GrepJsonSystem {
         let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
         let flag = cancel.0.clone();
         let timeout = Duration::from_millis(service.config.timeout_ms);
+        let conversation_id = ctx.conversation_id.clone();
         let task = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            query(&service, &request, &flag)
+            service.with_conversation(conversation_id.as_deref(), |scoped| {
+                query(scoped, &request, &flag)
+            })
         });
         match corework::platform::time::timeout(timeout, task).await {
             Ok(Ok(Ok(value))) => {
@@ -548,7 +569,9 @@ impl SystemOperation for GrepJsonSystem {
                 Ok(AIOutput::success(value, text))
             }
             Ok(Ok(Err(e))) => Ok(AIOutput::error(
-                if e.starts_with("revision_conflict:") {
+                if e.starts_with("read_access_") {
+                    403
+                } else if e.starts_with("revision_conflict:") {
                     409
                 } else {
                     400

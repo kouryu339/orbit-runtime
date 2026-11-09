@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod events;
+mod file_decoder;
+pub use file_decoder::{FileDecodeOutput, FileDecodeRequest, FileDecoder};
 mod host;
 mod registry;
 pub mod release;

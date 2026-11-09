@@ -1,6 +1,6 @@
 {
   "name": "@orbit-runtime/browser",
-  "version": "0.5.4-beta.1",
+  "version": "0.5.4",
   "type": "module",
   "description": "Orbit Runtime in a dedicated browser Web Worker",
   "license": "Apache-2.0",

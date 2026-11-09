@@ -97,6 +97,29 @@ Agent instance、任务关系和运行状态。
 定义重新创建。仍在运行的临时后台实例只有在其 `definition_id` 仍可解析时才具备继续恢复的
 前提；宿主不得用快照中的旧权限或旧工具列表绕过当前注册表。
 
+### 恢复时的 Skill 与权限
+
+`conversation.spawn_from_snapshot` 和 `conversation.import_snapshot` 默认使用当前集群的
+Role、thinking、Feature/Capability Skill，不增加恢复策略参数。快照中的 Skill 哈希仅用于
+版本记录，不再因正文变化返回 `skill_version_conflict`。集群身份仍须一致；当前已接受的
+集群配置和权限生效，保存 Skill 或更新集群时的版本冲突检查保持不变。
+
+原始用户消息、AI 原文、工具调用和结果、provider call ID、有效 record ID 及顺序保留。
+旧 Skill 正文投影、活动工具白名单和未完成审批缓存不作为恢复后的授权来源。导入目标
+必须停止运行；暂停后仍在退出执行器的目标会返回 `conversation_recovery_busy`。
+
+恢复响应新增 `recovery`，包含 `skill_versions`、`updated_skills`、
+`removed_optional_skills` 和 `blocked_calls`。缺失或失效的可选能力被移除并报告；
+缺失必需 Role 或系统 Skill 返回包含 Agent 和 Skill 名称的 `required_skill_missing`，
+类型或正文无效则返回 `required_skill_invalid`。再次导出记录当前 Skill 版本和暂停状态。
+
+未完成调用按当前工具参数契约、活动工具和权限重新检查；不允许继续的调用保留历史，
+并给出恢复诊断。旧审批不能授权新执行，暂停会话需要显式继续。已经开始且结果未知的
+副作用调用不自动重放，已完成调用也不会重复执行。恢复后的目录读取仍需宿主重新授权。
+
+宿主应继续恢复原始历史，展示 `recovery` 中的移除和阻塞原因；删除“Skill 冲突就新建空
+会话”的兜底。真正缺少必需 Skill 时保留原快照并报告错误，不能丢弃历史重开。
+
 ## 7.5 Shutdown 与事件 drain
 
 显式调用 runtime shutdown 或手动关闭 pod 时，关闭是 conversation 级别逐个发生的：

@@ -8,6 +8,8 @@ pub struct RuntimeAgentCluster {
     pub agents: Vec<RuntimeAgentDefinition>,
     pub max_thinking_rounds: u32,
     pub permissions: ai_assistant::ToolPermissionPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grep_root_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +46,7 @@ pub(super) struct AgentClusterRegistration {
     #[serde(alias = "maxThinkingRounds")]
     max_thinking_rounds: u32,
     permissions: ai_assistant::ToolPermissionPolicy,
+    grep_root_ids: Option<Vec<String>>,
 }
 
 impl Default for AgentClusterRegistration {
@@ -56,6 +59,7 @@ impl Default for AgentClusterRegistration {
             agents: Vec::new(),
             max_thinking_rounds: 0,
             permissions: ai_assistant::ToolPermissionPolicy::default(),
+            grep_root_ids: None,
         }
     }
 }
@@ -117,6 +121,23 @@ pub(super) fn build_agent_cluster_registry(
         )));
     }
     validate_resource_id("agent cluster id", &registration.id)?;
+    if let Some(ids) = &registration.grep_root_ids {
+        let mut seen = BTreeSet::new();
+        for id in ids {
+            validate_resource_id("Grep root id", id)?;
+            if !seen.insert(id) {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "duplicate Grep root id: {id}"
+                )));
+            }
+        }
+        if let Some(resources) = &registries.resources {
+            resources
+                .grep
+                .bind_conversation("cluster-validation", Some(ids))
+                .map_err(RuntimeError::InvalidConfig)?;
+        }
+    }
     registration.description = registration.description.trim().to_string();
     if registration.description.is_empty() {
         return Err(RuntimeError::InvalidConfig(format!(
@@ -249,6 +270,7 @@ pub(super) fn build_agent_cluster_registry(
         agents,
         max_thinking_rounds: registration.max_thinking_rounds,
         permissions: registration.permissions,
+        grep_root_ids: registration.grep_root_ids,
     })
 }
 
@@ -412,6 +434,7 @@ pub(super) fn build_builtin_cluster_configs(
                 }],
                 max_thinking_rounds: 0,
                 permissions: registration.permissions,
+                grep_root_ids: registration.grep_root_ids,
             })
         }
     };

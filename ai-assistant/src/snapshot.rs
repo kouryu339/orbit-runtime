@@ -32,6 +32,8 @@ pub struct FrontendStateSnapshot {
     pub language: Option<String>,
     pub conversation_state: ConversationState,
     #[serde(default)]
+    pub can_resume: bool,
+    #[serde(default)]
     pub plan: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_permissions: Vec<crate::permission::PendingToolPermission>,
@@ -262,6 +264,20 @@ impl SnapshotBuilder {
                 context_usage,
             });
         }
+        let can_resume = conversation_state == ConversationState::Waiting
+            && pending_permissions.is_empty()
+            && match active_cache.as_ref() {
+                Some(cache) => {
+                    cache
+                        .get::<String>(keys::TASK_STATUS)
+                        .await
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        == Some("paused")
+                }
+                None => false,
+            };
         FrontendStateSnapshot {
             conversation_id,
             revision: 0,
@@ -273,6 +289,7 @@ impl SnapshotBuilder {
             summary_model,
             language,
             conversation_state,
+            can_resume,
             plan,
             pending_permissions,
             assistant_stream,

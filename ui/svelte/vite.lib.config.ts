@@ -3,6 +3,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { sharedConversationAlias } from './shared-conversation-alias';
 
 /** Ship one importable JS, including component styles and embedded KaTeX fonts. */
 function standaloneStyles(): Plugin {
@@ -85,6 +86,7 @@ function thirdPartyNotices(): Plugin {
 
 export default defineConfig({
   plugins: [svelte(), standaloneStyles(), thirdPartyNotices()],
+  resolve: { alias: sharedConversationAlias },
   build: {
     outDir: 'dist-library',
     emptyOutDir: true,

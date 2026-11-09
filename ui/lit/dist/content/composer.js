@@ -82,7 +82,7 @@ export class ComposerSession {
                 this.paused = true;
             }
             else if (this.awaiting === 'resume' &&
-                (state.runtimeState !== 'waiting' || !state.awaitingAssistantResponse)) {
+                (state.runtimeState !== 'waiting' || state.canResume === false)) {
                 this.awaiting = null;
                 this.paused = false;
                 this.settings = { ...this.settings, canResume: false };
@@ -127,7 +127,9 @@ export class ComposerSession {
         if (this.state.runtimeState !== 'waiting' ||
             this.state.awaitingAssistantResponse)
             return this.state.runtimeState === 'executing' ? 'executing' : 'thinking';
-        return this.paused || this.settings.canResume ? 'paused' : 'ready';
+        return (this.state.canResume ?? (this.paused || this.settings.canResume))
+            ? 'paused'
+            : 'ready';
     }
     get canPause() {
         return (this.ready &&

@@ -177,6 +177,7 @@ pub(super) fn cluster_definition(cluster: &RuntimeAgentCluster, source: &str) ->
         "focus_agent_id": cluster.focus_agent_id,
         "max_thinking_rounds": cluster.max_thinking_rounds,
         "permissions": cluster.permissions,
+        "grep_root_ids": cluster.grep_root_ids,
         "agents": cluster.agents.iter().map(|agent| json!({
             "id": agent.id,
             "profile_id": agent.profile_id,

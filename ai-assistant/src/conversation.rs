@@ -312,6 +312,13 @@ impl Conversation {
             .await
     }
 
+    pub async fn request_resume_with_admission(
+        &self,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        self.gateway.request_resume_with_admission(command_id).await
+    }
+
     pub async fn resolve_tool_permission(
         &self,
         tool_call_id: &str,

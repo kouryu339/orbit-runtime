@@ -21,6 +21,7 @@
     type ConversationAction,
     type ConversationState,
     type LedgerRecord,
+    type UserFileAttachment,
   } from '@agent-runtime/conversation-element/protocol';
   import type {
     ConversationPersistenceController,
@@ -45,11 +46,14 @@
     ConversationDensity,
     ConversationPublicEventMap,
     ConversationComposerController,
+    ConversationComposerAction,
+    ConversationFileInput,
   } from '@agent-runtime/conversation-element/host';
   import RichContent from './RichContent.svelte';
   import ProviderEditor from './ProviderEditor.svelte';
   import PlanCard from './PlanCard.svelte';
   import UserRecord from './UserRecord.svelte';
+  import FileAttachment from './FileAttachment.svelte';
   import './conversation.css';
 
   export let transport: ConversationTransport | null = null;
@@ -61,6 +65,8 @@
     enabled: false,
   };
   export let composerController: ConversationComposerController | null = null;
+  export let composerActions: readonly ConversationComposerAction[] = [];
+  export let fileInput: ConversationFileInput | null = null;
   export let theme: ConversationThemeName = 'studio';
   export let density: ConversationDensity = 'comfortable';
   export let conversationId: string | null = null;
@@ -85,6 +91,11 @@
     | { type: 'text'; text: string }
     | { type: 'image'; image_id: string };
   let pendingImages: PendingImage[] = [];
+  let pendingFiles: { file: File; resourceId?: string }[] = [];
+  let filePicker: HTMLInputElement;
+  let draggingFiles = false;
+  let fileError = '';
+  const maxPendingFiles = 8;
   let imageSending = false;
   let imageInput: HTMLInputElement;
   let stickToBottom = true;
@@ -117,8 +128,10 @@
   let archives: PersistedConversation[] = [];
   let providers: ProviderDefinitionsResult | null = null;
   let composerVersion = 0;
-  let composerPanel: 'model' | 'permissions' | null = null;
+  let composerPanel: 'model' | 'permissions' | 'add' | null = null;
   let composerPanelPosition = '';
+  let composerAddButton: HTMLButtonElement;
+  let composerActionPending = false;
   const composerSession = new ComposerSession(
     () => (composerVersion += 1),
     (message) =>
@@ -163,7 +176,7 @@
     'sending',
   ].includes(composerPhase);
   $: composerResume =
-    composerPhase === 'paused' && !draft.trim() && !pendingImages.length;
+    composerPhase === 'paused' && !draft.trim() && !pendingImages.length && !pendingFiles.length;
   $: composerActionLabel = composerBusy
     ? 'Pause response'
     : composerResume
@@ -175,7 +188,7 @@
       ? !composer.canPause || imageSending
       : composerResume
         ? !composer.canResume
-        : !canCompose || (!draft.trim() && !pendingImages.length));
+        : !canCompose || (!draft.trim() && !pendingImages.length && !pendingFiles.length));
   $: composerModel = providers?.models?.find((m) => m.uid === state.modelUid);
   $: composerEfforts = composer.settings.supportedEfforts ?? [];
   $: composerPermission = composer.settings.permissionModes?.find(
@@ -194,7 +207,7 @@
     paused: ['已暂停', 'Paused'],
   };
   function toggleComposerPanel(
-    panel: 'model' | 'permissions',
+    panel: 'model' | 'permissions' | 'add',
     event: MouseEvent,
   ) {
     composerSession.clearEffortPreview();
@@ -203,8 +216,94 @@
       return;
     }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    composerPanelPosition = `left:${Math.max(12, Math.min(rect.right - 300, window.innerWidth - 312))}px;bottom:${Math.max(12, window.innerHeight - rect.top + 8)}px;max-height:${Math.max(120, rect.top - 24)}px`;
+    const left = panel === 'add' ? rect.left : rect.right - 300;
+    composerPanelPosition = `left:${Math.max(12, Math.min(left, window.innerWidth - 312))}px;bottom:${Math.max(12, window.innerHeight - rect.top + 8)}px;max-height:${Math.max(120, rect.top - 24)}px`;
     composerPanel = panel;
+  }
+  $: canAttachComposerImage = Boolean(transport?.imageInput) && canCompose &&
+    !imageSending && pendingImages.length < 8;
+  $: acceptsFiles = Boolean(fileInput?.accept.some((token) => token.trim()));
+  $: canAttachFile = acceptsFiles && canCompose && !imageSending && pendingFiles.length < maxPendingFiles;
+  $: hasAddMenu = acceptsFiles || composerActions.length > 0;
+
+  function stageFiles(files: File[]) {
+    if (!fileInput || !canCompose || imageSending) return;
+    const rules = fileInput.accept.map((token) => token.trim().toLowerCase());
+    const rejected: string[] = [];
+    const accepted = files.filter((file) => {
+      const name = file.name.toLowerCase();
+      const mime = file.type.toLowerCase();
+      if (rules.some((rule) => rule && (
+        rule.startsWith('.') ? name.endsWith(rule)
+          : rule.endsWith('/*') ? mime.startsWith(rule.slice(0, -1))
+          : mime === rule
+      ))) return true;
+      rejected.push(file.name);
+      return false;
+    });
+    const available = maxPendingFiles - pendingFiles.length;
+    pendingFiles = [...pendingFiles, ...accepted.slice(0, available).map((file) => ({ file }))];
+    const problems = [];
+    if (rejected.length) problems.push(zh
+      ? `不支持的文件格式：${rejected.join('、')}`
+      : `Unsupported file format: ${rejected.join(', ')}`);
+    if (accepted.length > available) problems.push(zh
+      ? `每条消息最多添加 ${maxPendingFiles} 个文件。`
+      : `Attach up to ${maxPendingFiles} files per message.`);
+    fileError = problems.join(' ');
+  }
+
+  function onFileDragOver(event: DragEvent) {
+    if (!acceptsFiles || !event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = canAttachFile ? 'copy' : 'none';
+    draggingFiles = canAttachFile;
+  }
+
+  function onFileDragLeave(event: DragEvent) {
+    if (!(event.relatedTarget instanceof Node) ||
+        !(event.currentTarget as HTMLElement).contains(event.relatedTarget))
+      draggingFiles = false;
+  }
+
+  function onFileDrop(event: DragEvent) {
+    if (!acceptsFiles || !event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    draggingFiles = false;
+    stageFiles(Array.from(event.dataTransfer.files));
+  }
+
+  function clearPendingFiles() {
+    pendingFiles = [];
+    draggingFiles = false;
+    fileError = '';
+  }
+
+  function openComposerImagePicker() {
+    if (!canAttachComposerImage) return;
+    if (composerPanel === 'add') composerAddButton?.focus();
+    composerPanel = null;
+    imageInput?.click();
+  }
+
+  async function runComposerAction(action: ConversationComposerAction) {
+    const id = state.conversationId;
+    if (!id || !canCompose || action.disabled || composerActionPending) return;
+    composerAddButton?.focus();
+    composerPanel = null;
+    composerActionPending = true;
+    try {
+      await action.run({ conversationId: id });
+    } catch (cause) {
+      emit('agent-conversation-error', {
+        code: 'composer-action-failed',
+        message: cause instanceof Error ? cause.message : String(cause),
+        recoverable: true,
+        cause,
+      });
+    } finally {
+      composerActionPending = false;
+    }
   }
   let localSequence = 0;
   $: dark = colorScheme === 'dark' || (colorScheme === 'system' && mediaDark);
@@ -324,6 +423,7 @@
   function dispatch(action: ConversationAction) {
     const next = conversationReducer(state, action);
     if (next === state) return;
+    if (state.conversationId !== next.conversationId) clearPendingFiles();
     state = next;
     composerSession.sync(state, transport, composerController, state.modelUid);
     conversationId = state.conversationId;
@@ -349,6 +449,7 @@
 
   export async function connect() {
     connectAbort?.abort();
+    clearPendingFiles();
     const epoch = ++generation;
     permissionOperation = '';
     permissionError = '';
@@ -396,6 +497,7 @@
 
   export function disconnect() {
     composerSession.dispose();
+    clearPendingFiles();
     composerPanel = null;
     ++generation;
     connectAbort?.abort();
@@ -493,7 +595,9 @@
   ): Promise<SendResult> {
     let value = content.trim();
     const images = [...pendingImages];
-    if ((!value && !images.length) || !transport || options.signal?.aborted)
+    const files = [...pendingFiles];
+    const fileImporter = fileInput;
+    if ((!value && !images.length && !files.length) || !transport || options.signal?.aborted)
       return {
         accepted: false,
         rejectReason: 'Message is empty, aborted, or transport unavailable.',
@@ -531,7 +635,9 @@
     const epoch = generation;
     const sendingTransport = transport;
     imageSending = true;
+    fileError = '';
     let parts: MessagePart[] | undefined;
+    let fileDisplay: { text: string; attachments: UserFileAttachment[] } | undefined;
     try {
       if (images.length) {
         if (!sendingTransport.imageInput)
@@ -587,6 +693,37 @@
           .join('\n');
         if (!value.trim()) value = '[Image]';
       }
+      if (files.length) {
+        if (!fileImporter) throw new Error('File input is unavailable.');
+        const attachments: UserFileAttachment[] = [];
+        for (const pending of files) {
+          if (epoch !== generation || options.signal?.aborted)
+            throw new Error('Conversation changed or send aborted.');
+          const { file } = pending;
+          if (!pending.resourceId) {
+            const result = await fileImporter.importFile({
+              conversationId: targetId,
+              file,
+              signal: options.signal ?? connectAbort?.signal,
+            });
+            if (!result.resourceId?.trim())
+              throw new Error(`File import returned no resource ID: ${file.name}`);
+            pending.resourceId = result.resourceId;
+          }
+          attachments.push({
+            resource_id: pending.resourceId,
+            name: file.name,
+            size_bytes: file.size,
+          });
+        }
+        const displayText = images.length && value === '[Image]' ? '' : value;
+        fileDisplay = { text: displayText, attachments };
+        const referenceText = `Resource references: ${JSON.stringify(
+          attachments.map(({ resource_id }) => ({ resource_id })),
+        )}`;
+        value = [displayText, referenceText].filter(Boolean).join('\n');
+        parts?.push({ type: 'text', text: referenceText });
+      }
       if (
         epoch !== generation ||
         options.signal?.aborted ||
@@ -596,22 +733,25 @@
         state.awaitingAssistantResponse
       )
         throw new Error(
-          'Conversation changed or send aborted while importing images.',
+          'Conversation changed or send aborted while importing attachments.',
         );
     } catch (cause) {
       imageSending = false;
       const message = cause instanceof Error ? cause.message : String(cause);
-      emit('agent-conversation-error', {
-        code: 'image-import-failed',
-        message,
-        recoverable: true,
-      });
+      if (epoch === generation) {
+        if (files.length) fileError = message;
+        emit('agent-conversation-error', {
+          code: files.length ? 'file-import-failed' : 'image-import-failed',
+          message,
+          recoverable: true,
+        });
+      }
       return { accepted: false, rejectReason: message };
     }
     const id = `svelte-${Date.now()}-${++localSequence}`;
     dispatch({
       type: 'local-message-added',
-      message: createPendingUserMessage(id, value, undefined, parts),
+      message: { ...createPendingUserMessage(id, value, undefined, parts), fileDisplay },
     });
     stickToBottom = true;
     try {
@@ -621,7 +761,17 @@
         parts,
         clientMessageId: id,
         signal: options.signal,
-        metadata: { ...options.metadata, source: options.source },
+        metadata: {
+          ...options.metadata,
+          source: options.source,
+          ...(fileDisplay ? {
+            display_content: fileDisplay.text,
+            extra: {
+              ...(options.metadata?.extra as Record<string, unknown> | undefined),
+              file_attachments: fileDisplay.attachments,
+            },
+          } : {}),
+        },
       });
       if (epoch === generation)
         dispatch(
@@ -637,6 +787,7 @@
         composerSession.sent();
         draft = '';
         clearPendingImages();
+        clearPendingFiles();
         if (composerElement) composerElement.style.height = '';
       }
       emit('agent-conversation-send', {
@@ -1025,14 +1176,16 @@
             node instanceof Element &&
             (node.classList.contains('composer-menu') ||
               node.matches(
-                '[aria-label="Permissions"],[aria-label="Model and reasoning"]',
+                '[data-composer-add],[aria-label="Permissions"],[aria-label="Model and reasoning"]',
               )),
         )
       )
         composerPanel = null;
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') composerPanel = null;
+      if (event.key !== 'Escape') return;
+      if (composerPanel === 'add') composerAddButton?.focus();
+      composerPanel = null;
     };
     const closePanel = () => (composerPanel = null);
     window.addEventListener('pointerdown', dismiss);
@@ -1663,8 +1816,24 @@
       </div>
     {/if}
     <footer class="composer-wrap" part="composer">
-      <div class="composer">
+      <div class="composer" class:draggingFiles
+        role="group" aria-label={zh ? '消息输入' : 'Message composer'}
+        on:dragover={onFileDragOver} on:dragleave={onFileDragLeave} on:drop={onFileDrop}>
         <slot name="composer-prefix" />
+        {#if pendingFiles.length}
+          <ul class="pending-files" aria-label={zh ? '待发送文件' : 'Pending files'}>
+            {#each pendingFiles as pending (pending)}
+              <FileAttachment name={pending.file.name} sizeBytes={pending.file.size} {locale}
+                disabled={imageSending}
+                onRemove={() => {
+                  pendingFiles = pendingFiles.filter((item) => item !== pending);
+                  fileError = '';
+                  composerElement?.focus();
+                }} />
+            {/each}
+          </ul>
+        {/if}
+        {#if fileError}<div class="composer-state" role="alert">{fileError}</div>{/if}
         {#if pendingImages.length}<div
             class="image-attachments"
             aria-label="Selected images"
@@ -1711,19 +1880,56 @@
                 accept="image/png,image/jpeg,image/webp,image/gif"
                 multiple
                 on:change={onImageInput}
-              /><button
+              />{/if}
+            {#if acceptsFiles}<input
+                type="file" hidden multiple
+                accept={fileInput?.accept.join(',')}
+                bind:this={filePicker}
+                on:change={() => {
+                  stageFiles(Array.from(filePicker.files ?? []));
+                  filePicker.value = '';
+                }}
+              />{/if}
+            {#if transport?.imageInput || hasAddMenu}<button
                 class="icon-button"
                 type="button"
-                aria-label="Attach images"
-                title={zh ? '添加图片' : 'Attach images'}
-                disabled={!canCompose ||
-                  imageSending ||
-                  pendingImages.length >= 8}
-                on:click={() => imageInput?.click()}
+                data-composer-add
+                bind:this={composerAddButton}
+                aria-label={hasAddMenu ? (zh ? '添加' : 'Add') : 'Attach images'}
+                aria-expanded={hasAddMenu ? composerPanel === 'add' : undefined}
+                title={hasAddMenu ? (zh ? '添加' : 'Add') : zh ? '添加图片' : 'Attach images'}
+                disabled={hasAddMenu
+                  ? !canCompose || imageSending || composerActionPending
+                  : !canAttachComposerImage}
+                on:click={(event) => hasAddMenu
+                  ? toggleComposerPanel('add', event)
+                  : openComposerImagePicker()}
                 ><svg viewBox="0 0 24 24" aria-hidden="true"
                   ><path d="M12 5v14M5 12h14" /></svg
                 ></button
               >{/if}
+            {#if composerPanel === 'add' && hasAddMenu}
+              <aside class="composer-menu" style={composerPanelPosition} aria-label={zh ? '添加' : 'Add'}>
+                {#if transport?.imageInput}
+                  <button type="button" class="menu-item" disabled={!canAttachComposerImage}
+                    on:click={openComposerImagePicker}>{zh ? '添加图片' : 'Attach images'}</button>
+                {/if}
+                {#if acceptsFiles}
+                  <button type="button" class="menu-item" disabled={!canAttachFile}
+                    on:click={() => {
+                      if (!canAttachFile) return;
+                      composerAddButton?.focus();
+                      composerPanel = null;
+                      filePicker?.click();
+                    }}>{zh ? '添加文件' : 'Add files'}</button>
+                {/if}
+                {#each composerActions as action (action.id)}
+                  <button type="button" class="menu-item"
+                    disabled={!canCompose || action.disabled || composerActionPending}
+                    on:click={() => void runComposerAction(action)}>{action.label}</button>
+                {/each}
+              </aside>
+            {/if}
             <button
               class="text-button"
               type="button"
@@ -1813,7 +2019,7 @@
             >
           </div>
         </div>
-        {#if composerPanel}<aside
+        {#if composerPanel && composerPanel !== 'add'}<aside
             class="composer-menu"
             style={composerPanelPosition}
             aria-label={composerPanel === 'model'
@@ -1935,3 +2141,18 @@
     </footer>
   </section>
 </div>
+
+<style>
+  .composer.draggingFiles {
+    outline: 2px dashed var(--conversation-accent);
+    outline-offset: 3px;
+  }
+  .pending-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+</style>

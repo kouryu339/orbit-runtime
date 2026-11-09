@@ -95,6 +95,13 @@ Skill、集群和模型注册在启动前完成，首版不支持运行中的内
 `runtime.capabilities.commands` 和 `unsupported` 是判断功能是否开放的依据；
 不要仅凭版本号推断 Native 与浏览器命令完全相同。
 
+暂停使用 `conversation.pause`，继续使用 `conversation.resume`，两者传入
+`{ conversation_id }`。继续沿用已有上下文，返回 `decision` 和 `reason`。
+只有明确暂停的焦点 Agent 可以继续，普通空闲或仍在运行时返回 `not_paused`。
+`frontend:state_snapshot.payload.can_resume` 可用于恢复界面的继续按钮。
+Lit 和 Svelte 的 Worker transport 已接入该命令，HTTP 与 Tauri 宿主需要配置
+`resumePath` 或 `commands.resume`，把对应入口转发给 Runtime。
+
 ## 宿主工具
 
 浏览器不直接连接原生 gRPC；使用 `host` 回调接浏览器能力、后端或 WebSocket 桥。

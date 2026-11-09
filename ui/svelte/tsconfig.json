@@ -4,6 +4,9 @@
     "useDefineForClassFields": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "paths": {
+      "@agent-runtime/conversation-element/*": ["../lit/src/*/index.ts"]
+    },
     "strict": true,
     "allowJs": true,
     "checkJs": true,

@@ -105,6 +105,26 @@ The input uses a two-row layout: text above; images and permissions on the left,
 model and reasoning controls plus one primary action on the right. No voice
 input is provided. The model menu also links to provider management.
 
+Pass `composerActions` as a Lit property or a Svelte prop to add host actions
+to the composer’s ＋ menu. Give each action a unique `id`, a user-facing
+`label`, and a `run({ conversationId })` callback. An optional `disabled`
+flag disables that item. The built-in image action appears in the same menu
+when the transport supports images. With no host actions, ＋ opens the image
+picker directly when available.
+
+```js
+const composerActions = [{
+  id: 'pick-project-file',
+  label: '选择项目文件',
+  run: ({ conversationId }) => projectFiles.openPicker(conversationId),
+}];
+```
+
+Set `element.composerActions = composerActions` in Lit, or pass
+`{ composerActions }` as part of the props to `mountConversation` in Svelte.
+The callback runs on selection and can return a promise. The component reports
+callback failures through `agent-conversation-error`.
+
 `composerController` optionally implements `ConversationComposerController`
 from the `host` export. `getSettings({conversationId, modelUid})` supplies
 `effort`, `supportedEfforts`, `permissionMode`, `permissionModes`, and
@@ -129,8 +149,14 @@ Pause admission does not immediately unlock input: the UI waits for a Runtime
 waiting snapshot. Continue calls optional `transport.resume(request)`, never
 inserts a synthetic user message. The Tauri adapter exposes it only with
 `commands.resume`; the HTTP adapter only with `resumePath`. These are
-host-supplied routes, not new Runtime DLL commands. If the host cannot resume,
-continue remains disabled. Recovered sessions use `getSettings().canResume`.
+host-supplied routes that must invoke `conversation.resume` with
+`{conversation_id}` on the Runtime. Worker transport invokes it directly.
+The command resumes the explicitly paused focus Agent using its existing
+context. It returns an admission decision and rejects idle, running, stopping
+or compacting Agents. It does not append a user message or grant tool approval.
+If the host does not expose a resume route, continue remains disabled.
+Runtime snapshots expose `can_resume` so reconnection restores the button.
+Older hosts may still provide `getSettings().canResume` as a fallback.
 The shared state machine fences late responses after conversation/model changes
 and blocks duplicate commands. Runtime snapshots remain execution truth.
 

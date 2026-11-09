@@ -293,17 +293,15 @@ impl RuntimeFacade {
             RuntimeError::InvalidConfig(format!("agent cluster '{cluster_id}' is not registered"))
         })?;
         if let Some(snapshot) = snapshot {
-            if snapshot != &current {
+            // Definition versions protect edits, not recovery. History binds to
+            // this cluster's accepted current configuration and permissions.
+            if snapshot.cluster_id != current.cluster_id {
                 return Err(RuntimeError::ClusterVersionConflict {
                     cluster_id: cluster_id.to_string(),
                     expected: format!("{}:{}", snapshot.cluster_id, snapshot.version),
                     actual: format!("{}:{}", current.cluster_id, current.version),
                 });
             }
-        } else if self.registries.dynamic_agent_clusters.contains(cluster_id) {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "cluster_version_missing: snapshot has no definition version for dynamic cluster '{cluster_id}'"
-            )));
         }
         Ok(())
     }
@@ -335,47 +333,5 @@ impl RuntimeFacade {
                 .await
                 .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))
         })
-    }
-
-    // Caller holds read admission before changing recovery state.
-    pub(super) fn check_snapshot_skill_versions(
-        &self,
-        cluster_id: Option<&str>,
-        versions: Option<&BTreeMap<String, String>>,
-    ) -> Result<(), RuntimeError> {
-        let Some(versions) = versions else {
-            if cluster_id.is_some_and(|id| self.registries.dynamic_agent_clusters.contains(id)) {
-                return Err(RuntimeError::InvalidConfig(
-                    "skill_version_missing: dynamic cluster snapshot requires skill_versions"
-                        .into(),
-                ));
-            }
-            return Ok(());
-        };
-        let actual = self.rt.block_on(async {
-            let catalog = ai_assistant::skills::systems::SKILL_MANAGER
-                .get()
-                .ok_or_else(|| {
-                    RuntimeError::InvalidConfig("Skill catalog is not initialized".into())
-                })?;
-            catalog
-                .write()
-                .await
-                .content_versions(&versions.keys().cloned().collect::<Vec<_>>())
-                .await
-                .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))
-        })?;
-        if &actual != versions {
-            let (name, expected) = versions
-                .iter()
-                .find(|(name, expected)| actual.get(*name) != Some(*expected))
-                .expect("different maps have a differing entry");
-            return Err(RuntimeError::SkillVersionConflict {
-                name: name.clone(),
-                expected: Some(expected.clone()),
-                actual: actual.get(name).cloned(),
-            });
-        }
-        Ok(())
     }
 }

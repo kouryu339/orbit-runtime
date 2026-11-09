@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use crate::decision::ToolResult;
 
 use corework::ai_system::AISystemFactory;
+use corework::cache::CacheExt;
 use corework::orchestration::Context;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,10 +107,33 @@ async fn execute_prepared(
         }
     };
     if let Some(manager) = crate::skills::systems::SKILL_MANAGER.get() {
-        manager
+        let system: std::collections::BTreeMap<String, String> = ctx
+            .cache
+            .get(crate::context::keys::SYSTEM_SKILLS)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let protocol = ctx
+            .cache
+            .get::<crate::ToolProtocol>(crate::context::keys::TOOL_PROTOCOL)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let configured = system
+            .get("thinking")
+            .map(String::as_str)
+            .unwrap_or("thinking");
+        let thinking = match (protocol, configured) {
+            (crate::ToolProtocol::NativeFc, "thinking") => "thinking-fc",
+            (crate::ToolProtocol::NativeFc, "thinking-pro") => "thinking-pro-fc",
+            (_, name) => name,
+        };
+        active_tools = manager
             .read()
             .await
-            .inject_tools_for_state(crate::state::states::THINKING, &mut active_tools);
+            .filtered_tools_for_state(thinking, active_tools);
     }
     if !active_tools.iter().any(|tool| tool == system_name) {
         return ToolResult {
@@ -365,6 +389,101 @@ pub fn parse_tool_command(cmd: &str) -> (&str, &str) {
         Some(pos) => (&trimmed[..pos], trimmed[pos..].trim_start()),
         None => (trimmed, ""),
     }
+}
+
+/// Validate historical arguments against today's contract without executing a tool.
+pub fn validate_recovery_call(
+    command: &str,
+    parsed: Option<&crate::decision_line::ParsedToolCall>,
+    registry: &corework::system::SystemRegistry,
+) -> Result<(), String> {
+    let (name, raw) = parse_tool_command(command);
+    let params = if let Some(parsed) = parsed {
+        parsed.params.clone()
+    } else {
+        let args = corework::ai_system::SimpleArgs::parse(raw).map_err(|e| e.to_string())?;
+        args.names()
+            .filter_map(|key| args.get(key).map(|v| (key.to_string(), v.to_string())))
+            .collect()
+    };
+    let used = params
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    if let Some(error) = validate_param_name_list_using(name, &used, Some(registry)) {
+        return Err(error);
+    }
+    let specs: Vec<(String, String, bool, bool)> = if let Some(factory) =
+        inventory::iter::<AISystemFactory>().find(|f| f.metadata.name == name)
+    {
+        factory
+            .metadata
+            .parameters
+            .iter()
+            .map(|p| {
+                (
+                    p.name.into(),
+                    p.param_type.into(),
+                    p.required,
+                    p.default_value.is_some(),
+                )
+            })
+            .collect()
+    } else if let Some(tool) =
+        crate::runtime_tools::get_runtime_tool_in_registry(Some(registry), name)
+    {
+        tool.parameters
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    p.param_type.clone(),
+                    p.required,
+                    p.default_value.is_some(),
+                )
+            })
+            .collect()
+    } else {
+        return Err(format!("tool_unavailable: {name}"));
+    };
+    for (key, kind, required, has_default) in specs {
+        let value = params.iter().find(|(name, _)| name == &key).map(|(_, v)| v);
+        if required
+            && !has_default
+            && value.is_none()
+            && !(key == "inputs" && used.iter().any(|name| name.starts_with("input.")))
+        {
+            return Err(format!(
+                "tool_contract_changed: required parameter '{key}' is missing for '{name}'"
+            ));
+        }
+        if let Some(value) = value {
+            let valid = match kind.to_ascii_lowercase().as_str() {
+                "bool" | "boolean" => value.parse::<bool>().is_ok(),
+                "u8" => value.parse::<u8>().is_ok(),
+                "u16" => value.parse::<u16>().is_ok(),
+                "u32" => value.parse::<u32>().is_ok(),
+                "u64" | "usize" => value.parse::<u64>().is_ok(),
+                "i8" => value.parse::<i8>().is_ok(),
+                "i16" => value.parse::<i16>().is_ok(),
+                "i32" => value.parse::<i32>().is_ok(),
+                "i64" | "isize" => value.parse::<i64>().is_ok(),
+                "f32" | "f64" | "number" | "num" => {
+                    value.parse::<f64>().is_ok_and(|n| n.is_finite())
+                }
+                kind if kind.starts_with("array") || kind.starts_with("vec") => {
+                    serde_json::from_str::<serde_json::Value>(value).is_ok_and(|v| v.is_array())
+                }
+                _ => true,
+            };
+            if !valid {
+                return Err(format!(
+                    "tool_contract_changed: parameter '{key}' must be {kind} for '{name}'"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn build_tool_input_map(

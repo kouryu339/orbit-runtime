@@ -17,6 +17,7 @@ impl Fixture {
             GrepConfig {
                 roots: vec![GrepRoot {
                     id: "project".into(),
+                    conversation_grants: None,
                     path: self.0.clone(),
                 }],
                 max_output_bytes: output,
@@ -220,6 +221,7 @@ fn shares_root_exclusions_and_resource_limits() {
         GrepConfig {
             roots: vec![GrepRoot {
                 id: "project".into(),
+                conversation_grants: None,
                 path: f.0.clone(),
             }],
             max_file_bytes: 8,
@@ -242,6 +244,7 @@ fn rejects_excessive_nodes_and_cancellation() {
         GrepConfig {
             roots: vec![GrepRoot {
                 id: "project".into(),
+                conversation_grants: None,
                 path: f.0.clone(),
             }],
             max_entries: 3,

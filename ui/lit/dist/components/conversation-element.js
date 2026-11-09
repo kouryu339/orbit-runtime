@@ -13,6 +13,8 @@ export class AgentRuntimeConversationElement extends LitElement {
         transport: { attribute: false },
         capabilities: { attribute: false },
         composerController: { attribute: false },
+        composerActions: { attribute: false },
+        composerActionPending: { state: true },
         composerPanel: { state: true },
         composerPanelPosition: { state: true },
         presentationItems: { attribute: false },
@@ -998,6 +1000,14 @@ export class AgentRuntimeConversationElement extends LitElement {
     textarea::placeholder {
       color: var(--conversation-text-muted);
     }
+    .composer > textarea,
+    .composer > textarea:focus,
+    .composer > textarea:focus-visible {
+      appearance: none;
+      border: 0;
+      outline: none;
+      box-shadow: none;
+    }
     .image-input {
       display: none;
     }
@@ -1292,12 +1302,15 @@ export class AgentRuntimeConversationElement extends LitElement {
             .composedPath()
             .some((node) => node instanceof Element &&
             (node.classList.contains('composer-menu') ||
-                node.matches('[aria-label="Permissions"],[aria-label="Model and reasoning"]'))))
+                node.matches('[data-composer-add],[aria-label="Permissions"],[aria-label="Model and reasoning"]'))))
             this.composerPanel = null;
     };
     escapeComposerMenu = (event) => {
-        if (event.key === 'Escape')
-            this.composerPanel = null;
+        if (event.key !== 'Escape')
+            return;
+        if (this.composerPanel === 'add')
+            this.focusComposerAdd();
+        this.composerPanel = null;
     };
     closeComposerMenu = () => {
         this.composerPanel = null;
@@ -1356,6 +1369,8 @@ export class AgentRuntimeConversationElement extends LitElement {
         this.pendingImages = [];
         this.imageSending = false;
         this.composerController = null;
+        this.composerActions = [];
+        this.composerActionPending = false;
         this.composerPanel = null;
         this.composerPanelPosition = '';
     }
@@ -2014,24 +2029,29 @@ export class AgentRuntimeConversationElement extends LitElement {
                   accept="image/png,image/jpeg,image/webp,image/gif"
                   multiple
                   @change=${this.onImageInput}
-                />
-                <button
+                />`
+            : nothing}
+          ${this.transport?.imageInput || this.composerActions.length
+            ? html `<button
                   class="icon-button"
                   type="button"
-                  aria-label="Attach images"
-                  title=${zh ? '添加图片' : 'Attach images'}
-                  ?disabled=${!this.canCompose() ||
-                this.imageSending ||
-                this.pendingImages.length >= 8}
-                  @click=${() => this.renderRoot
-                .querySelector('.image-input')
-                ?.click()}
+                  data-composer-add
+                  aria-label=${this.composerActions.length ? (zh ? '添加' : 'Add') : 'Attach images'}
+                  aria-expanded=${this.composerActions.length ? String(this.composerPanel === 'add') : nothing}
+                  title=${this.composerActions.length ? (zh ? '添加' : 'Add') : zh ? '添加图片' : 'Attach images'}
+                  ?disabled=${this.composerActions.length
+                ? !this.canCompose() || this.composerActionPending
+                : !this.canAttachComposerImage()}
+                  @click=${(event) => this.composerActions.length
+                ? this.toggleComposerPanel('add', event)
+                : this.openComposerImagePicker()}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 5v14M5 12h14" />
                   </svg>
                 </button>`
             : nothing}
+          ${this.composerPanel === 'add' ? this.renderComposerAdd(zh) : nothing}
           <button
             class="text-button"
             type="button"
@@ -2125,6 +2145,57 @@ export class AgentRuntimeConversationElement extends LitElement {
       </div>
       ${this.renderComposerMenu(model)}`;
     }
+    canAttachComposerImage() {
+        return Boolean(this.transport?.imageInput) && this.canCompose() &&
+            !this.imageSending && this.pendingImages.length < 8;
+    }
+    focusComposerAdd() {
+        this.renderRoot.querySelector('[data-composer-add]')?.focus();
+    }
+    openComposerImagePicker() {
+        if (!this.canAttachComposerImage())
+            return;
+        if (this.composerPanel === 'add')
+            this.focusComposerAdd();
+        this.composerPanel = null;
+        this.renderRoot.querySelector('.image-input')?.click();
+    }
+    async runComposerAction(action) {
+        const conversationId = this.state.conversationId;
+        if (!conversationId || !this.canCompose() || action.disabled || this.composerActionPending)
+            return;
+        this.focusComposerAdd();
+        this.composerPanel = null;
+        this.composerActionPending = true;
+        try {
+            await action.run({ conversationId });
+        }
+        catch (cause) {
+            this.emit('agent-conversation-error', {
+                code: 'composer-action-failed',
+                message: cause instanceof Error ? cause.message : String(cause),
+                recoverable: true,
+                cause,
+            });
+        }
+        finally {
+            this.composerActionPending = false;
+        }
+    }
+    renderComposerAdd(zh) {
+        if (!this.composerActions.length)
+            return nothing;
+        return html `<aside class="composer-menu" style=${this.composerPanelPosition} aria-label=${zh ? '添加' : 'Add'}>
+      ${this.transport?.imageInput ? html `
+        <button type="button" class="menu-item" ?disabled=${!this.canAttachComposerImage()}
+          @click=${() => this.openComposerImagePicker()}>${zh ? '添加图片' : 'Attach images'}</button>
+      ` : nothing}
+      ${repeat(this.composerActions, (action) => action.id, (action) => html `
+        <button type="button" class="menu-item" ?disabled=${!this.canCompose() || action.disabled || this.composerActionPending}
+          @click=${() => void this.runComposerAction(action)}>${action.label}</button>
+      `)}
+    </aside>`;
+    }
     toggleComposerPanel(panel, event) {
         this.composerSession.clearEffortPreview();
         if (this.composerPanel === panel) {
@@ -2132,11 +2203,12 @@ export class AgentRuntimeConversationElement extends LitElement {
             return;
         }
         const rect = event.currentTarget.getBoundingClientRect();
-        this.composerPanelPosition = `left:${Math.max(12, Math.min(rect.right - 300, window.innerWidth - 312))}px;bottom:${Math.max(12, window.innerHeight - rect.top + 8)}px;max-height:${Math.max(120, rect.top - 24)}px`;
+        const left = panel === 'add' ? rect.left : rect.right - 300;
+        this.composerPanelPosition = `left:${Math.max(12, Math.min(left, window.innerWidth - 312))}px;bottom:${Math.max(12, window.innerHeight - rect.top + 8)}px;max-height:${Math.max(120, rect.top - 24)}px`;
         this.composerPanel = panel;
     }
     renderComposerMenu(model) {
-        if (!this.composerPanel)
+        if (!this.composerPanel || this.composerPanel === 'add')
             return nothing;
         const zh = this.locale.startsWith('zh'), session = this.composerSession, settings = session.settings;
         const efforts = settings.supportedEfforts ?? [];

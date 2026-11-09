@@ -6,6 +6,12 @@ export type RuntimeEventEnvelope<T = unknown> = {
     payload?: T;
 };
 export type LedgerRole = 'user' | 'assistant' | 'system' | 'tool' | 'gateway_message' | 'agent_report' | 'summary';
+/** Host-supplied display metadata for a resource referenced in a user message. */
+export type UserFileAttachment = {
+    resource_id: string;
+    name: string;
+    size_bytes?: number;
+};
 export type LedgerRecord = {
     record_id?: string | number;
     id?: string;
@@ -21,7 +27,9 @@ export type LedgerRecord = {
         call_id?: string;
         success?: boolean;
         display_content?: string;
-        extra?: Record<string, unknown>;
+        extra?: Record<string, unknown> & {
+            file_attachments?: readonly UserFileAttachment[];
+        };
         [key: string]: unknown;
     };
 };
@@ -31,6 +39,7 @@ export type FrontendSnapshotPayload = {
     revision?: number;
     conversation_event_seq?: number;
     conversation_state?: ConversationRuntimeState;
+    can_resume?: boolean;
     ledger?: LedgerRecord[];
     ledger_records?: LedgerRecord[];
     ledger_delta?: {
@@ -106,6 +115,10 @@ export type ToolCallView = {
 export type PendingUserMessage = {
     id: string;
     content: string;
+    fileDisplay?: {
+        text: string;
+        attachments: readonly UserFileAttachment[];
+    };
     parts?: Array<{
         type: 'text';
         text: string;
@@ -128,6 +141,7 @@ export type ConversationState = {
     revision: number;
     eventSeq: number;
     runtimeState: ConversationRuntimeState;
+    canResume?: boolean;
     awaitingAssistantResponse: boolean;
     turnObservedRunning: boolean;
     turnObservedAssistant: boolean;

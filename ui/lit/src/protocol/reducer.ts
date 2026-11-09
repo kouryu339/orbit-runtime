@@ -4,6 +4,7 @@ import {
   displayText,
   isRenderableAssistantRecord,
   recordKey,
+  recordText,
   snapshotRecords,
 } from './records.js';
 import type {
@@ -212,6 +213,9 @@ function applySnapshot(
     revision: Math.max(state.revision, revision),
     eventSeq: Math.max(state.eventSeq, snapshotSeq),
     runtimeState,
+    canResume: payload.can_resume ?? (
+      runtimeState !== 'waiting' && state.canResume !== undefined ? false : state.canResume
+    ),
     awaitingAssistantResponse,
     turnObservedRunning: turnSettled ? false : turnObservedRunning,
     turnObservedAssistant: turnSettled ? false : turnObservedAssistant,
@@ -319,7 +323,10 @@ function reconcilePendingMessages(
 
   for (const record of incoming) {
     if (record.role !== 'user') continue;
-    const match = findPendingMatch(remaining, displayText(record));
+    const content = record.metadata?.extra?.file_attachments?.length
+      ? recordText(record)
+      : displayText(record);
+    const match = findPendingMatch(remaining, content);
     for (const message of match) {
       acknowledgedIds.add(message.id);
       const index = remaining.findIndex((item) => item.id === message.id);

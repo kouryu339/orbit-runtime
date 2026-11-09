@@ -7,6 +7,23 @@ import {
 } from '../src/protocol/index.js';
 
 describe('conversationReducer', () => {
+  it('restores the Runtime pause flag and prevents older snapshots from re-enabling continue', () => {
+    let state = conversationReducer(createConversationState('c1'), {
+      type: 'snapshot', eventSeq: 5,
+      payload: { conversation_state: 'waiting', can_resume: true },
+    });
+    expect(state.canResume).toBe(true);
+    state = conversationReducer(state, {
+      type: 'snapshot', eventSeq: 6,
+      payload: { conversation_state: 'thinking', can_resume: false },
+    });
+    state = conversationReducer(state, {
+      type: 'snapshot', eventSeq: 5,
+      payload: { conversation_state: 'waiting', can_resume: true },
+    });
+    expect(state.canResume).toBe(false);
+    expect(state.runtimeState).toBe('thinking');
+  });
   it('projects and explicitly clears the focused assistant stream', () => {
     let state = conversationReducer(createConversationState('c1'), {
       type: 'snapshot',

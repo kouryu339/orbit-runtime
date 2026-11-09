@@ -185,6 +185,9 @@ through Resources, LLM, and Agent Cluster registrations.
 | `conversation.send_message` | `conversation_id`, `content` | admission |
 | `conversation.set_model` | `conversation_id`, `model_uid:uint32` | admission |
 | `conversation.pause` | `conversation_id` | admission |
+| `conversation.set_read_access` | `conversation_id`, `grants:[{root_id,subpath}]` | Atomically replace Grep/GrepJson grants within the cluster's `grep_root_ids` ceiling. Resource config `grep.require_conversation_grants:true` enables strict default deny. |
+| `conversation.revoke_read_access` | `conversation_id` | Revoke all host API read grants. Subsequent reads cannot fall back to global roots. |
+| `conversation.resume` | `conversation_id` | admission. Resumes the explicitly paused focus Agent with its existing context. Rejects with `not_paused` while idle, running or stopping, and `compact_in_progress` during compaction. No user message is appended. Snapshots expose `can_resume`. |
 | `conversation.close` | `conversation_id` | `{}` |
 | `conversation.export_snapshot` | `conversation_id`, `options?` | snapshot |
 | `conversation.agent_tasks` | `conversation_id` | task-board document |

@@ -86,7 +86,22 @@ export class WorkerConversationTransport implements ConversationTransport {
     const result = await this.runtime.invoke("conversation.pause", {
       conversation_id: request.conversationId,
     });
-    return { accepted: result.accepted === true };
+    return {
+      accepted: result.accepted === true || result.decision === 'accepted',
+      commandId: result.command_id,
+      rejectReason: result.reason ?? result.reject_reason,
+    };
+  }
+  async resume(request: ConversationCommandRequest) {
+    request.signal?.throwIfAborted();
+    const result = await this.runtime.invoke('conversation.resume', {
+      conversation_id: request.conversationId,
+    });
+    return {
+      accepted: result.decision === 'accepted',
+      commandId: result.command_id,
+      rejectReason: result.reason ?? result.reject_reason,
+    };
   }
   async close(request: ConversationCommandRequest) {
     request.signal?.throwIfAborted();

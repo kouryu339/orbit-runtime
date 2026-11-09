@@ -1,8 +1,10 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { sharedConversationAlias } from './shared-conversation-alias';
 
 export default defineConfig({
   plugins: [svelte()],
+  resolve: { alias: sharedConversationAlias },
   clearScreen: false,
   server: {
     host: '127.0.0.1',

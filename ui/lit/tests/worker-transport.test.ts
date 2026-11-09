@@ -48,7 +48,7 @@ describe("Worker transport shared by Lit and Svelte", () => {
     connection.disconnect();
     expect(unsubscribed).toBe(true);
   });
-  it("uses admission results and does not offer unsupported resume or image input", async () => {
+  it("uses admission results for send, pause and resume without synthesizing messages", async () => {
     const calls: any[] = [];
     const transport = new WorkerConversationTransport({
       subscribe: () => () => {},
@@ -69,7 +69,23 @@ describe("Worker transport shared by Lit and Svelte", () => {
       { conversation_id: "a", content: "hello" },
       { commandId: "m" },
     ]);
-    expect((transport as any).resume).toBeUndefined();
+    expect(await transport.pause({ conversationId: 'a' })).toMatchObject({ accepted: true });
+    expect(await transport.resume({ conversationId: 'a' })).toMatchObject({ accepted: true });
+    expect(calls.slice(1)).toEqual([
+      ['conversation.pause', { conversation_id: 'a' }],
+      ['conversation.resume', { conversation_id: 'a' }],
+    ]);
     expect((transport as any).imageInput).toBeUndefined();
+  });
+  it('returns Runtime rejection instead of treating an unavailable resume as accepted', async () => {
+    const transport = new WorkerConversationTransport({
+      subscribe: () => () => {},
+      async invoke<T>(): Promise<T> {
+        return { command_id: 'c', decision: 'rejected', reason: 'not_paused' } as T;
+      },
+    });
+    expect(await transport.resume({ conversationId: 'a' })).toEqual({
+      accepted: false, commandId: 'c', rejectReason: 'not_paused',
+    });
   });
 });

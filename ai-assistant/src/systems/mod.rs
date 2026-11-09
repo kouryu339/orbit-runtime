@@ -7,6 +7,8 @@
 pub mod agent_route;
 pub mod agent_wake;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod file_decode;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod grep;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod grep_json;

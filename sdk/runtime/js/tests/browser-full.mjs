@@ -70,6 +70,7 @@ export async function run() {
   let hostCalls = 0,
     slow = false,
     cancelled = false;
+  let releaseSlowTool;
   const host = async (operation, payload, { signal }) => {
     if (operation === "rpc.list_tools")
       return { schema: "corework-agent-tool/v1", tools: [metadata] };
@@ -77,6 +78,7 @@ export async function run() {
       hostCalls++;
       if (slow)
         await new Promise((resolve, reject) => {
+          releaseSlowTool = resolve;
           signal.addEventListener(
             "abort",
             () => {
@@ -262,6 +264,30 @@ export async function run() {
       conversation_id: permission.conversation_id,
     });
     checks.push("tool approval round trip");
+    slow = true;
+    const resumable = await runtime.invoke("conversation.spawn", { cluster_id: "web-team" });
+    const beforeResume = hostCalls;
+    await runtime.invoke("conversation.send_message", {
+      conversation_id: resumable.conversation_id, content: "Pause and continue this task",
+    });
+    await until(async () => hostCalls, value => value > beforeResume);
+    await runtime.invoke("conversation.pause", { conversation_id: resumable.conversation_id });
+    releaseSlowTool();
+    await until(
+      () => runtime.invoke("conversation.materialize", { conversation_id: resumable.conversation_id }),
+      () => snapshot?.conversation_id === resumable.conversation_id && snapshot.can_resume === true,
+    );
+    slow = false;
+    const continued = await runtime.invoke("conversation.resume", { conversation_id: resumable.conversation_id });
+    check(continued.decision === "accepted", "resume admission");
+    const completedResume = await until(
+      () => runtime.invoke("conversation.materialize", { conversation_id: resumable.conversation_id }),
+      value => value.ledger.some(record => String(record.content).includes("Browser agent finished.")),
+    );
+    check(completedResume.ledger.filter(record => record.role === "user").length === 1, "resume kept original user request");
+    check(hostCalls === beforeResume + 1, "resume did not repeat the completed tool");
+    await runtime.invoke("conversation.close", { conversation_id: resumable.conversation_id });
+    checks.push("pause/resume preserves context and completed tool results");
     const count = hostCalls;
     slow = true;
     const second = await runtime.invoke("conversation.spawn", {

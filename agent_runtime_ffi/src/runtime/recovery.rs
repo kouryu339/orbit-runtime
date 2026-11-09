@@ -11,6 +11,7 @@ use super::*;
 pub(super) struct RestoredConversationRecovery {
     pub(super) entry_states: Vec<(String, String)>,
     pub(super) execution_plans: Vec<RestoredExecutionPlan>,
+    pub(super) paused_agents: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,7 @@ pub(super) struct RestoredExecutionPlan {
     pub(super) call_ids: Vec<String>,
     pub(super) recovery_results: BTreeMap<String, ai_assistant::ToolResult>,
     pub(super) tool_call_refs: Vec<ai_assistant::context::ToolCallRef>,
+    pub(super) started_calls: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,7 @@ struct OpenToolCall {
     source: OpenToolCallSource,
     native_fc: bool,
     structured_tool: Option<ai_assistant::decision_line::ParsedToolCall>,
+    order: (u64, usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +52,7 @@ pub(super) fn restored_conversation_recovery(
         return RestoredConversationRecovery {
             entry_states: Vec::new(),
             execution_plans,
+            paused_agents: Vec::new(),
         };
     }
 
@@ -56,6 +60,7 @@ pub(super) fn restored_conversation_recovery(
     RestoredConversationRecovery {
         entry_states,
         execution_plans,
+        paused_agents: Vec::new(),
     }
 }
 
@@ -123,6 +128,7 @@ pub(super) fn restored_execution_plans(
                     call_ids,
                     recovery_results: BTreeMap::new(),
                     tool_call_refs: Vec::new(),
+                    started_calls: Default::default(),
                 }];
             }
         }
@@ -135,7 +141,9 @@ fn execution_plans_from_open_calls(
     open_calls: BTreeMap<String, OpenToolCall>,
 ) -> Vec<RestoredExecutionPlan> {
     let mut grouped = BTreeMap::<String, RestoredExecutionPlan>::new();
-    for open_call in open_calls.into_values() {
+    let mut ordered = open_calls.into_values().collect::<Vec<_>>();
+    ordered.sort_by_key(|call| call.order);
+    for open_call in ordered {
         let Some(command) = open_call.tool_command.clone() else {
             continue;
         };
@@ -148,12 +156,16 @@ fn execution_plans_from_open_calls(
                 call_ids: Vec::new(),
                 recovery_results: BTreeMap::new(),
                 tool_call_refs: Vec::new(),
+                started_calls: Default::default(),
             });
         entry.tools.push(command.clone());
         if let Some(structured_tool) = open_call.structured_tool.clone() {
             entry.structured_tools.push(structured_tool);
         }
         entry.call_ids.push(open_call.call_id.clone());
+        if open_call.source == OpenToolCallSource::Started {
+            entry.started_calls.insert(open_call.call_id.clone());
+        }
         if open_call.native_fc {
             if let Some(name) = open_call.tool_name.clone() {
                 entry
@@ -255,7 +267,7 @@ fn remember_assistant_declared_tool_calls(
         .and_then(|value| serde_json::from_value::<Vec<llm_gateway::ToolCall>>(value).ok())
         .filter(|calls| !calls.is_empty())
     {
-        for call in tool_calls {
+        for (index, call) in tool_calls.into_iter().enumerate() {
             let structured_tool = native_tool_call(&call);
             let command = structured_tool
                 .as_ref()
@@ -269,6 +281,7 @@ fn remember_assistant_declared_tool_calls(
                 source: OpenToolCallSource::AssistantDeclared,
                 native_fc: true,
                 structured_tool,
+                order: (record.record_id, index),
             });
         }
         return;
@@ -311,6 +324,7 @@ fn remember_assistant_declared_tool_calls(
                     .and_then(Value::as_str)
                     == Some("native_fc"),
                 structured_tool: None,
+                order: (record.record_id, index),
             });
     }
 }
@@ -394,6 +408,10 @@ fn update_open_tool_calls(
                 source: OpenToolCallSource::Started,
                 native_fc,
                 structured_tool,
+                order: previous
+                    .as_ref()
+                    .map(|call| call.order)
+                    .unwrap_or((record.record_id, 0)),
             },
         );
     }
@@ -507,6 +525,10 @@ pub(super) struct ConversationSnapshotImport {
         Option<super::agent_cluster_operations::ClusterDefinitionVersion>,
     #[serde(default)]
     pub(super) skill_versions: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub(super) skill_bindings: BTreeMap<String, super::skill_recovery::SnapshotSkillBindings>,
+    #[serde(default)]
+    pub(super) paused_agents: Vec<String>,
     #[serde(default)]
     pub(super) ledger: Vec<ai_assistant::ledger::LedgerRecord>,
     /// Protocol is conversation history, not a current registry default. A
@@ -686,47 +708,8 @@ pub(super) async fn apply_conversation_state_delta(
                 }
             }
         }
-        "agent_skills.set" => {
-            let Some(agent_id) = delta
-                .get("agent_id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-            else {
-                return Ok(());
-            };
-            let cache = match manager.agent_cache(conversation_id, agent_id).await {
-                Ok(cache) => cache,
-                Err(error) => {
-                    tracing::warn!(
-                        "skip restored agent_skills.set for unavailable agent '{}': {}",
-                        agent_id,
-                        error
-                    );
-                    return Ok(());
-                }
-            };
-            if let Some(main_skills) = string_array_field(&delta, "main_skills") {
-                cache
-                    .set(ai_assistant::context::keys::MAIN_SKILLS, &main_skills, None)
-                    .await
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            }
-            if let Some(imported_skills) = string_array_field(&delta, "imported_skills") {
-                cache
-                    .set(
-                        ai_assistant::context::keys::IMPORTED_SKILLS,
-                        &imported_skills,
-                        None,
-                    )
-                    .await
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            }
-            if let Some(active_tools) = string_array_field(&delta, "active_tools") {
-                AssistantContext::set_active_tools(&cache, active_tools)
-                    .await
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            }
-        }
+        // Names are reconciled by skill_recovery; old tool lists are never authority.
+        "agent_skills.set" => {}
         "agent_plan.set" => {
             let Some(agent_id) = delta
                 .get("agent_id")
@@ -777,16 +760,6 @@ pub(super) async fn apply_conversation_state_delta(
         _ => {}
     }
     Ok(())
-}
-
-fn string_array_field(value: &Value, field: &str) -> Option<Vec<String>> {
-    value.get(field).and_then(Value::as_array).map(|items| {
-        items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect()
-    })
 }
 
 impl RuntimeFacade {
@@ -864,6 +837,38 @@ impl RuntimeFacade {
                 .cluster_snapshot(&conversation_id)
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+            let mut skill_bindings = BTreeMap::new();
+            let mut paused_agents = Vec::new();
+            for agent in &cluster.agents {
+                let cache = manager
+                    .agent_cache(&conversation_id, &agent.agent_id)
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                skill_bindings.insert(
+                    agent.agent_id.clone(),
+                    super::skill_recovery::SnapshotSkillBindings {
+                        main_skills: cache
+                            .get(ai_assistant::context::keys::MAIN_SKILLS)
+                            .await
+                            .map_err(|e| RuntimeError::Internal(e.to_string()))?
+                            .unwrap_or_default(),
+                        imported_skills: cache
+                            .get(ai_assistant::context::keys::IMPORTED_SKILLS)
+                            .await
+                            .map_err(|e| RuntimeError::Internal(e.to_string()))?
+                            .unwrap_or_default(),
+                    },
+                );
+                if cache
+                    .get::<String>(ai_assistant::context::keys::TASK_STATUS)
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?
+                    .as_deref()
+                    == Some("paused")
+                {
+                    paused_agents.push(agent.agent_id.clone());
+                }
+            }
             let tool_protocols = manager
                 .agent_tool_protocols(&conversation_id)
                 .await
@@ -904,6 +909,8 @@ impl RuntimeFacade {
                 "tool_protocols": tool_protocols,
                 "cluster_definition": cluster_definition,
                 "skill_versions": skill_versions,
+                "skill_bindings": skill_bindings,
+                "paused_agents": paused_agents,
                 "tasks": tasks,
                 "exported_at_unix_ms": std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -943,14 +950,15 @@ impl RuntimeFacade {
             "options.conversation_id",
         )?;
         let mut snapshot = parse_conversation_snapshot(snapshot_json)?;
+        self.rt
+            .block_on(
+                self.manager()?
+                    .ensure_recovery_idle(&target_conversation_id),
+            )
+            .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))?;
         let _skill_admission = self
             .rt
             .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.read());
-        let cluster_id = self
-            .conversation_instances
-            .get(&target_conversation_id)
-            .map(|metadata| metadata.cluster_id.as_str());
-        self.check_snapshot_skill_versions(cluster_id, snapshot.skill_versions.as_ref())?;
         if let Some(metadata) = self.conversation_instances.get(&target_conversation_id) {
             if self
                 .registries
@@ -981,8 +989,26 @@ impl RuntimeFacade {
         let tool_protocols = snapshot.tool_protocols.clone();
         let state_deltas = snapshot_state_deltas(&snapshot);
         self.apply_conversation_tool_protocols(&target_conversation_id, tool_protocols.as_ref())?;
-        let recovery =
+        let skills = self.prepare_recovered_skills(&target_conversation_id, &snapshot)?;
+        self.apply_recovered_skills(&target_conversation_id, skills)?;
+        let paused_agents = snapshot.paused_agents.clone();
+        let mut recovery =
             self.replace_conversation_ledger(&target_conversation_id, snapshot.ledger)?;
+        recovery.paused_agents = paused_agents;
+        if self.registries.resources.is_some() {
+            let manager = self.manager()?;
+            let grep = self
+                .rt
+                .block_on(manager.grep_service(&target_conversation_id))
+                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            grep.invalidate_restored_read_access()
+                .map_err(RuntimeError::Internal)?;
+            self.append_conversation_log(
+                &target_conversation_id,
+                "read_access_invalidated_on_restore",
+                json!({}),
+            );
+        }
         self.apply_conversation_state_deltas(&target_conversation_id, state_deltas)?;
         drop(_skill_admission);
         self.apply_conversation_recovery(&target_conversation_id, recovery)
@@ -1015,9 +1041,8 @@ impl RuntimeFacade {
             non_empty_arg(target_conversation_id, "target_conversation_id")?;
         self.require_conversation_owner(&target_conversation_id)?;
         records.sort_by_key(|record| record.record_id);
-        for (index, record) in records.iter_mut().enumerate() {
+        for record in &mut records {
             record.conversation_id = target_conversation_id.clone();
-            record.record_id = index as u64 + 1;
         }
         let recovery = restored_conversation_recovery(&records);
         self.rt.block_on(async move {
@@ -1060,19 +1085,48 @@ impl RuntimeFacade {
         target_conversation_id: &str,
         recovery: RestoredConversationRecovery,
     ) -> Result<(), RuntimeError> {
-        if recovery.entry_states.is_empty() && recovery.execution_plans.is_empty() {
-            return Ok(());
-        }
         let manager = self.manager()?;
         let target_conversation_id =
             non_empty_arg(target_conversation_id, "target_conversation_id")?;
         self.require_conversation_owner(&target_conversation_id)?;
+        let mut recovery = recovery;
+        self.revalidate_recovered_calls(&target_conversation_id, &mut recovery)?;
         self.rt.block_on(async move {
             for (agent_id, state) in recovery.entry_states {
                 manager
                     .restore_agent_state_entry(&target_conversation_id, &agent_id, &state)
                     .await
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+            }
+            for agent_id in &recovery.paused_agents {
+                manager
+                    .restore_agent_state_entry(
+                        &target_conversation_id,
+                        agent_id,
+                        ai_assistant::state::states::SUSPENDED,
+                    )
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                let cache = manager
+                    .agent_cache(&target_conversation_id, agent_id)
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                cache
+                    .set(
+                        ai_assistant::context::keys::TASK_STATUS,
+                        &"paused".to_string(),
+                        None,
+                    )
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                cache
+                    .set(
+                        ai_assistant::context::keys::LAST_STOP_REASON,
+                        &"pause".to_string(),
+                        None,
+                    )
+                    .await
+                    .map_err(|e| RuntimeError::Internal(e.to_string()))?;
             }
             for plan in recovery.execution_plans {
                 manager
@@ -1084,6 +1138,7 @@ impl RuntimeFacade {
                         plan.call_ids,
                         plan.recovery_results,
                         plan.tool_call_refs,
+                        recovery.paused_agents.contains(&plan.agent_id),
                     )
                     .await
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;

@@ -92,6 +92,32 @@ describe('composer state machine', () => {
     expect(error).toHaveBeenCalledWith('unavailable');
     expect(machine.canPause).toBe(true);
   });
+  it('restores continue from Runtime state and ignores a paused snapshot while resume is pending', async () => {
+    const { machine, transport, update } = fixture();
+    update({ canResume: true });
+    expect(machine.phase).toBe('paused');
+    expect(machine.canResume).toBe(true);
+    await machine.command('resume');
+    update({ canResume: true });
+    expect(machine.phase).toBe('resuming');
+    expect(machine.canResume).toBe(false);
+    expect((await machine.command('resume')).accepted).toBe(false);
+    expect(transport.resume).toHaveBeenCalledOnce();
+    update({ canResume: false });
+    expect(machine.phase).toBe('ready');
+    expect(machine.canCompose).toBe(true);
+  });
+  it('keeps a rejected resume retryable and follows the authoritative Runtime pause flag', async () => {
+    const { machine, transport, update } = fixture();
+    update({ canResume: true });
+    transport.resume.mockResolvedValueOnce({ accepted: false });
+    expect((await machine.command('resume')).accepted).toBe(false);
+    expect(machine.canResume).toBe(true);
+    machine.paused = true;
+    update({ canResume: false });
+    expect(machine.phase).toBe('ready');
+    expect(machine.canResume).toBe(false);
+  });
   it('keeps waiting approvals out of send and never resolves them implicitly', () => {
     const { machine, transport, update } = fixture();
     update({

@@ -1,17 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
-import { fileURLToPath } from 'node:url';
+import { sharedConversationAlias } from './shared-conversation-alias';
 
 export default defineConfig({
   plugins: [svelte()],
   resolve: {
     conditions: ['browser'],
-    alias: Object.fromEntries(
-      ['host', 'protocol', 'content', 'transport'].map((name) => [
-        `@agent-runtime/conversation-element/${name}`,
-        fileURLToPath(new URL(`../lit/src/${name}/index.ts`, import.meta.url)),
-      ]),
-    ),
+    alias: sharedConversationAlias,
   },
   test: {
     environment: 'jsdom',

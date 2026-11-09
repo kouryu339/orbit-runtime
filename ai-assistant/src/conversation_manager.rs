@@ -184,6 +184,21 @@ impl ConversationManager {
             .collect()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn grep_service(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Arc<crate::systems::grep::GrepService>> {
+        let runtime = self.require_runtime(conversation_id).await?;
+        runtime
+            .conversation
+            .ledger()
+            .resolve_shared_component::<crate::systems::grep::GrepService>()
+            .ok_or_else(|| {
+                crate::Error::Other(anyhow::anyhow!("Grep resources are not registered"))
+            })
+    }
+
     pub async fn close(&self, conversation_id: &str) -> Result<bool> {
         let runtime = self.get(conversation_id).await;
         let Some(runtime) = runtime else {
@@ -267,6 +282,17 @@ impl ConversationManager {
         self.require_runtime(conversation_id)
             .await?
             .request_pause()
+            .await
+    }
+
+    pub async fn request_resume_with_admission(
+        &self,
+        conversation_id: &str,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        self.require_runtime(conversation_id)
+            .await?
+            .request_resume_with_admission(command_id)
             .await
     }
 
@@ -390,12 +416,61 @@ impl ConversationManager {
     ) -> Result<()> {
         let runtime = self.require_runtime(conversation_id).await?;
         let _guard = runtime.lock_command().await?;
+        runtime
+            .conversation
+            .cluster()
+            .ensure_recovery_idle()
+            .await?;
         runtime.conversation.state().replace(records).await;
         runtime
             .conversation
             .gateway()
             .publish_ledger_snapshot()
             .await;
+        Ok(())
+    }
+
+    pub async fn ensure_recovery_idle(&self, conversation_id: &str) -> Result<()> {
+        let runtime = self.require_runtime(conversation_id).await?;
+        runtime.conversation.cluster().ensure_recovery_idle().await
+    }
+
+    /// Drop request projections and live approvals, never the persisted ledger.
+    /// Skill references and tools are then rebuilt from the current host catalog.
+    pub async fn clear_recovery_caches(&self, conversation_id: &str) -> Result<()> {
+        let runtime = self.require_runtime(conversation_id).await?;
+        let _guard = runtime.lock_command().await?;
+        let cluster = runtime.conversation.cluster();
+        cluster.ensure_recovery_idle().await?;
+        for id in cluster.list_agent_ids().await {
+            let Some(agent) = cluster.get(&id).await else {
+                continue;
+            };
+            let cache = agent.sm.unit().cache();
+            if let Ok(broker) = agent
+                .sm
+                .unit()
+                .create_context()
+                .resolve_shared_component::<crate::permission::PermissionBroker>()
+            {
+                broker.cancel_all().await;
+            }
+            crate::persistence::clear_recovery_transient_keys(&cache).await?;
+            for key in [
+                crate::context::keys::CONVERSATION,
+                crate::context::keys::COMPACT_CONVERSATION,
+                crate::context::keys::IMPORTED_SKILLS,
+                crate::context::keys::ACTIVE_TOOLS,
+                crate::context::keys::PENDING_TOOL_CALL_IDS,
+                crate::context::keys::RECORDER_SAVED_SKILLS,
+                crate::context::keys::RECORDER_SAVED_TOOLS,
+                crate::context::keys::TASK_STATUS,
+                crate::context::keys::LAST_STOP_REASON,
+                "recovery_execution_pending",
+            ] {
+                cache.delete(key).await?;
+            }
+        }
         Ok(())
     }
 
@@ -577,6 +652,7 @@ impl ConversationManager {
         call_ids: Vec<String>,
         recovery_results: BTreeMap<String, crate::decision::ToolResult>,
         tool_call_refs: Vec<crate::context::ToolCallRef>,
+        paused: bool,
     ) -> Result<()> {
         let runtime = self.require_runtime(conversation_id).await?;
         let _guard = runtime.lock_command().await?;
@@ -640,16 +716,70 @@ impl ConversationManager {
         cache
             .set(
                 crate::context::keys::TASK_STATUS,
-                &"running".to_string(),
+                &if paused { "paused" } else { "running" }.to_string(),
                 None,
             )
             .await?;
+        cache.set("recovery_execution_pending", &true, None).await?;
         agent
             .sm
-            .recover_enter_state(crate::state::states::EXECUTING)
+            .force_state(crate::state::states::SUSPENDED)
             .await
             .map_err(|error| crate::Error::StateMachine(error.to_string()))?;
+        if !paused && call_ids.iter().all(|id| recovery_results.contains_key(id)) {
+            cache.delete("recovery_execution_pending").await?;
+            agent
+                .sm
+                .recover_enter_state(crate::state::states::EXECUTING)
+                .await?;
+            // Synthetic terminal results require no driver. Park visibly instead
+            // of leaving an EXECUTING state with nobody driving it.
+            agent
+                .sm
+                .force_state(crate::state::states::SUSPENDED)
+                .await
+                .map_err(|error| crate::Error::StateMachine(error.to_string()))?;
+            cache
+                .set(
+                    crate::context::keys::TASK_STATUS,
+                    &"paused".to_string(),
+                    None,
+                )
+                .await?;
+            cache
+                .set(
+                    crate::context::keys::LAST_STOP_REASON,
+                    &"pause".to_string(),
+                    None,
+                )
+                .await?;
+        } else if !paused {
+            runtime
+                .conversation
+                .cluster()
+                .schedule_agent_driver(agent, true)
+                .await?;
+        }
         Ok(())
+    }
+
+    pub async fn tool_permission_policy(
+        &self,
+        conversation_id: &str,
+    ) -> Result<crate::ToolPermissionPolicy> {
+        let runtime = self.require_runtime(conversation_id).await?;
+        let cache = runtime
+            .conversation
+            .cluster()
+            .active_agent()
+            .await?
+            .sm
+            .unit()
+            .create_context();
+        Ok(cache
+            .resolve_shared_component::<crate::permission::PermissionBroker>()?
+            .policy()
+            .clone())
     }
 
     pub async fn restore_agent_state_entry(
@@ -801,6 +931,19 @@ impl ConversationRuntime {
     pub async fn request_pause(&self) -> Result<()> {
         self.command_gate.ensure_open(&self.id)?;
         self.conversation.request_pause().await
+    }
+
+    pub async fn request_resume_with_admission(
+        &self,
+        command_id: Option<String>,
+    ) -> Result<crate::gateway::AdmissionResult> {
+        let _guard = self.lock_command().await?;
+        llm_gateway::request_context::scope_request_headers(
+            self.effective_llm_request_headers(),
+            self.allow_insecure_llm_request_headers,
+            self.conversation.request_resume_with_admission(command_id),
+        )
+        .await
     }
 
     pub async fn resolve_tool_permission(

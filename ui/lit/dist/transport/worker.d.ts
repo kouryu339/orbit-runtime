@@ -21,6 +21,13 @@ export declare class WorkerConversationTransport implements ConversationTranspor
     }>;
     pause(request: ConversationCommandRequest): Promise<{
         accepted: boolean;
+        commandId: any;
+        rejectReason: any;
+    }>;
+    resume(request: ConversationCommandRequest): Promise<{
+        accepted: boolean;
+        commandId: any;
+        rejectReason: any;
     }>;
     close(request: ConversationCommandRequest): Promise<{
         accepted: boolean;

@@ -80,10 +80,12 @@ export function createDisplayItems(
           pending.state === 'failed'
             ? `${pending.content}\n${pending.error ?? ''}`
             : pending.content,
-        metadata: pending.parts
+        metadata: pending.parts || pending.fileDisplay
           ? {
+              ...(pending.fileDisplay ? { display_content: pending.fileDisplay.text } : {}),
               extra: {
                 parts: pending.parts,
+                file_attachments: pending.fileDisplay?.attachments,
                 pending_error:
                   pending.state === 'failed'
                     ? (pending.error ?? 'Message rejected.')

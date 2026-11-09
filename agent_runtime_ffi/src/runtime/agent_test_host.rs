@@ -191,6 +191,7 @@ impl AgentTestRuntimeHost {
             }],
             max_thinking_rounds: 0,
             permissions: ai_assistant::ToolPermissionPolicy::default(),
+            grep_root_ids: None,
         };
         self.create_cluster_conversation(spec, &cluster, &agent.id)
             .await

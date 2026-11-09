@@ -50,6 +50,7 @@ const COMMANDS: &[&str] = &[
     "conversation.spawn",
     "conversation.send_message",
     "conversation.pause",
+    "conversation.resume",
     "conversation.close",
     "conversation.materialize",
     "conversation.resolve_tool_permission",
@@ -534,6 +535,23 @@ impl Runtime {
                     .await
                     .map_err(err)?;
                 Ok(json!({"accepted":true}))
+            }
+            "conversation.resume" => {
+                let admission = self
+                    .manager()?
+                    .request_resume_with_admission(
+                        required(p, "conversation_id")?,
+                        Some(command_id.into()),
+                    )
+                    .await
+                    .map_err(err)?;
+                let (decision, reason) = match admission.decision {
+                    ai_assistant::admission::Decision::Accepted { .. } => ("accepted", None),
+                    ai_assistant::admission::Decision::Rejected { reason } => {
+                        ("rejected", Some(reason))
+                    }
+                };
+                Ok(json!({"command_id":admission.command_id,"decision":decision,"reason":reason}))
             }
             "conversation.close" => {
                 let id = required(p, "conversation_id")?;

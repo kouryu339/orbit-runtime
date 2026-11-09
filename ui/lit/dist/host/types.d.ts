@@ -111,6 +111,16 @@ export type ImportImageRequest = ConversationCommandRequest & {
 export type ImportedImage = {
     imageId: string;
 };
+/** Opt-in resource files accepted by a host when the composer mounts. */
+export type ConversationFileInput = {
+    /** File picker accept tokens, for example ['.pdf', '.docx', 'text/plain']. */
+    accept: readonly string[];
+    importFile(request: ConversationCommandRequest & {
+        file: File;
+    }): Promise<{
+        resourceId: string;
+    }>;
+};
 export type SendResult = {
     accepted: boolean;
     commandId?: string;
@@ -217,6 +227,15 @@ export type ConversationComposerSettings = {
 };
 export type ComposerSettingsRequest = ConversationCommandRequest & {
     modelUid?: number;
+};
+/** An optional host action in the composer Add menu. IDs must be unique. */
+export type ConversationComposerAction = {
+    id: string;
+    label: string;
+    disabled?: boolean;
+    run(request: {
+        conversationId: string;
+    }): void | Promise<void>;
 };
 /** Per-conversation settings. Implementations must not rewrite shared model definitions. */
 export interface ConversationComposerController {
@@ -435,6 +454,7 @@ export interface AgentRuntimeConversationPublicApi {
     persistence: ConversationPersistencePolicy;
     providerControls: ConversationProviderControlsPolicy;
     composerController?: ConversationComposerController | null;
+    composerActions?: readonly ConversationComposerAction[];
     readonly state: ConversationState;
     connect(): Promise<void>;
     disconnect(): void;

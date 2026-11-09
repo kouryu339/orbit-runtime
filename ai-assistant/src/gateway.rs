@@ -710,6 +710,81 @@ impl AgentGateway {
         Ok(admission)
     }
 
+    pub async fn request_resume_with_admission(
+        &self,
+        command_id: Option<String>,
+    ) -> crate::Result<AdmissionResult> {
+        use crate::admission::{Command, Decision, RejectReason};
+        use crate::context::keys;
+
+        let agent = self.cluster.active_agent().await?;
+        let _dispatch = agent.lock_dispatch().await;
+        let current_state = agent.sm.current_state();
+        let cache = agent.sm.unit().cache();
+        let status: Option<String> = cache.get(keys::TASK_STATUS).await?;
+        let stopping: bool = cache.get(keys::PAUSE_REQUESTED).await?.unwrap_or(false);
+        let compacting: bool = cache.get(keys::COMPACT_IN_PROGRESS).await?.unwrap_or(false);
+        let decision = if compacting {
+            Decision::Rejected {
+                reason: RejectReason::CompactInProgress,
+            }
+        } else if current_state != crate::state::states::SUSPENDED
+            || status.as_deref() != Some("paused")
+            || stopping
+        {
+            Decision::Rejected {
+                reason: RejectReason::NotPaused,
+            }
+        } else {
+            Decision::Accepted {
+                inserted_during_state: None,
+            }
+        };
+        let command_id = command_id.unwrap_or_else(next_command_id);
+        self.publish_command_admitted(
+            &Command::Resume,
+            &decision,
+            &agent.id,
+            &current_state,
+            &command_id,
+        )
+        .await;
+        if decision.is_accepted() {
+            let stop_reason: Option<String> = cache.get(keys::LAST_STOP_REASON).await?;
+            let next_after_saying: Option<String> =
+                cache.get(keys::NEXT_STATE_AFTER_SAYING).await?;
+            cache
+                .set(keys::TASK_STATUS, &"running".to_string(), None)
+                .await?;
+            cache.delete(keys::LAST_STOP_REASON).await?;
+            cache.delete(keys::NEXT_STATE_AFTER_SAYING).await?;
+            // drive(None) transitions from suspended without appending a message.
+            // A paused driver's final snapshot can arrive before its task exits.
+            if let Err(error) = self
+                .cluster
+                .schedule_agent_driver(Arc::clone(&agent), true)
+                .await
+            {
+                cache
+                    .set(keys::TASK_STATUS, &"paused".to_string(), None)
+                    .await?;
+                if let Some(reason) = stop_reason {
+                    cache.set(keys::LAST_STOP_REASON, &reason, None).await?;
+                }
+                if let Some(next) = next_after_saying {
+                    cache
+                        .set(keys::NEXT_STATE_AFTER_SAYING, &next, None)
+                        .await?;
+                }
+                return Err(error);
+            }
+        }
+        Ok(AdmissionResult {
+            command_id,
+            decision,
+        })
+    }
+
     pub async fn compact_history(
         &self,
         agent_ids: Vec<String>,

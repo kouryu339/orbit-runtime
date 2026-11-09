@@ -29,6 +29,7 @@ impl Fixture {
                 GrepConfig {
                     roots: vec![GrepRoot {
                         id: "project".into(),
+                        conversation_grants: None,
                         path: self.0.clone(),
                     }],
                     max_file_bytes,

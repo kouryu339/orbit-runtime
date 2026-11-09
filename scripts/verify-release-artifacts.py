@@ -46,9 +46,13 @@ def main() -> None:
     manifest = json.loads((repo / "sdk/runtime/release_manifest.json").read_text(encoding="utf-8-sig"))
     if not local_preview:
         assert manifest["runtime_version"] == version and manifest["release_tag"] == f"v{version}"
+    native_packages = 0
     for platform, library in (("windows-x86_64", "bin/agent_runtime.dll"), ("linux-x86_64", "lib/libagent_runtime.so")):
         name = f"{prefix}-runtime-v{version}-{platform}"
+        if local_preview and not (output / f"{name}.zip").exists():
+            continue
         files = archive(name)
+        native_packages += 1
         assert not any(key.startswith("sdk/") for key in files), "SDK pins must be outside native archives"
         assert files[library] == (repo / "dist/runtime" / Path(library).name).read_bytes()
         assert files["include/agent_runtime.h"] == (repo / "agent_runtime_ffi/include/agent_runtime.h").read_bytes()
@@ -80,6 +84,7 @@ def main() -> None:
             assert asset["archive"] == f"{name}.zip"
             assert asset["sha256"] == report[f"{name}.zip"]["sha256"]
 
+    assert native_packages > 0, "no native package found"
     name = f"{prefix}-frontend-svelte-v{version}"
     files = archive(name)
     assert set(files) == {"orbit-conversation-svelte.js", "THIRD_PARTY_NOTICES.txt", "LICENSE", "NOTICE", "README.md", "manifest.json"}

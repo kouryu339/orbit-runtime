@@ -429,6 +429,16 @@ impl AgentCluster {
         self.drivers.lock().await.running_agents.contains(agent_id)
     }
 
+    /// Recovery may replace history only after every driver has stopped.
+    pub(crate) async fn ensure_recovery_idle(&self) -> crate::Result<()> {
+        if !self.drivers.lock().await.running_agents.is_empty() {
+            return Err(crate::Error::Other(anyhow::anyhow!(
+                "conversation_recovery_busy: pause the conversation and wait for its drivers to stop before importing history"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn shutdown(&self) {
         let tasks = {
             let mut drivers = self.drivers.lock().await;

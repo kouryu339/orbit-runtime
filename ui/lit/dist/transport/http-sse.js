@@ -290,12 +290,14 @@ function commandResult(value) {
     const record = asRecord(value);
     const decision = asRecord(record?.decision);
     const rejected = record?.accepted === false ||
+        record?.decision === 'rejected' ||
         decision?.decision === 'rejected' ||
         typeof record?.reject_reason === 'string';
     return {
         accepted: !rejected,
         commandId: stringValue(record?.command_id),
         rejectReason: stringValue(record?.reject_reason) ??
+            stringValue(record?.reason) ??
             stringValue(decision?.reason),
         metadata: record ?? undefined,
     };

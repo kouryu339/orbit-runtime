@@ -281,26 +281,10 @@ impl RuntimeFacade {
             &request.cluster_id,
             snapshot.cluster_definition.as_ref(),
         )?;
-        {
-            let _admission = self
-                .rt
-                .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.read());
-            self.check_snapshot_skill_versions(
-                Some(&request.cluster_id),
-                snapshot.skill_versions.as_ref(),
-            )?;
-        }
         let info = self.spawn_conversation(spawn_json)?;
         let _skill_admission = self
             .rt
             .block_on(ai_assistant::skills::usage::SKILL_UPDATE_GATE.read());
-        if let Err(error) = self.check_snapshot_skill_versions(
-            Some(&request.cluster_id),
-            snapshot.skill_versions.as_ref(),
-        ) {
-            let _ = self.close_conversation(&info.conversation_id);
-            return Err(error);
-        }
         if let Err(error) =
             self.normalize_snapshot_images(&info.conversation_id, &mut snapshot.ledger)
         {
@@ -315,7 +299,19 @@ impl RuntimeFacade {
             let _ = self.close_conversation(&info.conversation_id);
             return Err(error);
         }
-        let recovery =
+        let skills = match self.prepare_recovered_skills(&info.conversation_id, &snapshot) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let _ = self.close_conversation(&info.conversation_id);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.apply_recovered_skills(&info.conversation_id, skills) {
+            let _ = self.close_conversation(&info.conversation_id);
+            return Err(error);
+        }
+        let paused_agents = snapshot.paused_agents.clone();
+        let mut recovery =
             match self.replace_conversation_ledger(&info.conversation_id, snapshot.ledger) {
                 Ok(recovery) => recovery,
                 Err(error) => {
@@ -323,6 +319,7 @@ impl RuntimeFacade {
                     return Err(error);
                 }
             };
+        recovery.paused_agents = paused_agents;
         if let Err(error) =
             self.apply_conversation_state_deltas(&info.conversation_id, state_deltas)
         {
@@ -490,16 +487,28 @@ impl RuntimeFacade {
         );
         let jev_manager = self.jev_manager.clone();
         let state_store = Arc::clone(&self.state_store);
-        let grep = self
-            .registries
-            .resources
-            .as_ref()
-            .map(|resources| Arc::clone(&resources.grep));
         let coordination_backend = Arc::clone(&self.coordination_backend);
         let cluster_id = init
             .lifecycle_cluster_id
             .clone()
             .unwrap_or_else(|| self.config.runtime.cluster_id.clone());
+        let grep_root_ids = self
+            .registries
+            .agent_clusters
+            .get(&cluster_id)
+            .and_then(|cluster| cluster.grep_root_ids.as_deref());
+        let grep = self
+            .registries
+            .resources
+            .as_ref()
+            .map(|resources| {
+                resources
+                    .grep
+                    .bind_conversation(&requested_conversation_id, grep_root_ids)
+                    .map(Arc::new)
+                    .map_err(RuntimeError::InvalidConfig)
+            })
+            .transpose()?;
         let runtime_instance_id = self.config.runtime.runtime_instance_id.clone();
         let catalog_lease_ttl_ms = LOCAL_LEASE_TTL_MS;
         let owner_lease_ttl_ms = LOCAL_LEASE_TTL_MS;
@@ -1030,7 +1039,12 @@ impl RuntimeFacade {
             .unwrap_or_default()
     }
 
-    fn append_conversation_log(&self, conversation_id: &str, event: &str, details: Value) {
+    pub(super) fn append_conversation_log(
+        &self,
+        conversation_id: &str,
+        event: &str,
+        details: Value,
+    ) {
         let Some(metadata) = self.conversation_instances.get(conversation_id) else {
             return;
         };
@@ -1171,6 +1185,49 @@ impl RuntimeFacade {
                 .await
                 .map_err(|e| RuntimeError::Internal(e.to_string()))
         })
+    }
+
+    pub fn resume_conversation_with_admission(
+        &self,
+        conversation_id: &str,
+        command_id: String,
+    ) -> Result<ai_assistant::gateway::AdmissionResult, RuntimeError> {
+        let manager = self.manager()?;
+        let conversation_id = non_empty_arg(conversation_id, "conversation_id")?;
+        self.require_conversation_owner(&conversation_id)?;
+        self.append_conversation_log(
+            &conversation_id,
+            "resume_conversation_with_admission",
+            json!({ "command_id": command_id }),
+        );
+        self.rt.block_on(async move {
+            manager
+                .request_resume_with_admission(&conversation_id, Some(command_id))
+                .await
+                .map_err(|e| RuntimeError::Internal(e.to_string()))
+        })
+    }
+
+    pub fn set_conversation_read_access(
+        &self,
+        conversation_id: &str,
+        grants: &[ai_assistant::systems::grep::ReadAccessGrant],
+    ) -> Result<Value, RuntimeError> {
+        let conversation_id = non_empty_arg(conversation_id, "conversation_id")?;
+        self.require_conversation_owner(&conversation_id)?;
+        let manager = self.manager()?;
+        let grep = self
+            .rt
+            .block_on(manager.grep_service(&conversation_id))
+            .map_err(|e| RuntimeError::InvalidConfig(e.to_string()))?;
+        grep.set_read_access(&conversation_id, grants)
+            .map_err(RuntimeError::InvalidConfig)?;
+        self.append_conversation_log(
+            &conversation_id,
+            "read_access_replaced",
+            json!({ "grants": grants }),
+        );
+        Ok(json!({ "conversation_id": conversation_id, "grants": grants }))
     }
 
     pub fn close_conversation(&mut self, conversation_id: &str) -> Result<(), RuntimeError> {

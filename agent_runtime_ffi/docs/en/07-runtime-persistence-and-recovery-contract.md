@@ -124,6 +124,35 @@ Continuing a live temporary worker requires its `definition_id` to remain
 resolvable; a host must never restore stale permissions or tool lists from a
 snapshot to bypass the current registry.
 
+### Current Skills and permissions on recovery
+
+`conversation.spawn_from_snapshot` and `conversation.import_snapshot` use the current
+cluster's Role, thinking, Feature/Capability Skills by default, without a policy flag.
+Archived Skill hashes are provenance, not recovery admission checks. Changed content
+no longer causes `skill_version_conflict`. Cluster identity must still match; current
+accepted configuration and permissions apply. Optimistic version checks on Skill
+transactions and cluster updates remain enforced.
+
+Recovery preserves original user messages, assistant text, tool calls/results, provider
+call IDs, valid record IDs and ordering. Cached prompts, old active-tool lists and live
+approvals are discarded. Import requires an idle target; a driver still stopping after
+pause produces `conversation_recovery_busy`.
+
+Both responses include `recovery` with `skill_versions`, `updated_skills`,
+`removed_optional_skills` and `blocked_calls`. Unavailable optional Skills are removed
+and reported. Missing mandatory Role/system Skills produce `required_skill_missing`
+with the Agent and Skill names; invalid kind/body produces `required_skill_invalid`.
+Subsequent exports record current Skill versions and paused agents.
+
+Pending calls are checked against current contracts, active tools and permissions.
+Blocked calls retain history and diagnostics. Approvals are requested again; paused
+agents require explicit resume. Started side effects with unknown outcomes and completed
+calls are never automatically replayed. Hosts must reauthorize directory reads after restore.
+
+Hosts must remove any fallback that replaces a Skill-conflicted archive with an empty
+conversation. Restore original history and show recovery diagnostics; retain the original
+snapshot and report errors when mandatory Skills are unavailable.
+
 ## 7.5 Shutdown and Event Drain
 
 Runtime shutdown closes conversations one by one:

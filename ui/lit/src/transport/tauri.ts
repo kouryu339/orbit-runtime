@@ -282,7 +282,11 @@ export class TauriConversationTransport implements ConversationTransport {
 function normalizeCommandResult(value: unknown): CommandResult {
   if (!value || typeof value !== 'object') return { accepted: true };
   const record = value as Record<string, unknown>;
-  const accepted = record.accepted !== false && record.resolved !== false;
+  const decision = record.decision && typeof record.decision === 'object'
+    ? record.decision as Record<string, unknown>
+    : undefined;
+  const accepted = record.accepted !== false && record.resolved !== false &&
+    record.decision !== 'rejected' && decision?.decision !== 'rejected';
   return {
     accepted,
     commandId:
@@ -298,6 +302,10 @@ function normalizeCommandResult(value: unknown): CommandResult {
         ? record.reject_reason
         : typeof record.rejectReason === 'string'
           ? record.rejectReason
+          : typeof record.reason === 'string'
+            ? record.reason
+          : typeof decision?.reason === 'string'
+            ? decision.reason
           : undefined,
     metadata: record,
   };
