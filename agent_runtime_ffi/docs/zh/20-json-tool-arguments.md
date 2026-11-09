@@ -2,13 +2,16 @@
 
 同一个工具支持原生 Function Calling、文本 JSON 和旧 CLI。RPC 工具无需重复注册。会话的 tool_protocol 决定模型使用原生 FC 或正文 EXEC。
 
-正文调用：
+默认正文调用使用完整 JSON 对象，不需要 EXEC：
 
 ```text
-EXEC SomeTool {
-  "payload": {"sheet":"申请表","items":[1,true,null]},
-  "count": 20,
-  "label": "001"
+{
+  "tool": "SomeTool",
+  "args": {
+    "payload": {"sheet":"申请表","items":[1,true,null]},
+    "count": 20,
+    "label": "001"
+  }
 }
 ```
 
@@ -25,3 +28,5 @@ JSON 必须是顶层对象，最大 1 MiB。拒绝重复键（包括嵌套对象
 内置工具沿用 AIInput.parse_args() 可继续读取兼容字符串视图；需要保留类型时使用 AIInput.json_arguments()。运行期 ParsedToolCall.arguments 为规范参数，params 为旧格式兼容投影；旧快照缺少 arguments 仍可读取。当前快照保存结构化参数，原生 FC 恢复从原始 arguments 重建，并保留 provider call ID。
 
 正文 JSON 调用在前端仍显示工具状态组件，参数不会作为普通聊天正文显示；审批使用同一份规范参数。工作流专用的 inputs 键值对投影维持兼容，普通 RPC 的 inputs 参数可使用实际声明类型。
+
+完整调用信封只允许 tool 和 args。tool 是工具目录里的名称，args 必须是对象（无参数时为 {}）。允许多个独立对象分行输出，依赖调用须等待上一次结果。不接受伪造的身份、授权或调用 ID 字段。普通 JSON 数据及代码围栏中的 JSON 示例不执行。内部仍兼容 EXEC Tool {...} 和旧 CLI；默认提示词及错误重试说明统一使用完整 JSON。原生 FC 的 API 格式保持标准协议，RPC 的 args_json 保持相同参数对象，不增加服务端包装层。

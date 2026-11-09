@@ -995,7 +995,7 @@ mod tests {
         registry.register_dynamic_with_metadata(meta, rpc);
         let ctx = super::build_exec_ctx(cache, Arc::new(InMemoryEventBus::new()), registry);
         let raw = r#"{"payload":{"items":[1,true,null,"001"]},"count":2,"input":"001","command":"literal"}"#;
-        let text = format!("说明\nEXEC TypedRpcProbe {raw}");
+        let text = format!("说明\n{{\"tool\":\"TypedRpcProbe\",\"args\":{raw}}}");
         crate::runtime::parser::validate_response_shape(&text).unwrap();
         let calls = crate::runtime::parser::parse_tool_calls(&text).unwrap();
         let projected = crate::runtime::parser::frontend_projection(&text, &["text-call".into()]);

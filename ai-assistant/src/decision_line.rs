@@ -370,6 +370,12 @@ fn match_decision_head(line: &str, hints: &mut Vec<String>) -> Option<DecisionHe
         return None;
     }
 
+    if trimmed_full.starts_with('{') {
+        if let Ok(Some(call)) = json_envelope(trimmed_full) {
+            return Some(DecisionHead::Exec(call.to_legacy_command()));
+        }
+        return None;
+    }
     if let Some((head, subject)) = trimmed_full.split_once(char::is_whitespace) {
         if head.eq_ignore_ascii_case("EXEC") && is_json_subject(subject.trim()) {
             return Some(DecisionHead::Exec(subject.trim().to_string()));
@@ -434,16 +440,72 @@ fn match_decision_head(line: &str, hints: &mut Vec<String>) -> Option<DecisionHe
 // 内部：运行时单行 EXEC / 变量 / heredoc
 // ============================================================================
 
+/// A text RPC envelope. No execution identity or authorization is taken from it.
+pub(crate) fn json_envelope(raw: &str) -> Result<Option<ParsedToolCall>, String> {
+    let mut object = corework::tool_arguments::parse_object(raw)?;
+    if !object.contains_key("tool") && !object.contains_key("args") {
+        return Ok(None);
+    }
+    if object.len() != 2 {
+        return Err("tool call requires exactly 'tool' and 'args'".into());
+    }
+    let tool = object
+        .remove("tool")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .ok_or("tool must be a string")?;
+    if tool.is_empty()
+        || !tool
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    {
+        return Err("invalid tool name".into());
+    }
+    let args = object
+        .remove("args")
+        .and_then(|v| v.as_object().cloned())
+        .ok_or("args must be a JSON object")?;
+    Ok(Some(ParsedToolCall::from_json(tool, args)))
+}
 pub(crate) fn collapse_json_calls(text: &str) -> Result<String, String> {
     // Join JSON blocks before legacy preprocessing, so JSON strings are never heredocs or decisions.
     let mut joined = Vec::new();
     let mut lines = text.lines();
     let mut in_legacy_string = false;
+    let mut in_code_fence = false;
     while let Some(line) = lines.next() {
         if in_legacy_string {
             joined.push(line.to_string());
             if line.trim() == "\"" {
                 in_legacy_string = false;
+            }
+            continue;
+        }
+        if line.trim().starts_with("```") {
+            in_code_fence = !in_code_fence;
+            joined.push(line.to_string());
+            continue;
+        }
+        if in_code_fence {
+            joined.push(line.to_string());
+            continue;
+        }
+        if line.trim_start().starts_with('{') {
+            let mut raw = line.to_string();
+            while matches!(serde_json::from_str::<serde_json::Value>(&raw),Err(e) if e.is_eof()) {
+                let next = lines.next().ok_or("incomplete JSON call")?;
+                raw.push('\n');
+                raw.push_str(next);
+                if raw.len() > 1024 * 1024 {
+                    return Err("tool arguments exceed 1 MiB".into());
+                }
+            }
+            if let Some(call) = json_envelope(&raw)? {
+                joined.push(
+                    serde_json::json!({"tool":call.name,"args":call.arguments.unwrap()})
+                        .to_string(),
+                );
+            } else {
+                joined.push(raw);
             }
             continue;
         }
@@ -796,11 +858,12 @@ fn is_json_subject(subject: &str) -> bool {
 pub(crate) fn find_reasoning_tag(text: &str) -> Option<usize> {
     text.match_indices("<think>").map(|(i, _)| i).find(|i| {
         let line = text[..*i].rsplit('\n').next().unwrap_or("").trim();
-        !line
-            .split_once(char::is_whitespace)
-            .is_some_and(|(head, subject)| {
-                head.eq_ignore_ascii_case("EXEC") && is_json_subject(subject)
-            })
+        !line.starts_with('{')
+            && !line
+                .split_once(char::is_whitespace)
+                .is_some_and(|(head, subject)| {
+                    head.eq_ignore_ascii_case("EXEC") && is_json_subject(subject)
+                })
     })
 }
 fn strip_and_capture_think(text: &str) -> (Option<String>, String) {

@@ -352,17 +352,29 @@ fn push_runtime_tool_section(
     };
 
     output.push_str(&format!("### {}{}\n", meta.name, tags_str));
-    output.push_str("Call syntax: `EXEC ");
-    output.push_str(&meta.name);
-    for p in &meta.parameters {
-        if p.required {
-            output.push_str(&format!(" --{} <{}>", p.name, runtime_param_type_label(p)));
-        }
-    }
-    if meta.parameters.iter().any(|p| !p.required) {
-        output.push_str(" [optional parameters use the same `--name value` form]");
-    }
-    output.push_str("`\n");
+    let args: serde_json::Map<String, serde_json::Value> = meta
+        .parameters
+        .iter()
+        .filter(|p| p.required)
+        .map(|p| {
+            let example = [
+                serde_json::json!({}),
+                serde_json::json!([]),
+                serde_json::json!(0),
+                serde_json::json!(false),
+                serde_json::json!("value"),
+                serde_json::Value::Null,
+            ]
+            .into_iter()
+            .find(|v| corework::tool_arguments::matches_type(v, &p.param_type))
+            .unwrap_or(serde_json::Value::Null);
+            (p.name.clone(), example)
+        })
+        .collect();
+    output.push_str(&format!(
+        "Call syntax: \x60{}\x60\n",
+        serde_json::json!({"tool":meta.name,"args":args})
+    ));
 
     let description = if meta.workflow_enabled {
         crate::tool_schema::compact_summary(&meta.description)
@@ -385,7 +397,7 @@ fn push_runtime_tool_section(
                 .map(|d| format!(", default={}", d))
                 .unwrap_or_default();
             output.push_str(&format!(
-                "  - `--{}` ({}, type={}{}): {}\n",
+                "  - `{}` ({}, type={}{}): {}\n",
                 p.name,
                 req,
                 runtime_param_type_label(p),
@@ -810,7 +822,7 @@ pub fn format_workflows_section(registry: &[serde_json::Value]) -> String {
 
     let mut output = String::from("## Registered Workflows\n\n");
     output.push_str(
-        "Available Registered workflows can be executed with `executeWorkflow --workflow_id <id> --input.<name> <value>`.\n\n",
+        "Available registered workflows can be called using the JSON tool-call format. Supply workflow_id and inputs as declared in the tool contract.\n\n",
     );
     output.push_str("Use host-provided WorkflowRef_<workflow_id> node contracts for references. Drafts and cyclic references are rejected. Legacy script editing and temporary script execution APIs are deprecated and unavailable.\n\n");
 
@@ -1179,8 +1191,8 @@ mod tests {
 
         push_runtime_tool_section(&mut section, &meta, true);
 
-        assert!(section.contains("Call syntax: `EXEC UserGet --user_id <num>`"));
-        assert!(section.contains("`--user_id` (**required**, type=num)"));
+        assert!(section.contains(r#"{"args":{"user_id":0},"tool":"UserGet"}"#));
+        assert!(section.contains("`user_id` (**required**, type=num)"));
         assert!(!section.contains("**Output pins**"));
         assert!(!section.contains("Outputs:"));
         assert!(!section.contains("user_id ="));

@@ -1,1 +1,1 @@
-The following are the parameter specifications for each tool. When outputting EXEC, strictly use the tool names and parameter names listed below:
+Parameters below specify names, types, required fields and constraints. Pass them as properties of args with their actual JSON types.

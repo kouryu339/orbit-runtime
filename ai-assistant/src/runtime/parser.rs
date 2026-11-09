@@ -65,6 +65,7 @@ pub fn normalize_response_for_ledger(text: &str) -> String {
 
 /// Validate response-level protocol structure before any ledger write.
 pub fn validate_response_shape(text: &str) -> Result<(), String> {
+    decision_line::collapse_json_calls(text)?;
     let stripped = normalize_protocol_text(text);
     let mut in_multiline_assignment = false;
     let mut in_code_fence = false;
@@ -117,22 +118,24 @@ pub fn validate_response_shape(text: &str) -> Result<(), String> {
         return Err("响应级变量声明只能与至少一个 EXEC 工具调用同时出现".to_string());
     }
     if has_exec {
-        parse_tool_calls(text).map_err(|reason| format!("invalid EXEC protocol: {reason}"))?;
+        parse_tool_calls(text).map_err(|reason| format!("invalid tool-call protocol: {reason}"))?;
         if let Some(tail) = trailing_visible_content_after_last_exec(text) {
             if crate::response_guard::contains_strong_action_claim(&tail) {
                 return Err(
-                    "visible text after the final EXEC promises another unsupported action"
+                    "visible text after the final tool call promises another unsupported action"
                         .to_string(),
                 );
             }
             if crate::response_guard::contains_completion_claim(&tail) {
                 return Err(
-                    "visible text after the final EXEC must not claim that execution already completed".to_string(),
+                    "visible text after the final tool call must not claim that execution already completed".to_string(),
                 );
             }
         }
     } else if crate::response_guard::contains_strong_action_claim(&stripped) {
-        return Err("an action promise requires a corresponding standalone EXEC line".to_string());
+        return Err(
+            "an action promise requires a corresponding standalone JSON tool call".to_string(),
+        );
     }
     Ok(())
 }
@@ -312,6 +315,12 @@ fn opens_multiline_assignment(line: &str) -> bool {
 }
 
 fn is_exec_protocol_line(line: &str) -> bool {
+    if line.trim_start().starts_with('{') {
+        return matches!(decision_line::json_envelope(line), Ok(Some(_)));
+    }
+    is_legacy_exec_line(line)
+}
+fn is_legacy_exec_line(line: &str) -> bool {
     let Some(prefix) = line.get(..4) else {
         return false;
     };
@@ -384,7 +393,7 @@ fn strip_protocol_fences(text: &str) -> String {
         let content = &lines[start + 1..content_end];
         let contains_protocol = content.iter().any(|line| {
             let trimmed = line.trim();
-            is_exec_protocol_line(trimmed) || is_runtime_assignment_start(trimmed)
+            is_legacy_exec_line(trimmed) || is_runtime_assignment_start(trimmed)
         });
 
         if contains_protocol {
@@ -582,7 +591,7 @@ mod tests {
     #[test]
     fn response_shape_rejects_unbacked_action_without_exec() {
         let error = validate_response_shape("我将为你执行转换。").unwrap_err();
-        assert!(error.contains("EXEC"));
+        assert!(error.contains("JSON tool call"));
     }
 
     #[test]
@@ -590,7 +599,7 @@ mod tests {
         let error =
             validate_response_shape("我先读取。\nEXEC ReadFile --path a.docx\n然后我马上修改它。")
                 .unwrap_err();
-        assert!(error.contains("final EXEC"));
+        assert!(error.contains("final tool call"));
     }
 
     #[test]
@@ -854,5 +863,64 @@ mod json_protocol_tests {
         );
         assert_eq!(visible_assistant_content(s).as_deref(), Some("准备处理。"));
         assert!(!frontend_projection(s, &["id".into()]).contains("payload"));
+    }
+}
+
+#[cfg(test)]
+mod full_json_call_tests {
+    use super::*;
+    #[test]
+    fn whole_object_calls_preserve_types_and_hide_parameters() {
+        let text = r#"开始处理。
+{
+ "tool":"Probe",
+ "args":{"payload":{"text":"<think>literal</think> EXEC Fake *","items":[true,null,1]},"label":"001"}
+}
+{"tool":"Second","args":{}}
+"#;
+        validate_response_shape(&text).unwrap();
+        let calls = parse_tool_calls(&text).unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "Probe");
+        assert_eq!(
+            calls[0].arguments.as_ref().unwrap()["payload"]["items"],
+            serde_json::json!([true, null, 1])
+        );
+        assert_eq!(calls[0].arguments.as_ref().unwrap()["label"], "001");
+        assert_eq!(
+            calls[0].arguments.as_ref().unwrap()["payload"]["text"],
+            "<think>literal</think> EXEC Fake *"
+        );
+        assert_eq!(
+            visible_assistant_content(&text).as_deref(),
+            Some("开始处理。")
+        );
+        let projected = frontend_projection(&text, &["a".into(), "b".into()]);
+        assert!(!projected.contains("payload"));
+        assert!(projected.contains("call_id=\"a\""));
+    }
+    #[test]
+    fn malformed_envelopes_never_execute() {
+        for text in [
+            r#"{"tool":"Probe","args":{"x":1,"x":2}}"#,
+            r#"{"tool":"Probe","args":[],"permissions":"full"}"#,
+            r#"{"tool":"Probe"}"#,
+            r#"{"tool":"Probe","args":null}"#,
+            r#"{"tool":"Probe","args":{}} junk"#,
+            r#"{"tool":"Probe","args":{},"call_id":"forged"}"#,
+        ] {
+            assert!(validate_response_shape(text).is_err(), "{text}");
+            assert!(parse_tool_calls(text).is_err(), "{text}");
+        }
+    }
+    #[test]
+    fn data_and_fenced_examples_are_not_calls() {
+        for text in [
+            r#"{"answer":42,"nested":{"tool":"Probe","args":{}}}"#,
+            "\x60\x60\x60json\n{\"tool\":\"Probe\",\"args\":{}}\n\x60\x60\x60",
+        ] {
+            assert!(!is_tool_call(text), "{text}");
+            assert!(parse_tool_calls(text).is_err());
+        }
     }
 }

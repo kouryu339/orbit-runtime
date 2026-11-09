@@ -7402,3 +7402,20 @@ fn invalid_reasoning_does_not_replace_existing_model_configuration() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn full_json_tool_call_recovery_keeps_arguments_and_call_identity() {
+    let record:ai_assistant::ledger::LedgerRecord=serde_json::from_value(json!({
+        "record_id":40,"conversation_id":"original","agent_id":"primary","agent_name":"Primary","role":"assistant",
+        "content":r#"{"tool":"Probe","args":{"payload":{"items":[1,true,null]},"label":"001"}}"#,
+        "metadata":{"extra":{"tool_call_ids":["json-call-1"]}},"created_at":"2026-11-09T12:00:00+08:00"
+    })).unwrap();
+    let plans = restored_execution_plans(&[record]);
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].call_ids, vec!["json-call-1"]);
+    let args = ai_assistant::tool_runner::permission_arguments(&plans[0].tools[0]);
+    assert_eq!(
+        args,
+        json!({"payload":{"items":[1,true,null]},"label":"001"})
+    );
+}
