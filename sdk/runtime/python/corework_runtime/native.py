@@ -21,12 +21,12 @@ ABI_VERSION = 1
 _ASSETS = {
     "windows-x86_64": {
         "archive": "orbit-runtime-runtime-v0.5.4-windows-x86_64.zip",
-        "sha256": "c35f17d6608aa31886dfe1999393efed0ec339e63ce3e7b2b85bebb4b8acdbfa",
+        "sha256": "901e9f92766ff9bf275ef6bca3bb69392350a2dfc936918a4238895f9137f0c8",
         "library": "bin/agent_runtime.dll",
     },
     "linux-x86_64": {
         "archive": "orbit-runtime-runtime-v0.5.4-linux-x86_64.zip",
-        "sha256": "def553ce8e43b575c1c5f6ef1093b7b92d2fc928273f61ac69b922614972b7d2",
+        "sha256": "fc20cbf90f1676b7bcb8bbb904c6d423f43146748c3176919509018cda69ef30",
         "library": "lib/libagent_runtime.so",
     },
 }
