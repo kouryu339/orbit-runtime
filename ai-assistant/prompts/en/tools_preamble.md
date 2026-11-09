@@ -1,5 +1,6 @@
 When calling a tool, write a raw line like this in the message body:
-EXEC ToolName --param value
+EXEC ToolName {"payload":{"items":[1,true,null]}}
+Legacy CLI remains supported: EXEC ToolName --param value
 Tool names and parameter names must exactly match the names listed below.
 
 The context may include a host-published dynamic context section. It carries

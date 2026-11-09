@@ -42,6 +42,20 @@ impl From<&RuntimeAIParameter> for ParameterSpec {
 
 fn base_schema(param_type: &str) -> Value {
     let normalized = param_type.trim().to_ascii_lowercase();
+    if let Some(inner) = normalized.strip_suffix("[]") {
+        return json!({"type":"array", "items":base_schema(inner)});
+    }
+    let alias = match normalized.as_str() {
+        "stringarray" => Some("String"),
+        "numberarray" => Some("Number"),
+        "booleanarray" | "boolarray" => Some("Boolean"),
+        "objectarray" => Some("Object"),
+        "anyarray" => Some("Any"),
+        _ => None,
+    };
+    if let Some(inner) = alias {
+        return json!({"type":"array", "items":base_schema(inner)});
+    }
     if normalized.starts_with("array") || normalized.starts_with("vec") {
         let item_type = param_type
             .split_once('<')
@@ -57,7 +71,9 @@ fn base_schema(param_type: &str) -> Value {
             json!({"type": "integer"})
         }
         "f32" | "f64" | "num" | "number" => json!({"type": "number"}),
-        "object" | "map" | "json" | "any" => json!({"type": "object"}),
+        "integer" | "int" | "int64" | "long" => json!({"type":"integer"}),
+        "object" | "map" => json!({"type": "object"}),
+        "json" | "any" | "value" | "serde_json::value" => json!({}),
         _ => json!({"type": "string"}),
     }
 }
@@ -83,7 +99,9 @@ fn is_plan_steps(tool_name: &str, parameter: &ParameterSpec) -> bool {
 }
 
 fn parameter_schema(tool_name: &str, parameter: &ParameterSpec, strict: bool) -> Value {
-    let mut schema = if parameter.name == "inputs" {
+    let mut schema = if parameter.name == "inputs"
+        && parameter.param_type.eq_ignore_ascii_case("String")
+    {
         input_pairs_schema()
     } else if is_plan_steps(tool_name, parameter) {
         json!({
@@ -444,7 +462,14 @@ fn validate_strict_parameter_compatibility(
             continue;
         }
         let normalized = parameter.param_type.trim().to_ascii_lowercase();
-        let unconstrained_object = matches!(normalized.as_str(), "object" | "map" | "json" | "any");
+        let unconstrained_object = ["object", "map", "json", "any", "value", "serde_json::value"]
+            .iter()
+            .any(|kind| {
+                normalized == *kind
+                    || normalized.contains(&format!("<{kind}>"))
+                    || normalized == format!("{kind}[]")
+                    || normalized == format!("{kind}array")
+            });
         let unconstrained_array = (normalized.starts_with("array")
             || normalized.starts_with("vec"))
             && (!normalized.contains('<') || normalized.contains("<any>"));
@@ -459,6 +484,9 @@ fn validate_strict_parameter_compatibility(
 }
 
 fn value_matches_type(value: &Value, expected: &Value) -> bool {
+    if expected.is_null() {
+        return true;
+    }
     if value.is_null() {
         return expected
             .as_array()
@@ -492,7 +520,8 @@ pub fn validate_and_project_call(
         .iter()
         .find(|definition| definition.function.name == call.function.name)
         .ok_or_else(|| format!("model requested inactive tool '{}'", call.function.name))?;
-    let arguments: Value = serde_json::from_str(&call.function.arguments)
+    let arguments = corework::tool_arguments::parse_object(&call.function.arguments)
+        .map(Value::Object)
         .map_err(|error| format!("invalid arguments for '{}': {error}", call.function.name))?;
     let arguments = arguments
         .as_object()
@@ -529,7 +558,12 @@ pub fn validate_and_project_call(
     }
     let mut params = Vec::new();
     for (name, value) in arguments {
-        if value.is_null() {
+        if value.is_null()
+            && properties
+                .get(name)
+                .and_then(|s| s.get("type"))
+                .is_some_and(|t| t.is_array())
+        {
             continue;
         }
         let expected = properties
@@ -543,7 +577,7 @@ pub fn validate_and_project_call(
                 call.function.name, name
             ));
         }
-        if name == "inputs" {
+        if name == "inputs" && properties[name]["items"]["properties"]["name"].is_object() {
             let pairs = value
                 .as_array()
                 .ok_or_else(|| format!("tool '{}' inputs must be an array", call.function.name))?;
@@ -571,6 +605,17 @@ pub fn validate_and_project_call(
         params.push((name.clone(), rendered));
     }
     Ok(ParsedToolCall {
+        arguments: if params.iter().any(|(k, _)| k.starts_with("input.")) {
+            None
+        } else {
+            Some(
+                arguments
+                    .iter()
+                    .filter(|(k, _)| params.iter().any(|(p, _)| p == *k))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            )
+        },
         name: call.function.name.clone(),
         params,
     })
@@ -825,5 +870,46 @@ mod tests {
             tools[1].function.parameters["properties"]["revision"]["type"],
             json!(["integer", "null"])
         );
+    }
+}
+
+#[cfg(test)]
+mod typed_json_tests {
+    use super::*;
+    #[test]
+    fn array_aliases_have_typed_fc_schemas() {
+        assert_eq!(
+            base_schema("StringArray"),
+            json!({"type":"array","items":{"type":"string"}})
+        );
+        assert_eq!(base_schema("Array<Json>")["items"], json!({}));
+        assert_eq!(base_schema("Number[]")["items"]["type"], "number");
+    }
+    #[test]
+    fn native_fc_keeps_json_any_null_and_objects() {
+        let d = definition(
+            "Probe",
+            "",
+            vec![ParameterSpec {
+                name: "payload".into(),
+                param_type: "Json".into(),
+                required: true,
+                default_value: None,
+                description: String::new(),
+            }],
+            false,
+        );
+        for v in ["null", r#"{"deep":[1,true,null]}"#, r#""123""#] {
+            let raw = format!("{{\"payload\":{v}}}");
+            let c = validate_and_project_call(
+                &llm_gateway::ToolCall::function("id", "Probe", raw),
+                &[d.clone()],
+            )
+            .unwrap();
+            assert_eq!(
+                c.arguments.unwrap()["payload"],
+                serde_json::from_str::<Value>(v).unwrap()
+            );
+        }
     }
 }

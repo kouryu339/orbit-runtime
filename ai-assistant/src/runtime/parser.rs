@@ -146,6 +146,8 @@ pub fn validate_response_shape(text: &str) -> Result<(), String> {
 /// 多个 EXEC 调用会产生多个元素，由调用方并发执行。
 /// 返回 `Err(String)` —— 解析失败时的错误原因。
 pub fn parse_tool_calls(text: &str) -> Result<Vec<ParsedToolCall>, String> {
+    // Validate the original JSON before presentation/think-tag normalization.
+    decision_line::collapse_json_calls(text)?;
     if normalize_protocol_text(text)
         .trim()
         .eq_ignore_ascii_case("EXEC")
@@ -355,7 +357,8 @@ fn is_runtime_assignment_start(line: &str) -> bool {
 }
 
 fn normalize_protocol_text(text: &str) -> String {
-    strip_protocol_fences(&strip_think_blocks(text))
+    let joined = decision_line::collapse_json_calls(text).unwrap_or_else(|_| text.to_string());
+    strip_protocol_fences(&strip_think_blocks(&joined))
 }
 
 fn strip_protocol_fences(text: &str) -> String {
@@ -408,7 +411,7 @@ fn strip_think_blocks(text: &str) -> String {
     let mut rest = text;
     let mut out = String::new();
 
-    while let Some(open) = rest.find("<think>") {
+    while let Some(open) = decision_line::find_reasoning_tag(rest) {
         out.push_str(&rest[..open]);
         let after_open = &rest[open + "<think>".len()..];
         if let Some(close) = after_open.find("</think>") {
@@ -833,5 +836,23 @@ mod tests {
         assert!(cmd.starts_with("Foo"));
         assert!(cmd.contains("--bar"));
         assert!(cmd.contains("--msg"));
+    }
+}
+
+#[cfg(test)]
+mod json_protocol_tests {
+    use super::*;
+    #[test]
+    fn multiline_json_is_hidden_and_nested_values_survive() {
+        let s="准备处理。\nEXEC Probe {\n \"payload\": {\"message\":\"<think>literal</think> * `literal`\",\"items\":[1,null]}\n}\n";
+        validate_response_shape(s).unwrap();
+        let calls = parse_tool_calls(s).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].arguments.as_ref().unwrap()["payload"]["message"],
+            "<think>literal</think> * `literal`"
+        );
+        assert_eq!(visible_assistant_content(s).as_deref(), Some("准备处理。"));
+        assert!(!frontend_projection(s, &["id".into()]).contains("payload"));
     }
 }

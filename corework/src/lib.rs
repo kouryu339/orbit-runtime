@@ -216,3 +216,5 @@ mod tests {
 }
 
 pub mod tool_definitions;
+
+pub mod tool_arguments;

@@ -27,6 +27,23 @@ pub async fn execute_single_with_call_id(
     ctx: &Context,
 ) -> ToolResult {
     let (system_name, args_str) = parse_tool_command(cmd);
+    if args_str.trim_start().starts_with('{') {
+        let call = corework::tool_arguments::parse_object(args_str).map(|args| {
+            crate::decision_line::ParsedToolCall::from_json(system_name.to_string(), args)
+        });
+        match call {
+            Ok(call) => return execute_parsed_with_call_id(&call, tool_call_id, ctx).await,
+            Err(reason) => {
+                return ToolResult {
+                    command: cmd.into(),
+                    success: false,
+                    error_code: -4,
+                    to_ai: reason,
+                    result: serde_json::Value::Null,
+                }
+            }
+        }
+    }
     execute_prepared(
         system_name,
         cmd,
@@ -50,11 +67,27 @@ pub async fn execute_parsed_with_call_id(
     ctx: &Context,
 ) -> ToolResult {
     let command = call.to_legacy_command();
+    if call.arguments.is_some() {
+        if let Err(reason) = validate_recovery_call(&command, Some(call), ctx.registry()) {
+            return ToolResult {
+                command,
+                success: false,
+                error_code: -3,
+                to_ai: reason,
+                result: serde_json::Value::Null,
+            };
+        }
+    }
     let used_names = call
         .params
         .iter()
         .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
+    let used_names = call
+        .arguments
+        .as_ref()
+        .map(|a| a.keys().cloned().collect())
+        .unwrap_or(used_names);
     execute_prepared(
         &call.name,
         &command,
@@ -316,6 +349,11 @@ pub fn permission_metadata_in_registry(
 
 pub fn permission_arguments(cmd: &str) -> serde_json::Value {
     let (_, args_str) = parse_tool_command(cmd);
+    if args_str.trim_start().starts_with('{') {
+        return corework::tool_arguments::parse_object(args_str)
+            .map(serde_json::Value::Object)
+            .unwrap_or(serde_json::Value::Null);
+    }
     let Ok(args) = build_tool_input_map(args_str) else {
         return serde_json::Value::Object(serde_json::Map::new());
     };
@@ -329,6 +367,9 @@ pub fn permission_arguments(cmd: &str) -> serde_json::Value {
 pub fn permission_arguments_parsed(
     call: &crate::decision_line::ParsedToolCall,
 ) -> serde_json::Value {
+    if let Some(args) = &call.arguments {
+        return serde_json::Value::Object(args.clone());
+    }
     serde_json::Value::Object(
         build_parsed_tool_input_map(call)
             .into_iter()
@@ -410,6 +451,10 @@ pub fn validate_recovery_call(
         .iter()
         .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
+    let used = parsed
+        .and_then(|p| p.arguments.as_ref())
+        .map(|a| a.keys().cloned().collect())
+        .unwrap_or(used);
     if let Some(error) = validate_param_name_list_using(name, &used, Some(registry)) {
         return Err(error);
     }
@@ -446,6 +491,31 @@ pub fn validate_recovery_call(
     } else {
         return Err(format!("tool_unavailable: {name}"));
     };
+    let typed = parsed.and_then(|p| p.arguments.clone()).or_else(|| {
+        if raw.trim_start().starts_with('{') {
+            corework::tool_arguments::parse_object(raw).ok()
+        } else {
+            None
+        }
+    });
+    if let Some(args) = typed {
+        for (key, kind, required, has_default) in &specs {
+            match args.get(key) {
+                None if *required && !has_default => {
+                    return Err(format!(
+                        "tool_contract_changed: required parameter '{key}' is missing"
+                    ))
+                }
+                Some(value) if !corework::tool_arguments::matches_type(value, kind) => {
+                    return Err(format!(
+                        "tool_contract_changed: parameter '{key}' must be {kind}"
+                    ))
+                }
+                _ => {}
+            }
+        }
+        return Ok(());
+    }
     for (key, kind, required, has_default) in specs {
         let value = params.iter().find(|(name, _)| name == &key).map(|(_, v)| v);
         if required
@@ -489,6 +559,16 @@ pub fn validate_recovery_call(
 fn build_tool_input_map(
     args_str: &str,
 ) -> corework::error::Result<HashMap<String, serde_json::Value>> {
+    if args_str.trim_start().starts_with('{') {
+        let args = corework::tool_arguments::parse_object(args_str)
+            .map_err(corework::error::FrameworkError::InvalidData)?;
+        let mut map: HashMap<_, _> = args.into_iter().collect();
+        map.insert(
+            "input".into(),
+            serde_json::Value::String(args_str.to_string()),
+        );
+        return Ok(map);
+    }
     let mut input_map = HashMap::new();
     input_map.insert(
         "input".to_string(),
@@ -512,6 +592,14 @@ fn build_tool_input_map(
 fn build_parsed_tool_input_map(
     call: &crate::decision_line::ParsedToolCall,
 ) -> HashMap<String, serde_json::Value> {
+    if let Some(args) = &call.arguments {
+        let mut map: HashMap<_, _> = args.clone().into_iter().collect();
+        map.insert(
+            "input".into(),
+            serde_json::Value::String(serde_json::Value::Object(args.clone()).to_string()),
+        );
+        return map;
+    }
     let command = call.to_legacy_command();
     let (_, args_str) = parse_tool_command(&command);
     let mut input_map = HashMap::from([(
@@ -618,7 +706,7 @@ fn validate_param_name_list_using(
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use corework::cache::{Cache, InMemoryCache};
+    use corework::cache::{Cache, CacheExt, InMemoryCache};
     use corework::event::InMemoryEventBus;
     use corework::rpc_tool::{RuntimeAIParameter, RuntimeToolMetadata};
     use corework::system::SystemRegistry;
@@ -729,6 +817,7 @@ mod tests {
         let event_bus = Arc::new(InMemoryEventBus::new());
         let ctx = super::build_exec_ctx(cache, event_bus, registry);
         let call = crate::decision_line::ParsedToolCall {
+            arguments: None,
             name: "EchoStructuredScript".to_string(),
             params: vec![("script".to_string(), script.to_string())],
         };
@@ -784,6 +873,7 @@ mod tests {
     fn parsed_tool_input_map_preserves_workflow_script_verbatim() {
         let script = "input visibility:String=\"好友可见\"\n1: EXEC BrowserClick --selector \"button[aria-label=\\\"发布\\\"]\"\nreturn";
         let call = crate::decision_line::ParsedToolCall {
+            arguments: None,
             name: "WorkflowOpen".to_string(),
             params: vec![
                 ("name".to_string(), "发布视频".to_string()),
@@ -849,5 +939,92 @@ mod tests {
         let valid_names = vec!["path".to_string(), "trace".to_string()];
 
         assert!(!super::is_valid_param_name("input.name", &valid_names));
+    }
+    #[tokio::test]
+    async fn json_and_fc_reach_rpc_with_the_same_typed_arguments() {
+        use corework::rpc_tool::*;
+        struct Capture(Arc<std::sync::Mutex<Vec<AgentToolRequest>>>);
+        #[async_trait]
+        impl RpcToolClient for Capture {
+            async fn execute(
+                &self,
+                _: RpcEndpointInfo,
+                _: RuntimeToolMetadata,
+                r: AgentToolRequest,
+                _: &corework::orchestration::Context,
+            ) -> corework::error::Result<corework::ai_system::AIOutput> {
+                let value = r.args_json.clone();
+                self.0.lock().unwrap().push(r);
+                Ok(corework::ai_system::AIOutput::success(value, "captured"))
+            }
+        }
+        let meta:RuntimeToolMetadata=serde_json::from_value(json!({"name":"TypedRpcProbe","endpoint_id":"fixture","service":"fixture","method":"execute","readonly":true,"destructive":false,"parameters":[
+            {"name":"payload","param_type":"Json","required":true},{"name":"count","param_type":"Number","required":true},{"name":"input","param_type":"String","required":true},{"name":"command","param_type":"String","required":true}
+        ]})).unwrap();
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        crate::AssistantContext::set_active_tools(&cache, vec![meta.name.clone()])
+            .await
+            .unwrap();
+        cache
+            .set("conversation_id", &"real-conversation".to_string(), None)
+            .await
+            .unwrap();
+        cache
+            .set("agent_id", &"real-agent".to_string(), None)
+            .await
+            .unwrap();
+        let endpoints = Arc::new(RpcEndpointRegistry::new());
+        endpoints
+            .insert(RpcEndpointInfo {
+                endpoint_id: "fixture".into(),
+                address: "127.0.0.1:1".into(),
+                timeout_ms: 1000,
+                to_ai_max_chars: 10000,
+            })
+            .unwrap();
+        let tools = Arc::new(RuntimeToolRegistry::new());
+        tools.insert(meta.clone()).unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let rpc = Arc::new(RpcStubSystem::new(
+            &meta.name,
+            endpoints,
+            tools,
+            Arc::new(Capture(requests.clone())),
+        ));
+        let registry = Arc::new(SystemRegistry::new());
+        registry.register_dynamic_with_metadata(meta, rpc);
+        let ctx = super::build_exec_ctx(cache, Arc::new(InMemoryEventBus::new()), registry);
+        let raw = r#"{"payload":{"items":[1,true,null,"001"]},"count":2,"input":"001","command":"literal"}"#;
+        let text = format!("说明\nEXEC TypedRpcProbe {raw}");
+        crate::runtime::parser::validate_response_shape(&text).unwrap();
+        let calls = crate::runtime::parser::parse_tool_calls(&text).unwrap();
+        let projected = crate::runtime::parser::frontend_projection(&text, &["text-call".into()]);
+        assert!(!projected.contains("items"));
+        let a = super::execute_parsed_with_call_id(&calls[0], Some("text-call"), &ctx).await;
+        assert!(a.success, "{}", a.to_ai);
+        let definition:llm_gateway::ToolDefinition=serde_json::from_value(json!({"type":"function","function":{"name":"TypedRpcProbe","description":"fixture","parameters":{"type":"object","properties":{"payload":{},"count":{"type":"number"},"input":{"type":"string"},"command":{"type":"string"}},"required":["payload","count","input","command"]}}})).unwrap();
+        let fc = crate::tool_schema::validate_and_project_call(
+            &llm_gateway::ToolCall::function("fc-call", "TypedRpcProbe", raw),
+            &[definition],
+        )
+        .unwrap();
+        let b = super::execute_parsed_with_call_id(&fc, Some("fc-call"), &ctx).await;
+        assert!(b.success, "{}", b.to_ai);
+        assert_eq!(requests.lock().unwrap().len(), 2);
+        let expected: Value = serde_json::from_str(raw).unwrap();
+        for request in requests.lock().unwrap().iter() {
+            assert_eq!(request.args_json, expected);
+            assert_eq!(request.conversation_id, "real-conversation");
+        }
+        assert_eq!(requests.lock().unwrap()[1].tool_call_id, "fc-call");
+        assert_eq!(super::permission_arguments_parsed(&fc), expected);
+        let rejected = super::execute_single_with_call_id(
+            r#"TypedRpcProbe {"payload":null,"count":"2","input":"x","command":"literal"}"#,
+            Some("bad"),
+            &ctx,
+        )
+        .await;
+        assert!(!rejected.success);
+        assert_eq!(requests.lock().unwrap().len(), 2);
     }
 }

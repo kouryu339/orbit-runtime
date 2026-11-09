@@ -45,15 +45,39 @@ impl LineParseOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedToolCall {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Map<String, serde_json::Value>>,
     /// 参数列表（保留顺序，允许同名后写覆盖前写——兜底容错）
     pub params: Vec<(String, String)>,
 }
 
 impl ParsedToolCall {
+    pub fn from_json(name: String, arguments: serde_json::Map<String, serde_json::Value>) -> Self {
+        let params = arguments
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string()),
+                )
+            })
+            .collect();
+        Self {
+            name,
+            params,
+            arguments: Some(arguments),
+        }
+    }
+
     /// 降级为现有单行 CLI 命令字符串：`ToolName --k1 v1 --k2 "v2 with space"`
     /// 长参数 / 含换行的参数会被引号包裹并做最小转义（`"` → `\"`、`\n` 保留为 `\\n` 字面量）。
     /// 注意：此降级路径**仍受单行 CLI 限制**，长字符串场景应走 [`Self::to_input_map`]。
     pub fn to_legacy_command(&self) -> String {
+        if let Some(args) = &self.arguments {
+            return format!("{} {}", self.name, serde_json::Value::Object(args.clone()));
+        }
         let mut out = String::new();
         out.push_str(&self.name);
         for (k, v) in &self.params {
@@ -119,7 +143,19 @@ pub fn parse_line_protocol(text: &str) -> LineParseResult {
     let mut hints: Vec<String> = Vec::new();
 
     // ---- Step 1: <think> 剥离 ----
-    let (reasoning, body) = strip_and_capture_think(text);
+    let joined = match collapse_json_calls(text) {
+        Ok(joined) => joined,
+        Err(reason) => {
+            return LineParseResult {
+                decisions: vec![],
+                tool_calls: vec![],
+                var_table: Default::default(),
+                reasoning: None,
+                outcome: LineParseOutcome::Failed { reason },
+            }
+        }
+    };
+    let (reasoning, body) = strip_and_capture_think(&joined);
 
     // ---- Step 2: 预处理逻辑行（合并 heredoc）----
     let lines = match preprocess_runtime_lines(&body) {
@@ -334,6 +370,11 @@ fn match_decision_head(line: &str, hints: &mut Vec<String>) -> Option<DecisionHe
         return None;
     }
 
+    if let Some((head, subject)) = trimmed_full.split_once(char::is_whitespace) {
+        if head.eq_ignore_ascii_case("EXEC") && is_json_subject(subject.trim()) {
+            return Some(DecisionHead::Exec(subject.trim().to_string()));
+        }
+    }
     // 移除成对的 markdown bold 标记 `**` / 单星 `*`（仅当用作装饰时）
     let dedecorated_owned: String;
     let dedecorated: &str = if trimmed_full.contains('*') || trimmed_full.contains('`') {
@@ -393,8 +434,49 @@ fn match_decision_head(line: &str, hints: &mut Vec<String>) -> Option<DecisionHe
 // 内部：运行时单行 EXEC / 变量 / heredoc
 // ============================================================================
 
+pub(crate) fn collapse_json_calls(text: &str) -> Result<String, String> {
+    // Join JSON blocks before legacy preprocessing, so JSON strings are never heredocs or decisions.
+    let mut joined = Vec::new();
+    let mut lines = text.lines();
+    let mut in_legacy_string = false;
+    while let Some(line) = lines.next() {
+        if in_legacy_string {
+            joined.push(line.to_string());
+            if line.trim() == "\"" {
+                in_legacy_string = false;
+            }
+            continue;
+        }
+        let mut hints = Vec::new();
+        if let Some(DecisionHead::Exec(subject)) = match_decision_head(line, &mut hints) {
+            if let Some((name, raw)) = subject.split_once(char::is_whitespace) {
+                if raw.trim_start().starts_with('{') {
+                    let mut json = raw.to_string();
+                    loop {
+                        match serde_json::from_str::<serde_json::Value>(&json) {
+                            Err(e) if e.is_eof() => {
+                                let next = lines
+                                    .next()
+                                    .ok_or_else(|| format!("incomplete JSON: {e}"))?;
+                                json.push('\n');
+                                json.push_str(next);
+                            }
+                            _ => break,
+                        }
+                    }
+                    let args = corework::tool_arguments::parse_object(&json)?;
+                    joined.push(format!("EXEC {name} {}", serde_json::Value::Object(args)));
+                    continue;
+                }
+            }
+        }
+        in_legacy_string = syntax_lex::line_ends_in_open_string(line);
+        joined.push(line.to_string());
+    }
+    Ok(joined.join("\n"))
+}
 fn preprocess_runtime_lines(text: &str) -> Result<Vec<String>, String> {
-    syntax_lex::preprocess_lines(text, false)
+    syntax_lex::preprocess_lines(&collapse_json_calls(text)?, false)
         .map(|lines| lines.into_iter().map(|l| l.content).collect())
         .map_err(|err| format!("第 {} 行 {}", err.lineno, err.message))
 }
@@ -403,6 +485,15 @@ fn parse_exec_subject(
     subject: &str,
     variables: &std::collections::HashMap<String, String>,
 ) -> Result<ParsedToolCall, String> {
+    if let Some((name, raw)) = subject.split_once(char::is_whitespace) {
+        if raw.trim_start().starts_with('{') {
+            if name.starts_with('-') || name.starts_with('$') {
+                return Err("invalid tool name".into());
+            }
+            return corework::tool_arguments::parse_object(raw.trim())
+                .map(|args| ParsedToolCall::from_json(name.to_string(), args));
+        }
+    }
     let chunks = tokenize_chunks(subject);
     if chunks.is_empty() {
         return Err("EXEC 决策缺少工具名".to_string());
@@ -436,7 +527,11 @@ fn parse_exec_subject(
         params.push((key.to_string(), value_parts.join(" ")));
     }
 
-    Ok(ParsedToolCall { name, params })
+    Ok(ParsedToolCall {
+        name,
+        params,
+        arguments: None,
+    })
 }
 
 fn parse_runtime_assignment(
@@ -693,9 +788,24 @@ fn join_payload(lines: &[&str]) -> String {
 
 /// 剥离 `<think>...</think>`，返回 (reasoning, 剩余文本)
 /// 与 `decision::strip_think_tags` 行为基本一致，但额外捕获 think 内容供 reasoning 字段用。
+fn is_json_subject(subject: &str) -> bool {
+    subject
+        .split_once(char::is_whitespace)
+        .is_some_and(|(_, raw)| raw.trim_start().starts_with('{'))
+}
+pub(crate) fn find_reasoning_tag(text: &str) -> Option<usize> {
+    text.match_indices("<think>").map(|(i, _)| i).find(|i| {
+        let line = text[..*i].rsplit('\n').next().unwrap_or("").trim();
+        !line
+            .split_once(char::is_whitespace)
+            .is_some_and(|(head, subject)| {
+                head.eq_ignore_ascii_case("EXEC") && is_json_subject(subject)
+            })
+    })
+}
 fn strip_and_capture_think(text: &str) -> (Option<String>, String) {
     let trimmed = text.trim();
-    if let Some(open) = trimmed.find("<think>") {
+    if let Some(open) = find_reasoning_tag(trimmed) {
         if let Some(close) = trimmed[open..].find("</think>") {
             let inner_start = open + "<think>".len();
             let inner_end = open + close;
@@ -988,6 +1098,7 @@ mod tests {
     #[test]
     fn legacy_command_quotes_when_needed() {
         let tc = ParsedToolCall {
+            arguments: None,
             name: "BrowserOpen".to_string(),
             params: vec![
                 ("url".to_string(), "https://example.com".to_string()),
@@ -1004,6 +1115,7 @@ mod tests {
     #[test]
     fn legacy_command_escapes_newlines() {
         let tc = ParsedToolCall {
+            arguments: None,
             name: "Foo".to_string(),
             params: vec![("script".to_string(), "line1\nline2".to_string())],
         };
@@ -1195,6 +1307,52 @@ EXEC ReadTextFile --path $path"#;
         ];
         for s in samples {
             let _ = parse_line_protocol(s); // 只断言不 panic
+        }
+    }
+}
+
+#[cfg(test)]
+mod json_argument_tests {
+    use super::*;
+    #[test]
+    fn json_looking_code_inside_legacy_text_is_not_a_call() {
+        let text = "$script = \"\nEXEC Nested { invalid JSON }\n\"\nEXEC Store --script $script";
+        let parsed = parse_line_protocol(text);
+        assert_eq!(parsed.tool_calls.len(), 1, "{:?}", parsed.outcome);
+        assert_eq!(parsed.tool_calls[0].name, "Store");
+        assert!(parsed.tool_calls[0].params[0]
+            .1
+            .contains("EXEC Nested { invalid JSON }"));
+    }
+    #[test]
+    fn text_json_multiline_is_literal_and_snapshot_roundtrips() {
+        let r = parse_line_protocol(
+            r#"EXEC Probe {
+ "payload":{"text":"EXEC Fake --x bad","pattern":"$() <<END","items":[1,null]},
+ "flag":true,"text":"123"
+}"#,
+        );
+        assert_eq!(r.tool_calls.len(), 1, "{:?}", r.outcome);
+        let c = &r.tool_calls[0];
+        assert_eq!(c.arguments.as_ref().unwrap()["text"], "123");
+        let round: ParsedToolCall =
+            serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
+        assert_eq!(&round, c);
+        let again = parse_line_protocol(&format!("EXEC {}", c.to_legacy_command()));
+        assert_eq!(again.tool_calls, r.tool_calls);
+        let old: ParsedToolCall =
+            serde_json::from_str(r#"{"name":"Old","params":[["x","1"]]}"#).unwrap();
+        assert!(old.arguments.is_none());
+    }
+    #[test]
+    fn invalid_json_never_falls_back_to_cli() {
+        for text in [
+            r#"EXEC Probe {"x":1,"x":2}"#,
+            r#"EXEC Probe {"x":1} trailing"#,
+            "EXEC Probe {",
+            r#"EXEC Probe {'x':1}"#,
+        ] {
+            assert!(parse_line_protocol(text).tool_calls.is_empty(), "{text}")
         }
     }
 }

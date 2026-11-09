@@ -29,14 +29,15 @@ Rules:
 
 - Tool names and parameter names must exactly match the names in the Available
   Tools section.
-- Every parameter name must start with --.
-- Each EXEC call must occupy its own line; do not embed EXEC inside prose.
+- JSON objects are supported: EXEC ToolName {"options":{"limit":10}}. Objects may span lines; keys must be quoted and unique. JSON strings are literal, without variable/expression interpolation.
+- Legacy CLI parameters remain supported and start with --.
+- Start each EXEC call on its own line. JSON may span lines; CLI parameters stay on the call line. Do not embed EXEC in prose.
 - If a parameter value contains spaces, quotes, line breaks, or special
   characters, prefer declaring a response-level variable and referencing it.
 - You may output multiple independent EXEC lines in the same response. If one
   tool call depends on the result of another, wait for the tool result and emit
   the next EXEC in a later turn.
-- Do not output Function Calling, tool_calls, or JSON arguments.
+- Do not emit a native tool_calls envelope in this body protocol; use EXEC plus JSON or CLI arguments.
 - **Never wrap EXEC lines in Markdown fences. Fenced
   lines are treated as normal conversation text and will not execute.**
 

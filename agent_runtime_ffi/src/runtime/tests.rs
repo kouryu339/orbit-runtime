@@ -5716,8 +5716,7 @@ fn restored_native_tool_call_preserves_provider_call_identity() {
     assert_eq!(
         plan.tools,
         vec![
-            r#"QueryLedger --conversation_id current --filters "{\"status\":\"open\"}""#
-                .to_string()
+            r#"QueryLedger {"conversation_id":"current","filters":{"status":"open"}}"#.to_string()
         ]
     );
 }
