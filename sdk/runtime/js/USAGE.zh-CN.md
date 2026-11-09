@@ -1,4 +1,4 @@
-# Orbit Runtime 0.5.3 WASM 使用规范
+# Orbit Runtime 0.5.4 WASM 使用规范
 
 JS／TS 宿主通过 `@orbit-runtime/browser` 在专用 Web Worker 中运行 Runtime。
 Agent 状态机、工具元数据、权限和 Workflow 编译执行共用 Rust 核心。
@@ -7,15 +7,15 @@ Svelte JS 是对话界面，WASM 包是执行 Runtime，二者需要分别接入
 
 ## 获取与安装
 
-从 GitHub 的 `v0.5.3` Release 下载：
+从 GitHub 的 `v0.5.4` Release 下载：
 
-- `orbit-runtime-browser-v0.5.3.tgz`：项目内安装。
-- `orbit-runtime-browser-v0.5.3.zip`：同一组文件，用于静态托管。
+- `orbit-runtime-browser-v0.5.4.tgz`：项目内安装。
+- `orbit-runtime-browser-v0.5.4.zip`：同一组文件，用于静态托管。
 
 安装下载的文件：
 
 ```sh
-npm install ./orbit-runtime-browser-v0.5.3.tgz
+npm install ./orbit-runtime-browser-v0.5.4.tgz
 ```
 
 没有发布到 npm 公共仓库，不能假定 `npm install @orbit-runtime/browser` 能取得本版。

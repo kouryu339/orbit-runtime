@@ -2,7 +2,7 @@
 
 JS／TS 通过独立 Web Worker 加载 Rust WASM。Agent 状态机、工具执行、Workflow 编译器和执行器共用 Native 实现；Native SDK 继续使用 DLL／SO。本包不依赖 Lit 或 Svelte。
 
-0.5.3 是首个浏览器实现，通过 GitHub Release 提供 ZIP 和可安装的 `.tgz`，没有发布到 npm 公共仓库。适用 HTTPS 或 localhost；默认使用 IndexedDB 和 Web Locks。`storage: 'memory'` 明确选择临时资源，不会在存储故障时自动降级。
+0.5.4 是首个浏览器实现，通过 GitHub Release 提供 ZIP 和可安装的 `.tgz`，没有发布到 npm 公共仓库。适用 HTTPS 或 localhost；默认使用 IndexedDB 和 Web Locks。`storage: 'memory'` 明确选择临时资源，不会在存储故障时自动降级。
 
 完整接入规范、部署要求和能力限制见 [USAGE.zh-CN.md](./USAGE.zh-CN.md)。可运行示例位于 [examples/quickstart.js](./examples/quickstart.js)。
 
