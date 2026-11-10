@@ -8,8 +8,10 @@ runtime for assembling the Agent topology a product actually needs: one focused
 Agent, a persistent specialist team, delegated background workers, or a mixture
 of all three.
 
-Desktop apps, services, scripting bridges, and language SDKs can host the same
-runtime through `agent_runtime.dll` / `libagent_runtime.so` and a stable C ABI.
+Desktop apps, services, and scripting hosts embed the Runtime through
+`agent_runtime.dll` / `libagent_runtime.so` and a stable C ABI. Browser products
+use the JS/TS SDK to run the shared Rust core as WASM in a dedicated Web Worker.
+Lit and Svelte provide conversation interfaces for these hosts.
 
 ```text
 Product host
@@ -39,10 +41,12 @@ Chinese and can be opened locally without a build or network connection.
 | **Composable Agent clusters** | Choose delegation, focus handoff, progressive capabilities, and retrieval per role instead of inheriting one topology. |
 | **Skills as capability boundaries** | Role, feature, and system Skills jointly define instructions and the enforced tool allowlist. |
 | **Reliable background work** | Task-scoped authorization, wait/wakeup, input requests, progress, revision, two-phase acceptance, pause, cancellation, and recovery. |
-| **Embeddable native runtime** | Keep Rust internals behind a stable ABI while hosts use C++, Python, Go, Rust, or another bridge. |
+| **Native and browser runtime** | Embed DLL/SO through a stable ABI, or use the JS/TS Worker SDK with the shared WASM core. |
 | **Observable and recoverable state** | Consume ordered events and export snapshots without reconstructing truth from chat text. |
-| **Native or compatible tool protocols** | Select native function calling, legacy textual `EXEC`, or a tool-disabled Agent without hidden fallback between modes. |
-| **Out-of-process business tools** | Implement tool sidecars through a language-neutral gRPC contract and keep product integrations isolated. |
+| **Structured tool calls** | Use native function calling or the complete JSON call format introduced in 0.5.5, with typed arguments and enforced tool access. |
+| **External tools and event sources** | Connect language-neutral RPC tools, dynamically add endpoints, and subscribe to plugin events. |
+| **JSON workflow resources** | Author structured workflow logic while Runtime compiles and validates the execution graph. |
+| **Lit and Svelte interfaces** | Integrate model and reasoning controls, approvals, pause/resume, and host-managed attachments. |
 
 ## Assemble The Cluster You Need
 
@@ -99,7 +103,7 @@ or unrelated Agent IDs.
 ---
 name: policy_recall
 description: "Run a narrower policy lookup when automatic retrieval is insufficient."
-kind: feature
+kind: capability
 tools: ["RagRetrieve"]
 ---
 
@@ -137,69 +141,68 @@ Full working configuration and lifecycle details:
 - [Progressive Skills and per-Agent RAG](examples/guides/en/07-progressive-skills-and-rag.md)
 - [Connect an external RAG service](examples/guides/en/08-external-rag.md)
 
-## Native Function Calling
+## Tool Calling
 
 Each Agent uses one tool transport selected by `toolProtocol`: `native_fc`,
 `exec_legacy`, or `disabled`. Omitting the field defaults to `native_fc`;
-legacy textual `EXEC` behavior must be selected explicitly. Native FC is
+text-mode tool calling is selected through `exec_legacy`. Native FC is
 implemented across OpenAI Chat Completions, OpenAI Responses, and Anthropic
 Messages adapters.
 Tool names, JSON arguments, provider call IDs, Responses output items, and
 formal `tool` results remain structured in the Ledger and survive snapshot
-restoration. Runtime does not silently retry a native call through textual
-`EXEC`.
+restoration.
+
+The 0.5.5 preview adds complete JSON calls to text-mode conversations. A call
+contains a `tool` name and an `args` object. Nested objects, arrays, numbers,
+booleans, strings, and JSON null values retain their types through execution
+and RPC delivery. Legacy `EXEC` syntax remains a compatibility input.
 
 Providers that implement the strict function-schema subset can additionally
 set `strictToolSchema: true`; compatible endpoints keep it disabled. See the
 [Runtime cluster configuration contract](agent_runtime_ffi/docs/en/02-runtime-cluster-config-contract.md)
 for the full configuration and recovery rules.
 
-## 0.4.8 Beta Focus
+## 0.5.5 Feature Overview
 
-The refreshed `0.4.8-beta.2` release candidate makes native function calling
-the default Agent tool transport, adds focused streaming projection, and keeps
-bounded diagnostics off the Runtime event payload path:
+The 0.5.5 feature set builds on the native, browser, and frontend capabilities
+delivered through 0.5.4. The latest published stable release is currently 0.5.4.
+Complete JSON tool calls are available in the
+[0.5.5 preview branch](https://github.com/kouryu339/orbit-runtime/tree/jiangrong/json-tool-arguments).
 
-- **Native FC by default**: Agents that omit `toolProtocol` use `native_fc`;
-  deployments that still need textual `EXEC` select `exec_legacy` explicitly.
-- **Three native provider paradigms**: OpenAI Chat Completions, OpenAI
-  Responses, and Anthropic Messages preserve structured tool calls, arguments,
-  provider call IDs, and formal tool results across Ledger recovery.
-- **Focused streaming snapshots**: all native FC requests stream internally,
-  while only the focused Agent's ephemeral output is projected through
-  `frontend:state_snapshot.assistant_stream`. Provisional tool identity is
-  projected without partial arguments, then reconciled by provider `call_id`
-  with the durable Ledger tool lifecycle. Background Agent streams remain
-  internal and final content is committed once through the Ledger.
-- **Strict tool schemas**: compatible providers may enable closed strict
-  function schemas; invalid active tool metadata fails explicitly without
-  silently falling back to textual `EXEC`.
+- **Complete JSON tool calls and typed arguments**. Text-mode Agents submit a
+  complete `{"tool":"ToolName","args":{}}` object. Native FC and text calls
+  share parameter validation, approval, and execution. RPC plugins receive
+  the typed parameter object through `args_json`.
+- **Structured workflow resources**. Workflow logic is authored as
+  `orbit.workflow.resource/v1` JSON. Runtime compiles it into an execution
+  graph, including conditions, loops, Switch branches, variables, Pure
+  expressions, and reusable workflow references. Draft and formal resources
+  share registration, validation, promotion, and execution contracts.
+- **Dynamic RPC tools and event sources**. Hosts can add tool endpoints while
+  Runtime is running. Plugins also publish events through discovery,
+  subscription, polling, and explicit acknowledgement. Hosts bind accepted
+  events to their own tasks and workflows.
+- **Browser WASM with a JS/TS SDK**. A dedicated Web Worker runs the shared
+  Rust Agent and workflow core, with asynchronous host tools, streaming model
+  calls, approvals, and IndexedDB persistence. Native integrations use the
+  corresponding Windows DLL or Linux SO.
+- **Lit and Svelte conversation interfaces**. Both frontends expose model and
+  reasoning controls, tool approvals, and pause/resume. Svelte also supports
+  host extensions to the attachment menu, file cards, and configured drag/drop
+  formats, and is distributed as a standalone JavaScript artifact.
+- **Dynamic clusters and transactional Skills**. Hosts register clusters and
+  submit Role or Capability Skill content through validated transactions.
+  Runtime enforces live-conversation ownership and version checks when updating
+  definitions.
+- **Conversation lifecycle and recovery**. Hosts pause and resume work,
+  archive full conversation history, and restore it using current Skills and
+  permissions. Snapshots retain messages, tool calls, results, and call IDs.
+- **Scoped retrieval and host file decoding**. Grep/GrepJson combine cluster
+  limits with conversation-specific read grants. Hosts provide text or JSON
+  decoding for additional file formats through the native decoding interface.
 
-- **Model latency diagnostics**: every provider attempt records start, success,
-  failure, retry scheduling, backoff, exhaustion, response headers, streaming
-  first-event latency, completion duration, inter-chunk idle timeout, ten-minute
-  total timeout, stream error, and a missing terminal marker. Streaming uses a
-  15-second connect / 60-second idle / 10-minute total policy, so active streams
-  are not cut off at the former two-minute boundary. Partial argument byte
-  counts are recorded without argument contents.
-- **Tool-protocol retry evidence**: responses rejected before ledger write record
-  the validation reason, thinking attempt, and complete pre-normalization model
-  content in the local Runtime diagnostic log so hidden syntax retries can be
-  reproduced. Treat this diagnostic file as sensitive data.
-- **RPC latency diagnostics**: JSON-lines and gRPC tools record request start,
-  first response, HostCall activity, completion, failure, and timeout using
-  stable call, conversation, Agent, and turn identifiers.
-- **Workflow-aware RPC identity**: RPC Tool calls now carry independent
-  `workflow_id`, `workflow_run_id`, and `node_id` metadata. Agent-started
-  workflows preserve their conversation/Agent/turn origin, while direct and
-  temporary Script runs remain valid without a `workflow_id`.
-- **RPC Tool SDK 0.1.1**: Rust, Python, Node.js, C#, and Java package metadata
-  has been upgraded, and all seven language SDKs expose the new workflow
-  identity fields. Tool-side integrations should upgrade together with this
-  beta when they need workflow-level tracing or routing.
-- **Non-blocking log delivery**: diagnostics use a bounded background writer;
-  saturation drops diagnostic entries with an auditable drop count instead of
-  delaying model or tool execution.
+Download published artifacts from
+[GitHub Releases](https://github.com/kouryu339/orbit-runtime/releases/latest).
 
 ## Repository Layout
 
@@ -209,9 +212,10 @@ bounded diagnostics off the Runtime event payload path:
 | `ai-gateway/` | Model gateway for LLM / VLM / ASR / OCR providers and OpenAI-compatible endpoints. |
 | `ai-assistant/` | Agent runtime: conversation state machine, skills, tool execution, ledger, and persistence. |
 | `agent_runtime_ffi/` | C ABI wrapper that builds the native runtime library. |
+| `agent_runtime_wasm/` | Browser Worker entry point for the shared Rust runtime. |
 | `ui/lit/` | Lit implementation of the shared conversation frontend contract. |
 | `ui/svelte/` | Svelte implementation of the same contract, distributed as frontend build output. |
-| `sdk/` | Runtime Host SDKs and RPC Tool SDKs by language. |
+| `sdk/` | Runtime Host SDKs, the browser JS/TS SDK, and RPC Tool SDKs. |
 | `examples/guides/` | Host integration, skills, tool, frontend, and runtime guides. |
 | `scripts/` | Build, release packaging, and local development helper scripts. |
 
@@ -298,6 +302,7 @@ SDKs live under `sdk/` and are split by integration direction:
 | SDK family | Used by | Direction |
 | --- | --- | --- |
 | Runtime Host SDK | Desktop apps, services, scripting hosts | Host -> Runtime |
+| Browser JS/TS SDK | Browser apps using a dedicated Web Worker | Host -> Worker -> WASM Runtime |
 | RPC Tool SDK | Tool sidecars and product capability adapters | Runtime -> Tool |
 
 See `sdk/README.md` for language support and the native runtime release manifest.
@@ -310,17 +315,23 @@ Release packages are prepared by:
 .\scripts\prepare-release.ps1
 ```
 
-The script currently supports Windows and Linux packages:
+The script prepares native libraries, browser WASM, frontend JavaScript, and
+matching SDK sources:
 
 ```text
 dist/releases/orbit-runtime-runtime-vX.Y.Z-windows-x86_64.zip
 dist/releases/orbit-runtime-runtime-vX.Y.Z-linux-x86_64.zip
+dist/releases/orbit-runtime-browser-vX.Y.Z.zip
+dist/releases/orbit-runtime-browser-vX.Y.Z.tgz
+dist/releases/orbit-runtime-frontend-svelte-vX.Y.Z.js
+dist/releases/orbit-runtime-frontend-svelte-vX.Y.Z.zip
+dist/releases/orbit-runtime-sdk-vX.Y.Z.zip
 ```
 
-Each package contains the native library, `agent_runtime.h`, `LICENSE`, a short
-package README, `NOTICE`, and a `.sha256` checksum next to the zip file. macOS
-artifacts are intentionally not produced by this script because this release
-environment does not provide an Apple build machine.
+Native packages contain the library, `agent_runtime.h`, public schemas,
+integration guides, and license notices. Browser packages include the Worker,
+WASM module, JS/TS SDK, and schemas. Svelte is available as a standalone JS
+file and an archive. Artifacts have adjacent `.sha256` checksums.
 
 Useful variants:
 
@@ -375,12 +386,12 @@ Covered integration paths:
 - FFI runtime creation, startup, command dispatch, event polling, snapshot export, shutdown, and destroy.
 - Agent conversation lifecycle, tool execution, skill loading, ledger state, and persistence contracts.
 - LLM gateway integration for provider configuration and OpenAI-compatible endpoints.
-- Lit frontend integration through host-provided runtime events.
-- Windows and Linux native runtime release package preparation.
+- Lit and Svelte frontend integration through host-provided runtime events.
+- Browser Worker integration through the JS/TS SDK and WASM runtime.
+- Windows DLL, Linux SO, browser WASM, and standalone Svelte packaging.
 
 Still evolving:
 
-- SDK package distribution around the native runtime artifact.
 - Additional host examples and packaging patterns.
 - macOS release packaging from an Apple build environment.
 
