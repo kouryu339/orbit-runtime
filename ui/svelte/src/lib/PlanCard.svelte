@@ -1,9 +1,11 @@
 <script lang="ts">
   import type { ExecutionPlan } from '@agent-runtime/conversation-element/protocol';
+  import type { ConversationHostCapabilities } from '@agent-runtime/conversation-element/host';
   import RichContent from './RichContent.svelte';
   import './plan.css';
   export let plan: ExecutionPlan;
   export let locale = 'en-US';
+  export let capabilities: ConversationHostCapabilities = {};
   let expanded = true;
   let identity = '';
   $: if ((plan.plan_id || plan.created_at || plan.title) !== identity) {
@@ -68,7 +70,7 @@
           </li>{/each}
       </ol>
     {:else}<div class="body">
-        <RichContent content={plan.content ?? ''} {locale} widgetsExpired />
+        <RichContent content={plan.content ?? ''} {locale} {capabilities} widgetsExpired />
       </div>{/if}
   </details>
 </div>

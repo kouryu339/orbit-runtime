@@ -1,8 +1,8 @@
-import { sourceLength, revealBaseline, nextRevealLength, isSafeLink, } from '../content/reveal.js';
+import { sourceLength, revealBaseline, nextRevealLength, } from '../content/reveal.js';
 import { LitElement, css, html } from 'lit';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { parseConversationContent, toolCallForId, toolStatusLabel, toolDisplaySummary, } from '../content/parser.js';
-import { renderSafeMarkdown } from '../content/markdown.js';
+import { handleMarkdownLink, renderSafeMarkdown } from '../content/markdown.js';
 import './mermaid-diagram.js';
 export class ConversationRichContentElement extends LitElement {
     static properties = {
@@ -556,7 +556,7 @@ export class ConversationRichContentElement extends LitElement {
                 }
                 consumed += part.content.length;
                 return html `<div class="part markdown" part="markdown">
-          <div @click=${this.onMarkdownClick}>
+          <div @click=${this.onMarkdownClick} @auxclick=${this.onMarkdownClick}>
             ${unsafeHTML(renderSafeMarkdown(content))}
           </div>
         </div>`;
@@ -832,22 +832,23 @@ export class ConversationRichContentElement extends LitElement {
             this.setWidgetValue(widget, path);
     }
     onMarkdownClick(event) {
+        if (handleMarkdownLink(event, this.capabilities, (error) => {
+            this.dispatchEvent(new CustomEvent('agent-conversation-error', {
+                bubbles: true,
+                composed: true,
+                detail: {
+                    code: 'link-open-failed',
+                    message: error instanceof Error ? error.message : String(error),
+                    recoverable: true,
+                },
+            }));
+        }))
+            return;
+        if (event.type !== 'click')
+            return;
         const target = event.composedPath()[0];
         if (!(target instanceof HTMLElement))
             return;
-        const link = target.closest('a');
-        if (link instanceof HTMLAnchorElement) {
-            const url = link.href;
-            if (!isSafeLink(url)) {
-                event.preventDefault();
-                return;
-            }
-            if (this.capabilities.openLink) {
-                event.preventDefault();
-                void this.capabilities.openLink({ url, source: 'markdown' });
-            }
-            return;
-        }
         const image = target.closest('img');
         if (image instanceof HTMLImageElement && this.capabilities.openImage) {
             event.preventDefault();

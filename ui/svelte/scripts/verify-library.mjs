@@ -34,6 +34,8 @@ for (const key of [
   'Node',
   'Element',
   'HTMLElement',
+  'HTMLAnchorElement',
+  'HTMLAreaElement',
   'HTMLMediaElement',
   'HTMLInputElement',
   'HTMLTextAreaElement',
@@ -41,6 +43,7 @@ for (const key of [
   'Comment',
   'CustomEvent',
   'Event',
+  'MouseEvent',
   'MutationObserver',
   'DOMParser',
   'getComputedStyle',
@@ -84,7 +87,14 @@ const transport = {
     handlers.event({
       type: 'state-snapshot',
       conversationId: 'release-smoke',
-      payload: { conversation_state: 'waiting', ledger_records: [] },
+      payload: {
+        conversation_state: 'waiting',
+        ledger_records: [{
+          record_id: 'link',
+          role: 'assistant',
+          content: '[Report](https://example.invalid/report)',
+        }],
+      },
     });
     return {
       disconnect() {
@@ -108,13 +118,19 @@ const transport = {
   },
 };
 const target = document.querySelector('main');
-const instance = frontend.mountConversation(target, {
-  transport,
-  locale: 'zh-CN',
-  colorScheme: 'light',
-});
+const linkRequests = [];
+const instance = frontend.mountConversation(
+  target,
+  { transport, locale: 'zh-CN', colorScheme: 'light', progressiveReveal: false },
+  { 'agent-conversation-link-open': (event) => linkRequests.push(event.detail) },
+);
 await new Promise((resolve) => setTimeout(resolve, 30));
 assert.ok(target.querySelector('textarea'), 'compiled component mounts');
+const link = target.querySelector('a[href="https://example.invalid/report"]');
+assert.ok(link, 'assistant Markdown link renders');
+const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+assert.equal(link.dispatchEvent(click), false, 'browser navigation is canceled');
+assert.deepEqual(linkRequests, [{ url: 'https://example.invalid/report', source: 'markdown' }]);
 assert.ok(
   document
     .querySelector('#orbit-conversation-svelte-styles')
@@ -133,6 +149,7 @@ console.log(
     passed: true,
     entry: 'orbit-conversation-svelte.js',
     mount: true,
+    linkRouting: true,
     send: true,
     destroy: true,
   }),

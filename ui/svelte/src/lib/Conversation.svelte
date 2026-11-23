@@ -84,6 +84,18 @@
 
   export let state: ConversationState = createConversationState(conversationId);
   const emit = createEventDispatcher<ConversationPublicEventMap>();
+  function forwardLinkRequests(node: HTMLElement) {
+    const forward = (event: Event) => {
+      const { detail } = event as CustomEvent<ConversationPublicEventMap['agent-conversation-link-open']>;
+      emit('agent-conversation-link-open', detail);
+    };
+    node.addEventListener('agent-conversation-link-open', forward);
+    return {
+      destroy() {
+        node.removeEventListener('agent-conversation-link-open', forward);
+      },
+    };
+  }
   let generation = 0;
   let pausing = false;
   type PendingImage = { file: File; previewUrl: string; number: number };
@@ -1624,6 +1636,7 @@
     <main
       class="messages"
       part="message-list"
+      use:forwardLinkRequests
       bind:this={messagesElement}
       aria-live="polite"
       on:scroll={() =>
@@ -1708,7 +1721,7 @@
           </article>
         {/if}
       {/each}
-      {#if state.plan}<PlanCard plan={state.plan} {locale} />{/if}
+      {#if state.plan}<PlanCard plan={state.plan} {locale} {capabilities} />{/if}
       {#if !state.assistantStream?.content && activityLabel(state, zh)}<div
           class="message assistant waiting"
         >

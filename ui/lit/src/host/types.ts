@@ -212,7 +212,8 @@ export type ConversationHostCapabilities = {
     conversationId?: string;
     signal?: AbortSignal;
   }): Promise<{ source: string; alt?: string } | null>;
-  openLink?(request: OpenLinkRequest): Promise<void>;
+  /** Open a rendered link. Without this callback, the view emits agent-conversation-link-open. */
+  openLink?(request: OpenLinkRequest): void | Promise<void>;
   openImage?(request: OpenImageRequest): Promise<void>;
   pickPath?(request: PickPathRequest): Promise<PickPathResult | null>;
   copyText?(text: string): Promise<void>;
@@ -592,6 +593,7 @@ export type ConversationPublicEventMap = {
     value?: unknown;
   };
   'agent-conversation-error': ConversationTransportError;
+  'agent-conversation-link-open': OpenLinkRequest;
   'agent-conversation-diagnostic': {
     code: string;
     message: string;

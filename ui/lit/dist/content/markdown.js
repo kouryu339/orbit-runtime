@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify';
 import katex from 'katex';
 import { Marked } from 'marked';
+import { isSafeLink } from './reveal.js';
 const marked = new Marked({
     gfm: true,
     breaks: true,
@@ -65,6 +66,35 @@ export function renderSafeMarkdown(source) {
         FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
         FORBID_ATTR: ['style', 'srcdoc'],
     });
+}
+/** Route link activation to the host without navigating the conversation view. */
+export function handleMarkdownLink(event, capabilities, onError) {
+    const link = event.composedPath().find((node) => (node instanceof HTMLAnchorElement || node instanceof HTMLAreaElement) &&
+        node.hasAttribute('href'));
+    if (!link)
+        return false;
+    if (event.defaultPrevented || event.button > 1)
+        return true;
+    event.preventDefault();
+    if (!isSafeLink(link.href))
+        return true;
+    const request = { url: link.href, source: 'markdown' };
+    if (capabilities.openLink) {
+        try {
+            void Promise.resolve(capabilities.openLink(request)).catch(onError);
+        }
+        catch (error) {
+            onError(error);
+        }
+    }
+    else {
+        link.dispatchEvent(new CustomEvent('agent-conversation-link-open', {
+            bubbles: true,
+            composed: true,
+            detail: request,
+        }));
+    }
+    return true;
 }
 function renderFormula(expression, displayMode) {
     try {

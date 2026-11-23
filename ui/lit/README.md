@@ -22,6 +22,20 @@ The package exports the custom element, transport and persistence contracts,
 the conversation reducer, and rich-content presentation helpers. Native Runtime
 loading and authorization belong to the host, never to the browser component.
 
+## Open links from conversation content
+
+The host decides where links from Markdown open. Set
+`conversation.capabilities.openLink({ url, source })` to route them to a
+browser, an app page, or your own URL handler. The view cancels browser
+navigation on activation, including modified and middle clicks. It forwards
+resolved `http:`, `https:`, and `mailto:` URLs. Apply your destination policy
+before opening them.
+
+If `openLink` is absent, listen for the bubbling DOM event
+`agent-conversation-link-open` on the conversation element or its container.
+Its `detail` contains the same `{ url, source: 'markdown' }` request. Without
+a handler, clicking leaves the conversation in place.
+
 ## Image input
 
 The attachment button appears when the transport provides `imageInput.importImage`.

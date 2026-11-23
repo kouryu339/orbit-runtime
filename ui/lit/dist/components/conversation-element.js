@@ -1922,6 +1922,7 @@ export class AgentRuntimeConversationElement extends LitElement {
             ? html `<agent-runtime-plan-card
               .plan=${this.state.plan}
               .locale=${this.locale}
+              .capabilities=${this.capabilities}
             ></agent-runtime-plan-card>`
             : nothing}
         ${activityLabel

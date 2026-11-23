@@ -10,7 +10,7 @@
     revealBaseline,
     nextRevealLength,
     sourceLength,
-    isSafeLink,
+    handleMarkdownLink,
     type WidgetDefinition,
   } from '@agent-runtime/conversation-element/content';
   import type { ToolCallView } from '@agent-runtime/conversation-element/protocol';
@@ -104,31 +104,22 @@
     }, 80);
   }
   onDestroy(() => clearInterval(timer));
+  function reportError(cause: unknown) {
+    capabilityError = cause instanceof Error ? cause.message : String(cause);
+    dispatch('error', { message: capabilityError });
+  }
   async function perform(action: () => void | Promise<unknown>) {
     try {
       await action();
     } catch (cause) {
-      capabilityError = cause instanceof Error ? cause.message : String(cause);
-      dispatch('error', { message: capabilityError });
+      reportError(cause);
     }
   }
   function markdownActions(node: HTMLElement) {
     const click = (event: MouseEvent) => {
+      if (handleMarkdownLink(event, capabilities, reportError)) return;
+      if (event.type !== 'click') return;
       if (!(event.target instanceof Element)) return;
-      const anchor = event.target.closest('a');
-      if (anchor) {
-        if (!isSafeLink(anchor.href)) {
-          event.preventDefault();
-          return;
-        }
-        if (capabilities.openLink) {
-          event.preventDefault();
-          void perform(() =>
-            capabilities.openLink!({ url: anchor.href, source: 'markdown' }),
-          );
-        }
-        return;
-      }
       const image = event.target.closest('img');
       if (image && capabilities.openImage) {
         event.preventDefault();
@@ -143,9 +134,11 @@
       }
     };
     node.addEventListener('click', click);
+    node.addEventListener('auxclick', click);
     return {
       destroy() {
         node.removeEventListener('click', click);
+        node.removeEventListener('auxclick', click);
       },
     };
   }

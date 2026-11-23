@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import './rich-content.js';
 /** A single, live plan projection. Step content is always rendered as text. */
 export class AgentRuntimePlanCard extends LitElement {
-    static properties = { plan: { attribute: false }, locale: { type: String } };
+    static properties = { plan: { attribute: false }, locale: { type: String }, capabilities: { attribute: false } };
     constructor() { super(); this.locale = 'en'; }
     expanded = true;
     identity = '';
@@ -59,7 +59,7 @@ export class AgentRuntimePlanCard extends LitElement {
         <span class="mark" aria-hidden="true">${({ completed: '✓', in_progress: '●', pending: '○', blocked: '!', canceled: '−' })[step.status]}</span>
         <span class="text">${step.text}</span>
         <span class="step-status">${labels[step.status]}</span>
-      </li>`)}</ol>` : html `<div class="body"><agent-conversation-rich-content .content=${plan.content ?? ''}></agent-conversation-rich-content></div>`}
+      </li>`)}</ol>` : html `<div class="body"><agent-conversation-rich-content .content=${plan.content ?? ''} .capabilities=${this.capabilities ?? {}}></agent-conversation-rich-content></div>`}
     </details>`;
     }
 }

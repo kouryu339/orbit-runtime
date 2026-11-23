@@ -24,6 +24,14 @@ as a standalone HTML page. The host still supplies a ConversationTransport.
 Exports include `Conversation`, `RichContent`, `ProviderEditor`, `PlanCard`,
 `mountConversation`, and shared host/protocol/transport runtime utilities.
 
+Pass `capabilities.openLink({ url, source })` when mounting to choose how links
+from Markdown open. If the callback is absent, pass an
+`agent-conversation-link-open` listener in the third argument of
+`mountConversation`, or listen for the bubbling DOM event on the mount
+container. Its `detail` is `{ url, source: 'markdown' }`. Both paths leave the conversation view in
+place, including when the user uses a modifier key or middle click. The host
+receives resolved `http:`, `https:`, and `mailto:` URLs and decides which to open.
+
 Pass `composerActions` to `mountConversation` to add host actions to the ＋
 menu. Each item takes a unique `id`, a `label`, and a
 `run({ conversationId })` callback. The optional `disabled` flag disables
