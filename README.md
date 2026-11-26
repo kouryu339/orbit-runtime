@@ -152,7 +152,7 @@ Tool names, JSON arguments, provider call IDs, Responses output items, and
 formal `tool` results remain structured in the Ledger and survive snapshot
 restoration.
 
-The 0.5.5 preview adds complete JSON calls to text-mode conversations. A call
+Starting with 0.5.5, text-mode conversations accept complete JSON calls. A call
 contains a `tool` name and an `args` object. Nested objects, arrays, numbers,
 booleans, strings, and JSON null values retain their types through execution
 and RPC delivery. Legacy `EXEC` syntax remains a compatibility input.
@@ -162,47 +162,24 @@ set `strictToolSchema: true`; compatible endpoints keep it disabled. See the
 [Runtime cluster configuration contract](agent_runtime_ffi/docs/en/02-runtime-cluster-config-contract.md)
 for the full configuration and recovery rules.
 
-## 0.5.5 Feature Overview
+## What's New in 0.5.5
 
-The 0.5.5 feature set builds on the native, browser, and frontend capabilities
-delivered through 0.5.4. The latest published stable release is currently 0.5.4.
-Complete JSON tool calls are available in the
-[0.5.5 preview branch](https://github.com/kouryu339/orbit-runtime/tree/jiangrong/json-tool-arguments).
+- **Complete JSON tool calls and typed arguments**. Text-mode Agents use
+  `{"tool":"ToolName","args":{}}`. Native function calling and text-mode calls
+  share validation and approval. RPC tools receive typed data in `args_json`.
+  [JSON tool arguments](agent_runtime_ffi/docs/zh/20-json-tool-arguments.md)
+- **Asynchronous workflow execution**. Subscribe to workflow events, then submit
+  `workflow.execute`. The response contains a `run_id` and `status: "accepted"`.
+  Match `workflow.execution_completed` by `payload.run_id` to get the outputs or
+  error. `workflow.start` and `workflow.run` have been removed.
+  [Workflow execution contract](agent_runtime_ffi/docs/en/11-runtime-workflow-execution-contract.md)
+- **Host-controlled links in Lit and Svelte**. The host chooses how to open
+  conversation links through `capabilities.openLink` or the
+  `agent-conversation-link-open` event.
+  [Frontend integration](ui/svelte/RELEASE-README.md)
 
-- **Complete JSON tool calls and typed arguments**. Text-mode Agents submit a
-  complete `{"tool":"ToolName","args":{}}` object. Native FC and text calls
-  share parameter validation, approval, and execution. RPC plugins receive
-  the typed parameter object through `args_json`.
-- **Structured workflow resources**. Workflow logic is authored as
-  `orbit.workflow.resource/v1` JSON. Runtime compiles it into an execution
-  graph, including conditions, loops, Switch branches, variables, Pure
-  expressions, and reusable workflow references. Draft and formal resources
-  share registration, validation, promotion, and execution contracts.
-- **Dynamic RPC tools and event sources**. Hosts can add tool endpoints while
-  Runtime is running. Plugins also publish events through discovery,
-  subscription, polling, and explicit acknowledgement. Hosts bind accepted
-  events to their own tasks and workflows.
-- **Browser WASM with a JS/TS SDK**. A dedicated Web Worker runs the shared
-  Rust Agent and workflow core, with asynchronous host tools, streaming model
-  calls, approvals, and IndexedDB persistence. Native integrations use the
-  corresponding Windows DLL or Linux SO.
-- **Lit and Svelte conversation interfaces**. Both frontends expose model and
-  reasoning controls, tool approvals, and pause/resume. Svelte also supports
-  host extensions to the attachment menu, file cards, and configured drag/drop
-  formats, and is distributed as a standalone JavaScript artifact.
-- **Dynamic clusters and transactional Skills**. Hosts register clusters and
-  submit Role or Capability Skill content through validated transactions.
-  Runtime enforces live-conversation ownership and version checks when updating
-  definitions.
-- **Conversation lifecycle and recovery**. Hosts pause and resume work,
-  archive full conversation history, and restore it using current Skills and
-  permissions. Snapshots retain messages, tool calls, results, and call IDs.
-- **Scoped retrieval and host file decoding**. Grep/GrepJson combine cluster
-  limits with conversation-specific read grants. Hosts provide text or JSON
-  decoding for additional file formats through the native decoding interface.
-
-Download published artifacts from
-[GitHub Releases](https://github.com/kouryu339/orbit-runtime/releases/latest).
+Download Windows, Linux, browser WASM, Svelte, and SDK artifacts from the
+[v0.5.5 release](https://github.com/kouryu339/orbit-runtime/releases/tag/v0.5.5).
 
 ## Repository Layout
 

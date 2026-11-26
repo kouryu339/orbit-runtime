@@ -61,9 +61,12 @@ def main() -> None:
         assert files["schemas/skill-transaction.schema.json"] == (repo / "agent_runtime_ffi/docs/skill-transaction.schema.json").read_bytes()
         assert files["schemas/rpc-endpoint-add.schema.json"] == (repo / "agent_runtime_ffi/docs/rpc-endpoint-add.schema.json").read_bytes()
         assert files["schemas/event-source.schema.json"] == (repo / "agent_runtime_ffi/docs/event-source.schema.json").read_bytes()
+        assert files["schemas/tool-call.schema.json"] == (repo / "agent_runtime_ffi/docs/tool-call.schema.json").read_bytes()
         assert files["proto/corework_event_source_v1.proto"] == (repo / "corework/proto/corework_event_source_v1.proto").read_bytes()
         assert files["docs/zh/18-rpc-event-sources.md"] == (repo / "agent_runtime_ffi/docs/zh/18-rpc-event-sources.md").read_bytes()
         for language in ("zh", "en"):
+            contract = f"docs/{language}/11-runtime-workflow-execution-contract.md"
+            assert files[contract] == (repo / "agent_runtime_ffi" / contract).read_bytes()
             assert files[f"docs/{language}/workflow-json-source-syntax.md"] == (repo / f"ai-assistant/prompts/{language}/workflow_tool_rules.md").read_bytes()
             assert files[f"docs/{language}/17-dynamic-rpc-additions.md"] == (repo / f"agent_runtime_ffi/docs/{language}/17-dynamic-rpc-additions.md").read_bytes()
         info = json.loads(files["build-info.json"])
@@ -107,6 +110,7 @@ def main() -> None:
     for filename, info in browser_manifest["files"].items():
         content = browser_files[f"dist/{filename}"]
         assert len(content) == info["bytes"] and digest(content) == info["sha256"]
+    assert browser_files["dist/schemas/tool-call.schema.json"] == (repo / "agent_runtime_ffi/docs/tool-call.schema.json").read_bytes()
     assert browser_files["dist/wasm/orbit_runtime_wasm_bg.wasm"][:8] == b"\0asm\x01\0\0\0"
     for filename, content in browser_files.items():
         assert content == (repo / "sdk/runtime/js" / filename).read_bytes(), filename

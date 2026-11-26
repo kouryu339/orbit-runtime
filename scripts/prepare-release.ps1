@@ -272,6 +272,7 @@ function New-ReleasePackage($platform) {
     Copy-RequiredFile (Join-Path $repo 'sdk/runtime/js/USAGE.zh-CN.md') (Join-Path $packageRoot 'docs/browser-wasm-usage.zh-CN.md')
     foreach ($language in @('zh', 'en')) {
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/07-runtime-persistence-and-recovery-contract.md") (Join-Path $packageRoot "docs/$language/07-runtime-persistence-and-recovery-contract.md")
+        Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/11-runtime-workflow-execution-contract.md") (Join-Path $packageRoot "docs/$language/11-runtime-workflow-execution-contract.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\12-workflow-resource-api.md") (Join-Path $packageRoot "docs\$language\12-workflow-resource-api.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi\docs\$language\13-dynamic-agent-clusters.md") (Join-Path $packageRoot "docs\$language\13-dynamic-agent-clusters.md")
         Copy-RequiredFile (Join-Path $repo "agent_runtime_ffi/docs/$language/14-skill-candidate-transactions.md") (Join-Path $packageRoot "docs/$language/14-skill-candidate-transactions.md")

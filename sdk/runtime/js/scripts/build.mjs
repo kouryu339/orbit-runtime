@@ -35,6 +35,10 @@ for (const name of ["logic.schema.json", "resource.schema.json"])
     new URL(`../../../../corework/src/workflow/${name}`, import.meta.url),
     new URL(`../dist/schemas/${name}`, import.meta.url),
   );
+await cp(
+  new URL("../../../../agent_runtime_ffi/docs/tool-call.schema.json", import.meta.url),
+  new URL("../dist/schemas/tool-call.schema.json", import.meta.url),
+);
 const metadata = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
@@ -50,6 +54,7 @@ for (const name of [
   "wasm/orbit_runtime_wasm_bg.wasm.d.ts",
   "schemas/logic.schema.json",
   "schemas/resource.schema.json",
+  "schemas/tool-call.schema.json",
   "LICENSE",
   "NOTICE",
 ]) {
