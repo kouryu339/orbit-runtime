@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orbit text tool call",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "args"
+  ],
+  "properties": {
+    "tool": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "args": {
+      "type": "object"
+    }
+  }
+}

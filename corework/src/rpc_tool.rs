@@ -996,12 +996,18 @@ impl DynamicExecute for RpcStubSystem {
         let tool_call_id = input
             .remove("__tool_call_id")
             .and_then(|value| value.as_str().map(ToOwned::to_owned));
-        let args_cli = input
-            .get("command")
-            .or_else(|| input.get("input"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
+        let json_input = input
+            .get("input")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.trim_start().starts_with('{'));
+        let args_cli = (if json_input {
+            input.get("input")
+        } else {
+            input.get("command").or_else(|| input.get("input"))
+        })
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
         let args_json = build_rpc_args_json(&metadata, input, &args_cli)?;
         let call_id = uuid::Uuid::new_v4().to_string();
         let tool_call_id = tool_call_id.unwrap_or_else(|| call_id.clone());
@@ -1017,7 +1023,7 @@ impl DynamicExecute for RpcStubSystem {
         let host_context = resolve_rpc_tool_host_context(ctx).await?;
         let request = AgentToolRequest {
             tool_name: self.tool_name.clone(),
-            args_cli,
+            args_cli: if json_input { String::new() } else { args_cli },
             args_json,
             call_id: call_id.clone(),
             tool_call_id: tool_call_id.clone(),
@@ -1261,6 +1267,38 @@ fn build_rpc_args_json(
     input: HashMap<String, Value>,
     args_cli: &str,
 ) -> Result<Value> {
+    if args_cli.trim_start().starts_with('{') {
+        let mut args =
+            crate::tool_arguments::parse_object(args_cli).map_err(FrameworkError::InvalidData)?;
+        for key in args.keys() {
+            if !metadata.parameters.iter().any(|p| p.name == *key) {
+                return Err(FrameworkError::InvalidData(format!(
+                    "Unknown parameter '{key}'"
+                )));
+            }
+        }
+        for p in &metadata.parameters {
+            if !args.contains_key(&p.name) {
+                if let Some(default) = &p.default_value {
+                    args.insert(p.name.clone(), coerce_rpc_arg_value(p, default)?);
+                } else if p.required {
+                    return Err(FrameworkError::InvalidData(format!(
+                        "Missing parameter '{}'",
+                        p.name
+                    )));
+                }
+            }
+            if let Some(v) = args.get(&p.name) {
+                if !crate::tool_arguments::matches_type(v, &p.param_type) {
+                    return Err(FrameworkError::InvalidData(format!(
+                        "Parameter '{}' must be {}",
+                        p.name, p.param_type
+                    )));
+                }
+            }
+        }
+        return Ok(Value::Object(args));
+    }
     let mut args_json = serde_json::Map::new();
 
     if !args_cli.trim().is_empty() {
@@ -1299,6 +1337,18 @@ fn build_rpc_args_json(
 
 fn coerce_rpc_arg_value(parameter: &RuntimeAIParameter, raw: &str) -> Result<Value> {
     let ty = parameter.param_type.trim().to_ascii_lowercase();
+    if matches!(
+        ty.as_str(),
+        "json" | "any" | "value" | "serde_json::value" | "object" | "map"
+    ) {
+        let value =
+            serde_json::from_str::<Value>(raw).map_err(|_| invalid_rpc_arg(parameter, raw))?;
+        return if crate::tool_arguments::matches_type(&value, &ty) {
+            Ok(value)
+        } else {
+            Err(invalid_rpc_arg(parameter, raw))
+        };
+    }
     if is_rpc_array_type(&ty) {
         if ty == "stringarray" || ty == "string[]" || ty == "array<string>" {
             if raw.trim().is_empty() {
@@ -2889,5 +2939,35 @@ mod tests {
         assert!(output.to_ai.contains("missing required argument"));
         assert!(output.to_ai.contains("Remote message: path is required"));
         assert_ne!(output.to_ai, "path is required");
+    }
+}
+
+#[cfg(test)]
+mod json_argument_tests {
+    use super::*;
+    #[test]
+    fn rpc_json_arguments_preserve_types_and_cli_still_works() {
+        let m:RuntimeToolMetadata=serde_json::from_value(serde_json::json!({"name":"Probe","endpoint_id":"fixture","service":"fixture","method":"execute","parameters":[{"name":"payload","param_type":"Json","required":true},{"name":"count","param_type":"Number","required":true},{"name":"label","param_type":"String","required":true}]})).unwrap();
+        let raw = r#"{"payload":{"values":[true,null,1]},"count":2,"label":"123"}"#;
+        let v = build_rpc_args_json(&m, HashMap::new(), raw).unwrap();
+        assert_eq!(v, serde_json::from_str::<Value>(raw).unwrap());
+        let legacy = build_rpc_args_json(
+            &m,
+            HashMap::new(),
+            r#"--payload {"items":[1,null]} --count 2 --label 123"#,
+        )
+        .unwrap();
+        assert!(legacy["payload"].is_object());
+        assert_eq!(legacy["label"], "123");
+        for raw in [
+            r#"{"payload":null,"count":"2","label":"x"}"#,
+            r#"{"payload":null,"count":2}"#,
+            r#"{"payload":null,"count":2,"label":"x","extra":1}"#,
+        ] {
+            assert!(
+                build_rpc_args_json(&m, HashMap::new(), raw).is_err(),
+                "{raw}"
+            )
+        }
     }
 }

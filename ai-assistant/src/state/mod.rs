@@ -213,6 +213,7 @@ mod tests {
             .set(
                 keys::PENDING_STRUCTURED_TOOLS,
                 &vec![crate::decision_line::ParsedToolCall {
+                    arguments: None,
                     name: "ReadFile".to_string(),
                     params: vec![],
                 }],

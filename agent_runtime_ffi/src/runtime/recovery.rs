@@ -336,6 +336,15 @@ fn native_tool_call(
         .ok()?
         .as_object()?
         .clone();
+    if !matches!(
+        call.function.name.as_str(),
+        "RunWorkflow" | "executeWorkflow"
+    ) {
+        return Some(ai_assistant::decision_line::ParsedToolCall::from_json(
+            call.function.name.clone(),
+            corework::tool_arguments::parse_object(&call.function.arguments).ok()?,
+        ));
+    }
     let mut params = Vec::new();
     for (name, value) in arguments {
         if value.is_null() {
@@ -359,6 +368,7 @@ fn native_tool_call(
         ));
     }
     Some(ai_assistant::decision_line::ParsedToolCall {
+        arguments: None,
         name: call.function.name.clone(),
         params,
     })

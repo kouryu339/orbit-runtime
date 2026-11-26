@@ -306,6 +306,19 @@ impl SimpleArgs {
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
         let mut args = HashMap::new();
+        if input.starts_with('{') {
+            let object =
+                crate::tool_arguments::parse_object(input).map_err(FrameworkError::InvalidData)?;
+            for (k, v) in object {
+                args.insert(
+                    k,
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string()),
+                );
+            }
+            return Ok(Self { args });
+        }
 
         // 直接在原始字符串上解析，不先 tokenize
         let mut i = 0;
@@ -537,6 +550,11 @@ pub struct AIInput {
 }
 
 impl AIInput {
+    /// Read the original typed arguments for JSON/FC calls. CLI tools may keep parse_args().
+    pub fn json_arguments(&self) -> Result<serde_json::Map<String, serde_json::Value>> {
+        crate::tool_arguments::parse_object(&self.input).map_err(FrameworkError::InvalidData)
+    }
+
     /// 解析 CLI 参数为 `SimpleArgs` 键值对
     pub fn parse_args(&self) -> Result<SimpleArgs> {
         SimpleArgs::parse(&self.input)
