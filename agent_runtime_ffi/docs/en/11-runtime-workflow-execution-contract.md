@@ -10,66 +10,7 @@ after `start`; workflow resources are the intentional mutable exception.
 
 ## 11.1 Commands
 
-| Command | Payload | Result |
-|---|---|---|
-| `workflow.create` | `resource` | Create an untrusted Draft. |
-| `workflow.read` | `id` | Read a Draft or Registered resource. |
-| `workflow.register` | `id`, `expected_revision?`, `name?` | Promote a valid Draft to Registered. |
-| `workflow.revise` | `id`, `expected_revision`, `change` | Compile and save logic_source / logic. |
-| `workflow.validate_revision` | `id`, `expected_revision`, `change` | Validate without committing a revision. |
-| `workflow.compile` | `id` | Return Draft validation and blueprint. |
-| `workflow.delete` | `id`, `expected_revision?` | Delete either kind. |
-| `workflow.list` | `kind?` | `{ "workflows": [...] }`; kind is `draft` or `registered`. |
-| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | Execute Registered, or Draft with `mode=test`. |
-| `workflow.describe_inputs` | `id` | Return structured input metadata for host-generated forms. |
-| `workflow.start` | none | Create an execution channel and return `workflow_run_id` without running a workflow. |
-| `workflow.run` | `workflow_run_id`, `id`, `mode?`, `inputs?`, optional caller identity | Start work on a previously created and observed channel; each id is one-shot. |
-
-Catalog commands require a started Runtime. Only Draft can be created. A Draft
-may preserve invalid script for editing, but it cannot be promoted until
-compilation succeeds. Promotion preserves the stable id. Names are unique
-across Draft and Registered. A resource uses
-`agent-runtime-workflow-resource/v1`:
-
-```json
-{
-  "resource": {
-    "schema": "agent-runtime-workflow-resource/v1",
-    "id": "open-page",
-    "name": "Open page",
-    "description": "Open a URL and return the browser page identity",
-    "script": "input url:String\n1: EXEC BrowserOpenPage --url input.url\nreturn page_id=1.page_id url=1.url"
-  }
-}
-```
-
-Every view exposes `kind`, `revision`, `trusted`, and `production_executable`.
-`expected_revision` is optional optimistic concurrency for lost-update
-protection inside one catalog; cross-process coordination remains host-owned.
-Create and update accept exactly one source representation, `script` or
-`blueprint`. A valid read exposes both. Script is the compact semantic form for
-AI and source review; Blueprint JSON is the executable graph and owns visual
-layout. Recompiling a script migrates existing position, size, display, and
-layout metadata by node id or source step. The two conversion commands are
-stateless: they do not create resources, advance revisions, or emit events.
-
-Scripts, AI prompts, and Runtime tool/node catalogs exposed to hosts use `num`
-as the single public numeric type. The compiler continues accepting historical
-numeric type labels and canonicalizes them to `num`, preserving old scripts.
-Runtime's concrete internal numeric representation is not part of script or
-ABI semantics.
-
-Inside nested `FOR` blocks, `$item` and `$index` always refer to the innermost
-loop; entering that loop temporarily shadows the outer bindings. To use an
-outer item inside the nested loop, declare a variable first and save the value
-with `setvar` in the outer loop. The outer implicit bindings are restored after
-the inner loop exits.
-
-Drafts live in Runtime state; Registered workflows are persisted in the
-configured workflow root. Durable Draft recovery is host-owned.
-`inputs` must be an object. Registered execution omits mode. Draft execution is
-only allowed with `mode=test`; language SDKs expose that as
-`test_workflow_draft`.
+See the [Workflow resource API](12-workflow-resource-api.md) for public catalog and execution commands. They are available after Runtime startup.
 
 ## 11.2 Tool Output Projection
 
@@ -102,54 +43,23 @@ If a tool has no registered output fields, its node has no data output pins.
 Referencing any field then fails compilation as a missing node output, rather
 than suggesting a transport-level `Result` pin.
 
-## 11.3 Program Result
+## 11.3 Submission and Results
 
-On success both execution commands return:
+Subscribe to workflow events before calling `workflow.execute` with a Draft or
+Registered resource ID. Native hosts continuously read `agent_runtime_next_event_v1`.
+Browser hosts use the SDK's `subscribe` method. An accepted submission returns
+`{"run_id":"wf-123","workflow_id":"example","status":"accepted"}`.
 
-```json
-{
-  "code": 0,
-  "run_id": "wf-...",
-  "trace": "Workflow execution trace:\n- line 2 step 1 succeeded: ...",
-  "result": {
-    "outputs": {
-      "page_id": "page-1",
-      "url": "https://example.com"
-    },
-    "duration_ms": 12
-  }
-}
-```
+Events may arrive before the command response. Collect events from subscription
+time and correlate them using the returned `run_id`. Different runs can interleave.
+Order and deduplicate each run by `payload.sequence`. A rejected submission
+returns a command error.
 
-`result.outputs` is the output map of the workflow End/`return` node. Internal
-node outputs are not automatically copied into the program result; scripts
-must connect every value required by the host in the final `return` statement.
-When request `trace=true`, `result.node_trace` additionally contains the
-structured per-node trace.
-Once execution is established, the top-level `run_id` is always present and
-does not depend on the `trace` flag. Draft `mode=test` runs, registered runs,
-and `workflow.execute_script` follow the same rule. Compilation failures,
-missing resources, and failures before an execution context exists have no
-`run_id`.
-
-Node execution failures return `code=-1` and text `trace`. `result` remains
-available and, when `trace=true`, retains a structured `result.node_trace`
-including the failed node. Compilation and setup failures may omit `result`
-because node execution never started. Compilation failures additionally return
-structured `diagnostics[]` entries with `severity`, `kind`, `line`, `col`,
-`message`, and optional `suggestion`:
-
-| Code | Meaning |
-|---|---|
-| `400` | Invalid request, script compilation failure, or workflow setup failure. |
-| `404` | Registered workflow selector was not found. |
-| `-1` | Execution started but a node or workflow failed. |
-
-Compilation failures include the source line and compiler message, and tell
-callers to verify that every referenced tool is present in the current Agent's
-active tools with explicit registered description, input pins, and output pins.
-Execution trace includes node status, source line, duration, input/result
-previews, AI-facing node message, and error details.
+In the terminal `workflow.execution_completed` event, `payload.result` holds the
+End/return output object on success. On failure, `payload.error` has the error
+code and message. Both include `payload.run_id`, `status`, `code`, and
+`duration_ms`. Set `trace:true` to include `payload.node_trace`. Progress events
+are always emitted.
 
 ## 11.4 Audit and Host Ownership
 
@@ -200,29 +110,14 @@ structured summary of output-pin values for details and diagnostics; it neither
 transfers DAG data nor replaces an available `to_ai`. Pure and control nodes may
 fall back to control-flow facts or result previews when no `to_ai` exists.
 
-Asynchronous execution is two-phase. The host calls `workflow.start`, subscribes
-to events filtered by the returned `workflow_run_id`, and only then calls
-`workflow.run`. This removes the first-event race even when execution emits before
-`workflow.run` returns. `created` means only that the identity exists; `running`
-means dispatch succeeded, while compilation, validation, or execution may still
-fail through a terminal event. Each id is one-shot. Hosts order and deduplicate
-events by `(workflow_run_id, sequence)`.
-
 Control-flow facts use `workflow.trace_event`: `branch.selected`, `loop.started`,
 `loop.iteration.started`, `loop.iteration.completed`, optional iteration failure,
 and `loop.completed`. Repeated execution of the same static node receives a fresh
 `execution_id`; loop-body nodes use the iteration identity as their parent. The
 loop node completes only after its actual body execution finishes.
 
-Runtime stores no Trace history, execution details, or terminal results. It keeps
-only a small active control record and releases it after the terminal event. At
-most 128 records may be active; a channel that was created but never run expires
-lazily after ten minutes. The host owns event persistence, replay APIs, and
-indexes by `execution_id`.
-The Core-to-event-bus forwarding queue is bounded as well. Queue overflow or
-closure fails the run with an explicit Trace-delivery error at the last contiguous
-sequence instead of silently dropping events and reporting success.
-The End-node result is published in the terminal event with a 16 MiB limit.
+Runtime accepts up to 128 concurrent runs. Hosts own continuous event consumption, persistence, and replay. Runtime shutdown waits for accepted runs to finish.
+The End-node result is published in the terminal event with a 16 MiB payload limit.
 Exceeding it fails explicitly with `WORKFLOW_RESULT_TOO_LARGE`. For smaller event
 payloads, tools should persist large data themselves and return a durable reference;
 Runtime must not manufacture a reference to an in-memory result store.

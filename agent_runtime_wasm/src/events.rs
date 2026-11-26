@@ -40,6 +40,9 @@ impl EventProjector {
         };
         let mut envelope = json!({"schema":"agent-runtime-event/v1","type":event_type,"source":event.event_type,
             "event_id":event.event_id,"timestamp":event.timestamp,"payload":event.payload});
+        if event_type.starts_with("workflow.") {
+            envelope["event_line"] = json!("workflow");
+        }
         if let Some(id) = event
             .conversation_id
             .as_deref()

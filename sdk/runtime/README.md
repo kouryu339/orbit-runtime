@@ -277,117 +277,19 @@ for snapshot version checks, persistence ownership and SDK methods.
 
 ## Dynamic Workflow ABI
 
-Skill candidates can be saved directly with `runtime.commit_skill_transaction`
-after reading `runtime.read_skill`; use `runtime.validate_skill_transaction` for
-validation without writes or execution. The payload includes content versions,
-`expected_store_revision`, full SKILL.md sources and optional cluster configuration.
-Runtime atomically publishes a managed manifest and restores it on restart.
-See [the candidate transaction contract](../../agent_runtime_ffi/docs/en/14-skill-candidate-transactions.md).
+See the [Workflow resource API](../../agent_runtime_ffi/docs/en/12-workflow-resource-api.md)
+for the JSON catalog, revision and execution rules.
 
-Existing Workflow resource edits now become drafts. Active runs reserve the root
-and all recursive references, and reject edits with `workflow_in_use` until release.
-Formal callers of a draft are visible but blocked until dependencies are promoted.
+Subscribe to workflow events before calling `workflow.execute` (SDK
+`execute_workflow` or its language equivalent). It accepts a Draft or Registered
+ID, optional `inputs` and `trace`, and paired `conversation_id` and `agent_id` when
+tools need caller identity. An accepted request immediately returns `run_id`.
+Detect this contract with `features.workflow_async_execute == 1`.
 
-ABI 1.3 keeps initialization registration frozen after `start`, but exposes a
-separate dynamic workflow catalog through `agent_runtime_invoke_v1`. A resource
-has a stable id and is either an untrusted `draft` or trusted `registered`
-workflow. Names are unique across both kinds.
-
-| Command | Purpose |
-|---|---|
-| `workflow.create` | Create an untrusted Draft; invalid script may be saved. |
-| `workflow.read` | Read a Draft or Registered resource by stable id. |
-| `workflow.register` | Promote a valid Draft to Registered while preserving its id. |
-| `workflow.update` | Update an existing resource, optionally guarded by `expected_revision`. |
-| `workflow.compile` | Return Draft validation and compiled blueprint. |
-| `workflow.delete` | Delete either kind, optionally guarded by `expected_revision`. |
-| `workflow.list` | List both kinds, or filter with `kind=draft|registered`. |
-| `workflow.convert.script_to_blueprint` | Compile script into Blueprint JSON without catalog mutation. |
-| `workflow.convert.blueprint_to_script` | Validate and decompile Blueprint JSON without catalog mutation. |
-| `workflow.execute` | Execute Registered by id; Draft requires explicit `mode=test`. |
-| `workflow.execute_script` | Compile and execute temporary workflow script text without registration. |
-| `workflow.describe_inputs` | Read structured input metadata for host-generated forms. |
-| `workflow.start` | Create a one-shot execution channel and return its `workflow_run_id` without running work. |
-| `workflow.run` | Start a registered, draft-test, or temporary-script workflow on that pre-observed channel. |
-
-For asynchronous execution, call `workflow.start`, subscribe by the returned
-`workflow_run_id`, and then call `workflow.run`. Runtime emits ordered Trace
-events but does not retain their history; host applications own persistence and replay.
-
-Only Draft can be created. Create and update require exactly one source
-representation: `script` or `blueprint`. When that representation is valid,
-Runtime derives and returns both forms. Script updates preserve existing visual
-layout by stable node id and source step; Blueprint updates preserve the exact
-canvas layout supplied by the caller. Registered resources persist Blueprint
-JSON because it contains both executable graph structure and editor layout.
-
-The conversion commands are stateless helpers. They do not create resources,
-advance revisions, or emit Workflow events. Language SDKs expose them as
-`workflow_script_to_blueprint` / `workflow_blueprint_to_script` or the local
-language equivalent.
-
-SDKs expose Registered execution as
-`execute_workflow` and explicit Draft testing as `test_workflow_draft`; hosts do
-not need to construct the low-level mode field. Conversation-initiated runs
-must pass `conversation_id` and `agent_id` together so local/RPC tools receive
-the correct per-execution caller context. Create and update accept script
-or blueprint content:
-
-```json
-{
-  "resource": {
-    "schema": "agent-runtime-workflow-resource/v1",
-    "id": "invoice-export",
-    "name": "Invoice Export",
-    "description": "Export one invoice",
-    "script": "input invoice_id\nreturn result=$invoice_id"
-  }
-}
-```
-
-Responses expose `kind`, `revision`, `trusted`, and `production_executable` so
-AI and hosts never infer trust from the user-visible name. `expected_revision`
-is an optional single-catalog lost-update guard, not distributed coordination.
-Drafts live in Runtime state; Registered resources are persisted under the
-configured workflow root. A host that needs Draft recovery persists Workflow
-events/views and recreates the Draft after restart.
-
-Execution accepts an object-valued `inputs` field and optional `trace`. Catalog
-mutations are immediately visible to the AI workflow tools. The Runtime emits
-`workflow.resource_changed` plus ordered workflow execution/node lifecycle events for host audit,
-but does not choose Redis, database, authorization, distributed locking, or
-cross-Pod coordination policy. Calls on one Runtime handle remain serialized by
-ABI 1; multi-process coordination belongs to the host.
-
-Both execution commands mirror the AI workflow systems while adding a
-program-facing result:
-
-```json
-{
-  "code": 0,
-  "run_id": "wf-...",
-  "trace": "Workflow execution trace:\n- line 2 step 1 succeeded: ... result=...",
-  "result": {
-    "outputs": {"result": "value"},
-    "duration_ms": 12
-  }
-}
-```
-
-`trace` is the existing per-node workflow trace rendered with each node's
-AI message, input/result previews, status, source line, duration, and error. A non-zero
-`code=-1` retains `result` so `trace=true` can expose the failed node. Script compilation failures use code `400` and include
-the source line in `trace`; missing workflows use `404`; execution
-failures use `-1`. Setting the request's optional `trace` flag to `true` also
-includes the structured node trace as `result.node_trace`.
-Every established run returns the same `run_id` at the response top level,
-including draft test runs and requests with `trace=false`.
-
-Workflow events use the global `event_line: "workflow"` projection and carry a
-`workflow_id`; they never carry `conversation_id` or participate in conversation
-ledger/state snapshots. A host that wants a workflow in an agent tail snapshot
-subscribes to this line, reads the resource, then explicitly updates that
-conversation's dynamic snapshot.
+Events can arrive before the submission response. Buffer them by `payload.run_id`
+and match the returned ID. Read outputs from `payload.result` or failures from
+`payload.error` in the `workflow.execution_completed` event.
+See [the execution contract](../../agent_runtime_ffi/docs/en/11-runtime-workflow-execution-contract.md#113-submission-and-results).
 
 ## Persistence And Recovery Events
 

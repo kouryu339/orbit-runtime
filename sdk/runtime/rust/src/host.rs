@@ -419,6 +419,7 @@ impl RuntimeApp {
         self.invoke("workflow.list", json!({ "kind": kind }))
     }
 
+    /// Submit a run and return its run ID. Read the result from workflow.execution_completed.
     pub fn execute_workflow(&self, id: &str, inputs: Value, trace: bool) -> Result<Value> {
         self.invoke(
             "workflow.execute",
@@ -500,57 +501,6 @@ impl RuntimeApp {
         self.invoke(
             "workflow.execute_script",
             json!({ "script": script, "inputs": inputs, "trace": trace, "conversation_id": conversation_id, "agent_id": agent_id }),
-        )
-    }
-
-    #[deprecated(
-        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
-    )]
-    #[doc(hidden)]
-    pub fn start_workflow_run(&self) -> Result<Value> {
-        self.invoke("workflow.start", json!({}))
-    }
-
-    #[deprecated(
-        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
-    )]
-    #[doc(hidden)]
-    pub fn run_workflow(&self, workflow_run_id: &str, id: &str, inputs: Value) -> Result<Value> {
-        self.invoke(
-            "workflow.run",
-            json!({"workflow_run_id": workflow_run_id, "id": id, "inputs": inputs}),
-        )
-    }
-
-    #[deprecated(
-        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
-    )]
-    #[doc(hidden)]
-    pub fn run_workflow_draft_test(
-        &self,
-        workflow_run_id: &str,
-        id: &str,
-        inputs: Value,
-    ) -> Result<Value> {
-        self.invoke(
-            "workflow.run",
-            json!({"workflow_run_id": workflow_run_id, "id": id, "mode": "test", "inputs": inputs}),
-        )
-    }
-
-    #[deprecated(
-        note = "Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."
-    )]
-    #[doc(hidden)]
-    pub fn run_workflow_script(
-        &self,
-        workflow_run_id: &str,
-        script: &str,
-        inputs: Value,
-    ) -> Result<Value> {
-        self.invoke(
-            "workflow.run",
-            json!({"workflow_run_id": workflow_run_id, "script": script, "inputs": inputs}),
         )
     }
 

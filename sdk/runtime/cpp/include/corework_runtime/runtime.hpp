@@ -754,6 +754,7 @@ public:
         return invoke("workflow.list", kind.empty() ? "{}" : std::string("{\"kind\":") + detail::quote(kind) + "}");
     }
 
+    // Submit a run. Its result arrives in workflow.execution_completed.
     std::string execute_workflow(
         const std::string& id,
         const std::string& inputs_json = "{}",
@@ -840,51 +841,6 @@ public:
                 + ",\"trace\":" + (trace ? "true" : "false")
                 + ",\"conversation_id\":" + detail::quote(conversation_id)
                 + ",\"agent_id\":" + detail::quote(agent_id) + "}");
-    }
-
-    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
-    std::string start_workflow_run()
-    {
-        return invoke("workflow.start", "{}");
-    }
-
-    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
-    std::string run_workflow(
-        const std::string& workflow_run_id,
-        const std::string& id,
-        const std::string& inputs_json = "{}")
-    {
-        return invoke(
-            "workflow.run",
-            std::string("{\"workflow_run_id\":") + detail::quote(workflow_run_id)
-                + ",\"id\":" + detail::quote(id)
-                + ",\"inputs\":" + object_or_empty(inputs_json) + "}");
-    }
-
-    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
-    std::string run_workflow_draft_test(
-        const std::string& workflow_run_id,
-        const std::string& id,
-        const std::string& inputs_json = "{}")
-    {
-        return invoke(
-            "workflow.run",
-            std::string("{\"workflow_run_id\":") + detail::quote(workflow_run_id)
-                + ",\"id\":" + detail::quote(id)
-                + ",\"mode\":\"test\",\"inputs\":" + object_or_empty(inputs_json) + "}");
-    }
-
-    [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]
-    std::string run_workflow_script(
-        const std::string& workflow_run_id,
-        const std::string& script,
-        const std::string& inputs_json = "{}")
-    {
-        return invoke(
-            "workflow.run",
-            std::string("{\"workflow_run_id\":") + detail::quote(workflow_run_id)
-                + ",\"script\":" + detail::quote(script)
-                + ",\"inputs\":" + object_or_empty(inputs_json) + "}");
     }
 
     [[deprecated("Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.")]]

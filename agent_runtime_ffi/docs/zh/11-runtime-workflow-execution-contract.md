@@ -10,56 +10,7 @@ Resources、LLM 和 cluster 注册在 `start` 后仍然冻结；workflow resourc
 
 ## 11.1 命令
 
-| 命令 | Payload | Result |
-|---|---|---|
-| `workflow.create` | `resource` | 创建不可信的 Draft。 |
-| `workflow.read` | `id` | 读取 Draft 或 Registered。 |
-| `workflow.register` | `id`, `expected_revision?`, `name?` | 将有效 Draft 提升为 Registered。 |
-| `workflow.revise` | `id`, `expected_revision`, `change` | 保存并编译 logic_source / logic。 |
-| `workflow.validate_revision` | `id`, `expected_revision`, `change` | 只验证，不提交新版本。 |
-| `workflow.compile` | `id` | 返回 Draft 校验结果与 blueprint。 |
-| `workflow.delete` | `id`, `expected_revision?` | 删除任一种资源。 |
-| `workflow.list` | `kind?` | 返回全部资源，或按 `draft`/`registered` 过滤。 |
-| `workflow.execute` | `id`, `mode?`, `inputs?`, `trace?`, `conversation_id?`, `agent_id?` | 执行 Registered；Draft 仅允许 `mode=test`。 |
-| `workflow.describe_inputs` | `id` | 返回宿主生成输入表单所需的结构化参数元数据。 |
-| `workflow.start` | 无 | 创建一次执行通道并返回 `workflow_run_id`，但不执行工作流。 |
-| `workflow.run` | `workflow_run_id`, `id`, `mode?`, `inputs?`, `conversation_id?`, `agent_id?`, `turn_id?` | 在已经创建且已监听的执行通道上启动工作流；同一 ID 只能调用一次。 |
-
-目录命令要求 Runtime 已经 `start`。只有 Draft 可以创建；公开创建接口接受 blueprint，逻辑修改通过 revision 提交；
-验证通过后才能提升为 Registered。提升时保持稳定 id。Draft 与 Registered 的 name
-全局唯一。Resource 使用 `agent-runtime-workflow-resource/v1`：
-
-```json
-{
-  "resource": {
-    "schema": "agent-runtime-workflow-resource/v1",
-    "id": "open-page",
-    "name": "Open page",
-    "description": "Open a URL and return the browser page identity",
-    "script": "input url:String\n1: EXEC BrowserOpenPage --url input.url\nreturn page_id=1.page_id url=1.url"
-  }
-}
-```
-
-资源视图明确返回 `kind`、`revision`、`trusted` 与 `production_executable`，调用方不能
-从显示名称推断状态。`expected_revision` 是可选的目录内防覆盖机制，不承担跨进程协调。
-创建和更新必须在 `script` 与 `blueprint` 中恰好传入一种源表示；有效资源读取时会返回
-两种表示。Script 是供 AI 与代码审阅使用的紧凑语义形式；Blueprint JSON 是可执行图，
-同时保存位置、尺寸和布局。Script 重新编译时按节点 id 或源 step 迁移已有布局。两个
-转换命令是无状态函数，不创建资源、不增加 revision，也不发出 Workflow 事件。
-
-Script、AI 提示词以及 Runtime 向宿主公开的工具/节点能力表统一使用 `num` 表示数字。
-编译器继续接受历史数字类型名称并在编译阶段规范化为 `num`，因此旧脚本保持兼容；
-Runtime 内部采用的具体数字表示不属于脚本或 ABI 语义。
-
-嵌套 `FOR` 中的 `$item`/`$index` 始终指向当前最内层循环，内层会暂时遮蔽外层绑定。
-若内层需要外层项，脚本必须提前声明变量，并在外层循环中通过 `setvar` 保存后再读取；
-离开内层循环后，外层隐式绑定恢复。
-
-Draft 存在于 Runtime state；Registered 持久化到配置的 workflow root。Draft 的跨重启
-恢复由宿主根据事件或资源视图自行持久化与重建。
-Registered 执行不传 mode；Draft 只有显式 `mode=test` 才可测试。语言 SDK 将二者分别
-暴露为 `execute_workflow` 和 `test_workflow_draft`。
+公开命令见 [工作流资源 API](12-workflow-resource-api.md)。Runtime 启动后可使用。
 
 ## 11.2 工具输出投影
 
@@ -86,46 +37,20 @@ RPC 节点不会暴露虚构的 `Result` 引脚，脚本也不应写成 `1.Resul
 如果工具没有注册任何输出字段，该节点就没有数据输出引脚。此时引用任意字段都应在
 编译阶段报告“节点不存在该输出”，不能用 transport 层的 `Result` 误导调用者。
 
-## 11.3 程序执行结果
+## 11.3 执行提交与结果
 
-两个执行命令成功时都返回：
+宿主先监听工作流事件，再用 `workflow.execute` 提交 Draft 或 Registered 资源。
+DLL 宿主持续调用 `agent_runtime_next_event_v1`，浏览器宿主使用 SDK 的 `subscribe`。
+提交成功返回 `{"run_id":"wf-123","workflow_id":"example","status":"accepted"}`。
 
-```json
-{
-  "code": 0,
-  "run_id": "wf-...",
-  "trace": "Workflow execution trace:\n- line 2 step 1 succeeded: ...",
-  "result": {
-    "outputs": {
-      "page_id": "page-1",
-      "url": "https://example.com"
-    },
-    "duration_ms": 12
-  }
-}
-```
+事件可能先于提交响应到达。宿主应从订阅时开始保留事件，再用响应里的
+`run_id` 归集。不同运行可交错，单次运行按 `payload.sequence` 排序和去重。
+提交失败时直接返回命令错误。
 
-`result.outputs` 是 workflow End/`return` 节点的输出 map。内部节点输出不会自动进入
-程序结果；宿主需要的每个值都必须在脚本最终 `return` 中接到 End。请求
-`trace=true` 时，`result.node_trace` 还会包含结构化逐节点 trace。
-只要执行已经成功建立，顶层 `run_id` 始终存在，不依赖 `trace` 开关；草稿
-`mode=test` 试运行、正式执行和 `workflow.execute_script` 都遵循相同规则。编译失败、
-资源不存在或执行上下文尚未建立时没有 `run_id`。
-
-节点执行失败时返回 `code=-1` 与文本 `trace`；`result` 仍然存在，且在请求
-`trace=true` 时保留包含失败节点的结构化 `result.node_trace`。编译失败或执行尚未建立时
-没有节点 Trace，可以省略 `result`。编译失败另外返回结构化 `diagnostics[]`，包含
-`severity`、`kind`、`line`、`col`、`message` 和可选 `suggestion`：
-
-| Code | 含义 |
-|---|---|
-| `400` | 请求非法、脚本编译失败或 workflow 建立失败。 |
-| `404` | 找不到已注册 workflow selector。 |
-| `-1` | 已经开始执行，但节点或 workflow 执行失败。 |
-
-编译失败信息必须包含源码行号和编译器信息，并提示调用者确认所引用工具已经出现在当前
-Agent 的 active tools 中，且注册元数据具有明确的描述、输入引脚和输出引脚。执行 trace
-包含逐节点状态、源码行、耗时、输入/结果预览、节点给 AI 的消息和错误详情。
+终态事件为 `workflow.execution_completed`。成功时 `payload.result` 是 End/return
+的输出对象，失败时 `payload.error` 包含错误码和消息。两种终态均包含
+`payload.run_id`、`status`、`code`、`duration_ms`。传入 `trace:true`
+可在终态附带 `payload.node_trace`。进度事件始终可用。
 
 ## 11.4 审计与宿主职责
 
@@ -163,24 +88,14 @@ AI 工具入口 `executeWorkflow` 和 `executeWorkflowScript` 都声明为 `dest
 输出引脚值的有界结构化摘要，供详情和诊断使用，不参与 DAG 传值，也不能在有 `to_ai` 时
 取代它。纯节点和控制节点没有 `to_ai` 时，前端再使用分支、循环事实或结果摘要组织展示。
 
-异步运行采用两阶段协议。宿主先调用 `workflow.start` 得到 `workflow_run_id`，再建立按该 ID
-过滤的事件监听，最后调用 `workflow.run`。因此 `workflow.run` 返回前产生首个事件也不会形成
-丢失窗口。`workflow.start` 的 `created` 只代表通道身份已经创建；`workflow.run` 的 `running`
-只代表执行已经派发，编译、输入校验或执行仍可能通过终态事件报告失败。同一 ID 是一次性的，
-重复调用 `workflow.run` 会失败。事件按 `(workflow_run_id, sequence)` 排序和去重。
-
 统一 Trace payload 使用 `agent-runtime-workflow-trace/v1`。节点事件的 `trace_type` 为
 `node.started`、`node.completed` 或 `node.failed`；IF 产生 `branch.selected`；循环产生
 `loop.started`、`loop.iteration.started`、`loop.iteration.completed`、可选失败事件及
 `loop.completed`。循环内同一 `node_id` 每次执行都有新的 `execution_id`，循环体节点以
 迭代身份作为 `parent_execution_id`。循环节点只有在实际循环体结束后才完成。
 
-Runtime 不保存 Trace 历史、执行详情或终态结果，只在执行期间保留小型控制记录，并在收到
-终态事件后释放。活动记录最多 128 个；仅调用 `workflow.start` 后长期不执行的记录会在
-10 分钟后惰性清理。宿主负责监听、持久化、补读接口和按 `execution_id` 建立索引。Core 到事件
-总线的转发队列有界；若队列溢出或关闭，本次运行以明确的 Trace 投递错误
-失败，并停在最后连续 `sequence`，不会静默丢弃中间事件后继续报告成功。
-End 节点最终结果通过终态事件发布，单结果上限 16 MiB；超过上限会以
+Runtime 最多同时接受 128 个运行。宿主负责持续收取、持久化和补读事件。关闭 Runtime 会等待已接受的运行完成。
+End 节点最终结果通过终态事件发布，单终态事件的 payload 上限 16 MiB；超过上限会以
 `WORKFLOW_RESULT_TOO_LARGE` 明确失败。宿主需要更小的事件载荷时，应由工具先把大数据保存到
 自己的存储并让工作流返回引用，而不能生成指向 Runtime 内存的伪 `result_ref`。
 

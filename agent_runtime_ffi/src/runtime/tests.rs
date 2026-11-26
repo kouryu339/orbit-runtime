@@ -1015,6 +1015,7 @@ fn workflow_edit_demotes_identity_and_blocks_recursive_callers_until_promoted() 
 }
 
 struct WorkflowResultExpansionSystem;
+static RELEASE_SLOW_WORKFLOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 #[async_trait::async_trait]
 impl corework::workflow::dynamic_node::DynamicExecute for WorkflowResultExpansionSystem {
@@ -1024,7 +1025,12 @@ impl corework::workflow::dynamic_node::DynamicExecute for WorkflowResultExpansio
         _ctx: &corework::orchestration::Context,
     ) -> corework::error::Result<Value> {
         if input.get("url").and_then(Value::as_str) == Some("https://slow.example") {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                RELEASE_SLOW_WORKFLOW.notified(),
+            )
+            .await
+            .map_err(|error| corework::error::FrameworkError::WorkflowError(error.to_string()))?;
         }
         if input.get("url").and_then(Value::as_str) == Some("https://business-error.example") {
             return Ok(json!({
@@ -2487,33 +2493,46 @@ fn display_name_placeholders(display_name: &str) -> BTreeSet<&str> {
     placeholders
 }
 
+fn await_workflow_completion(facade: &RuntimeFacade, submission: &Value) -> Value {
+    assert_eq!(submission["status"], "accepted", "{submission}");
+    let run_id = submission["run_id"].as_str().unwrap();
+    for _ in 0..500 {
+        if let Some(event) = facade.event_log.lock().unwrap().iter().find(|event| {
+            event["type"] == WORKFLOW_EXECUTION_COMPLETED_EVENT
+                && event["payload"]["run_id"] == run_id
+        }) {
+            return event["payload"].clone();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("no terminal event for {run_id}");
+}
+
 #[test]
 fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     // Exercise retained internal compatibility, not the disabled public script API.
     fn invoke(facade: &mut RuntimeFacade, command: &str, payload: Value) -> Value {
-        // Keep the older assertions below focused on Trace contents while the
-        // production API uses start -> subscribe -> run and keeps no Run journal.
         if command == "workflow.run.start" {
-            let started = crate::invoke_command_inner(
+            let id = format!("trace-test-{}", uuid::Uuid::new_v4());
+            invoke(
                 facade,
-                "workflow.start",
-                json!({}).as_object().unwrap(),
+                "workflow.create",
+                json!({"resource":{
+                    "schema":"agent-runtime-workflow-resource/v1",
+                    "id":id,
+                    "name":id,
+                    "script":payload["script"]
+                }}),
+            );
+            return crate::invoke_command(
+                facade,
+                "workflow.execute",
+                json!({"id":id,"inputs":payload["inputs"],"trace":payload["trace"]})
+                    .as_object()
+                    .unwrap(),
                 "workflow-sdk-test",
             )
             .unwrap();
-            let workflow_run_id = started["workflow_run_id"].as_str().unwrap();
-            let mut run_payload = payload;
-            run_payload["workflow_run_id"] = Value::String(workflow_run_id.to_string());
-            crate::invoke_command_inner(
-                facade,
-                "workflow.run",
-                run_payload.as_object().unwrap(),
-                "workflow-sdk-test",
-            )
-            .unwrap();
-            let mut compatibility = started;
-            compatibility["status"] = Value::String("accepted".to_string());
-            return compatibility;
         }
         if command == "workflow.run.get"
             || command == "workflow.run.read_events"
@@ -3059,39 +3078,6 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert!(inline["run_id"].is_string());
     assert!(inline["result"].get("node_trace").is_none());
 
-    let staged = invoke(&mut facade, "workflow.start", json!({}));
-    assert_eq!(staged["status"], "created", "{staged}");
-    let staged_run_id = staged["workflow_run_id"].as_str().unwrap().to_string();
-    assert!(!facade.event_log.lock().unwrap().iter().any(|event| {
-        event
-            .pointer("/payload/workflow_run_id")
-            .and_then(Value::as_str)
-            == Some(staged_run_id.as_str())
-    }));
-    let staged_run = invoke(
-        &mut facade,
-        "workflow.run",
-        json!({
-            "workflow_run_id": staged_run_id,
-            "script": "input name\nreturn result=$name",
-            "inputs": {"name": "Two phase"}
-        }),
-    );
-    assert_eq!(staged_run["status"], "running", "{staged_run}");
-    let duplicate = crate::invoke_command_inner(
-        &mut facade,
-        "workflow.run",
-        json!({
-            "workflow_run_id": staged_run_id,
-            "script": "input name\nreturn result=$name",
-            "inputs": {"name": "Must not run twice"}
-        })
-        .as_object()
-        .unwrap(),
-        "workflow-sdk-test",
-    );
-    assert!(duplicate.is_err());
-
     let async_start = invoke(
         &mut facade,
         "workflow.run.start",
@@ -3102,7 +3088,6 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     );
     assert_eq!(async_start["status"], "accepted", "{async_start}");
     let async_run_id = async_start["workflow_run_id"].as_str().unwrap().to_string();
-    assert_ne!(async_run_id, staged_run_id);
     let mut async_status = Value::Null;
     for _ in 0..100 {
         async_status = invoke(
@@ -3400,6 +3385,42 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         observed_in_flight_node,
         "expected a node event before terminal state"
     );
+    let competing = invoke(
+        &mut facade,
+        "workflow.run.start",
+        json!({
+            "script": "input name\nreturn result=$name",
+            "inputs":{"name":"Concurrent"},
+            "trace":true
+        }),
+    );
+    assert_ne!(competing["run_id"], slow_run_id);
+    let mut received_events = Vec::new();
+    let completion = loop {
+        let event: Value = serde_json::from_str(
+            &event_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("expected an event while the slow workflow is blocked"),
+        )
+        .unwrap();
+        received_events.push(event.clone());
+        if event["type"] == WORKFLOW_EXECUTION_COMPLETED_EVENT
+            && event["payload"]["run_id"] == competing["run_id"]
+        {
+            break event["payload"].clone();
+        }
+    };
+    assert_eq!(completion["result"]["result"], "Concurrent", "{completion}");
+    assert!(completion["node_trace"].is_object());
+    assert_eq!(
+        invoke(
+            &mut facade,
+            "workflow.run.get",
+            json!({"workflow_run_id":slow_run_id})
+        )["terminal"],
+        false
+    );
+    RELEASE_SLOW_WORKFLOW.notify_one();
     let mut slow_terminal = false;
     for _ in 0..100 {
         let status = invoke(
@@ -3584,14 +3605,28 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
     assert_eq!(deleted["deleted"]["id"], "echo-workflow");
     assert_eq!(deleted["revision"], 5);
     assert!(!workflows_dir.join("echo-workflow.workflow.json").exists());
+    let catalog = invoke(&mut facade, "workflow.list", json!({}));
+    for fixture in catalog["workflows"].as_array().unwrap() {
+        let id = fixture["id"].as_str().unwrap();
+        assert!(id.starts_with("trace-test-"), "unexpected workflow {id}");
+        invoke(
+            &mut facade,
+            "workflow.delete",
+            json!({"id": id, "expected_revision": fixture["revision"]}),
+        );
+    }
     assert!(invoke(&mut facade, "workflow.list", json!({}))["workflows"]
         .as_array()
         .unwrap()
         .is_empty());
 
-    let events = event_rx
-        .try_iter()
-        .filter_map(|event| serde_json::from_str::<Value>(&event).ok())
+    let events = received_events
+        .into_iter()
+        .chain(
+            event_rx
+                .try_iter()
+                .filter_map(|event| serde_json::from_str::<Value>(&event).ok()),
+        )
         .collect::<Vec<_>>();
     assert!(events
         .iter()
@@ -3692,7 +3727,8 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         "workflow.execute",
         json!({"id":"public-logic-flow","inputs":{"name":"Logic"}}),
     );
-    assert_eq!(output["result"]["outputs"]["result"], "Logic", "{output}");
+    let output = await_workflow_completion(&facade, &output);
+    assert_eq!(output["result"]["result"], "Logic", "{output}");
     for command in crate::DEPRECATED_WORKFLOW_COMMANDS {
         let error = crate::invoke_command(
             &mut facade,
@@ -3723,7 +3759,8 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         "workflow.execute",
         json!({"id":"public-logic-flow","inputs":{"name":"Production"}}),
     );
-    assert_eq!(output["result"]["outputs"]["result"], "Production");
+    let output = await_workflow_completion(&facade, &output);
+    assert_eq!(output["result"]["result"], "Production");
     assert!(crate::invoke_command(
         &mut facade,
         "workflow.remove",
@@ -3760,7 +3797,8 @@ fn workflow_resources_are_dynamic_and_executable_after_runtime_start() {
         "workflow.execute",
         json!({"id":"imported-logic-flow","inputs":{"name":"Imported"}}),
     );
-    assert_eq!(result["result"]["outputs"]["result"], "Imported");
+    let result = await_workflow_completion(&facade, &result);
+    assert_eq!(result["result"]["result"], "Imported");
     public(
         &mut facade,
         "workflow.remove",
@@ -4699,7 +4737,8 @@ fn workflow_sources_restore_drafts_and_references_without_rewriting_files() {
             "workflow.execute",
             json!({"id":"a-parent","inputs":{"text":"restored"}}),
         );
-        assert_eq!(output["result"]["outputs"]["text"], "restored");
+        let output = await_workflow_completion(&facade, &output);
+        assert_eq!(output["result"]["text"], "restored");
         let invalid = child.replace(
             "\"text\":{\"value\":input.text}",
             "\"renamed\":{\"value\":input.text}",
@@ -4762,7 +4801,8 @@ fn workflow_sources_restore_drafts_and_references_without_rewriting_files() {
             "workflow.execute",
             json!({"id":"saved-draft","inputs":{"text":"draft restart"}}),
         );
-        assert_eq!(output["result"]["outputs"]["text"], "draft restart");
+        let output = await_workflow_completion(&facade, &output);
+        assert_eq!(output["result"]["text"], "draft restart");
         public(
             &mut facade,
             "workflow.remove",
@@ -4792,7 +4832,8 @@ fn workflow_sources_restore_drafts_and_references_without_rewriting_files() {
             "workflow.execute",
             json!({"id":"a-parent","inputs":{"text":"after restart"}}),
         );
-        assert_eq!(output["result"]["outputs"]["text"], "after restart");
+        let output = await_workflow_completion(&facade, &output);
+        assert_eq!(output["result"]["text"], "after restart");
         public(
             &mut facade,
             "workflow.remove",

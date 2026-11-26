@@ -111,14 +111,13 @@ AGENT_RUNTIME_EXPORT int agent_runtime_start_v1(AgentRuntimeHandle handle);
  * Calls on the same handle are currently serialized. The function may block
  * for the full duration of the requested operation.
  *
- * ABI 1.3 workflow commands:
- * - workflow.create / workflow.read / workflow.update / workflow.delete / workflow.list
- * - workflow.compile for a draft and workflow.register to promote a draft
- * - workflow.execute for registered production or explicit draft test execution;
- *   conversation_id and agent_id may be supplied together as execution identity
- * - workflow.execute_script for temporary script text with the same optional identity pair
- * - runtime.get_workflow_node_definitions for the registered graph-node catalog
- * Command availability must still be checked through capabilities JSON.
+ * Workflow catalog commands: workflow.list / workflow.register /
+ * workflow.remove / workflow.validate / workflow.promote.
+ * workflow.execute submits a draft or registered workflow and returns its run_id.
+ * Start reading agent_runtime_next_event_v1 before submission, then correlate
+ * workflow.execution_completed and progress events by payload.run_id.
+ * conversation_id and agent_id may be supplied together as execution identity.
+ * Check features.workflow_async_execute in capabilities JSON.
  * Dynamic cluster commands:
  * - runtime.add_rpc_endpoint discovers and atomically appends an external gRPC
  *   endpoint after start. Existing endpoint IDs and tool names cannot be replaced.

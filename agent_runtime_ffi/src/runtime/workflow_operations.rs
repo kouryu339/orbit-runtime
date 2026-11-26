@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 const WORKFLOW_RESOURCE_SCHEMA: &str = "agent-runtime-workflow-resource/v1";
-const MAX_WORKFLOW_RESULT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,271 +125,33 @@ impl RuntimeFacade {
             "inputs": inputs
         }))
     }
-    pub fn start_workflow_run(&self) -> Result<Value, RuntimeError> {
-        if !self.started {
-            return Err(RuntimeError::NotStarted);
-        }
-        let workflow_run_id = self
-            .workflow_runs
-            .lock()
-            .map_err(|_| RuntimeError::Internal("workflow run registry lock poisoned".to_string()))?
-            .create()
-            .map_err(RuntimeError::InvalidConfig)?;
-        Ok(json!({
-            "schema": "agent-runtime-workflow-run-start/v1",
-            "workflow_run_id": workflow_run_id,
-            "run_id": workflow_run_id,
-            "status": "created"
-        }))
-    }
-
-    #[allow(deprecated)]
-    pub fn run_workflow(
+    pub fn submit_workflow(
         &mut self,
-        workflow_run_id: String,
-        workflow_id: Option<String>,
-        script: Option<String>,
-        mode: Option<String>,
+        workflow_id: String,
         inputs: HashMap<String, Value>,
-        execution_context: corework::workflow::workflows::WorkflowExecutionContext,
+        trace: bool,
+        context: corework::workflow::workflows::WorkflowExecutionContext,
     ) -> Result<Value, RuntimeError> {
-        if workflow_id.is_some() == script.is_some() {
-            return Err(RuntimeError::InvalidConfig(
-                "workflow.run requires exactly one of payload.id or payload.script".to_string(),
-            ));
-        }
         let module = self.workflow_module()?;
-        let runtime_tools = self.workflow_compiler_tools()?;
-        if let Some(workflow_id) = workflow_id.as_deref() {
-            validate_workflow_tree_coherence(&module, workflow_id, &runtime_tools)
-                .map_err(workflow_input_error)?;
-        }
-        let source = if script.is_some() {
-            "script"
-        } else {
-            "catalog"
-        };
-        let occupancy = workflow_id
-            .as_deref()
-            .map(|id| module.reserve_catalog_execution(id))
-            .transpose()
+        let occupancy = module
+            .reserve_catalog_execution(&workflow_id)
             .map_err(workflow_input_error)?;
+        validate_workflow_tree_coherence(&module, &workflow_id, &self.workflow_compiler_tools()?)
+            .map_err(workflow_input_error)?;
+        let _runtime = self.rt.enter();
         self.workflow_runs
-            .lock()
-            .map_err(|_| RuntimeError::Internal("workflow run registry lock poisoned".to_string()))?
-            .begin(&workflow_run_id)
-            .map_err(RuntimeError::InvalidConfig)?;
-
-        let task_run_id = workflow_run_id.clone();
-        self.rt.handle().spawn(async move {
-            let _occupancy = occupancy;
-            let started = Instant::now();
-            let execution = if let Some(script) = script {
-                let mut blueprint = match corework::workflow::chain_compiler_v2::compile_chain_v2_with_runtime_tools(
-                    script.trim(),
-                    &runtime_tools,
-                ) {
-                    Ok(blueprint) => blueprint,
-                    Err(error) => {
-                        let validation = workflow_compile_validation(&error);
-                        publish_async_workflow_failure(
-                            &module,
-                            &task_run_id,
-                            None,
-                            "script",
-                            1,
-                            400,
-                            format!(
-                                "workflow script compile failed at line {}: {}",
-                                error.line, error.message
-                            ),
-                            Some(validation),
-                        )
-                        .await;
-                        return;
-                    }
-                };
-                if blueprint.metadata.name.trim().is_empty() {
-                    blueprint.metadata.name = "Inline Workflow".to_string();
-                }
-                module
-                    .execute_from_blueprint_outcome_with_context_and_run_id(
-                        blueprint,
-                        inputs,
-                        &execution_context,
-                        Some(task_run_id.clone()),
-                    )
-                    .await
-            } else {
-                let workflow_id = workflow_id.clone().unwrap_or_default();
-                let resource = match module.read_workflow_resource(&workflow_id) {
-                    Ok(resource) => resource,
-                    Err(error) => {
-                        publish_async_workflow_failure(
-                            &module,
-                            &task_run_id,
-                            Some(&workflow_id),
-                            "catalog",
-                            1,
-                            404,
-                            error.to_string(),
-                            None,
-                        )
-                        .await;
-                        return;
-                    }
-                };
-                match resource.summary.kind {
-                    corework::workflow::workflows::WorkflowResourceKind::Registered => {
-                        if mode.as_deref().is_some_and(|value| value != "production") {
-                            publish_async_workflow_failure(
-                                &module,
-                                &task_run_id,
-                                Some(&workflow_id),
-                                "registered",
-                                1,
-                                400,
-                                "registered workflow mode must be 'production' when provided"
-                                    .to_string(),
-                                None,
-                            )
-                            .await;
-                            return;
-                        }
-                        module
-                            .execute_registered_outcome_with_context_and_run_id(
-                                &workflow_id,
-                                inputs,
-                                &execution_context,
-                                Some(task_run_id.clone()),
-                            )
-                            .await
-                    }
-                    corework::workflow::workflows::WorkflowResourceKind::Draft => {
-                        if mode.as_deref() != Some("test") {
-                            publish_async_workflow_failure(
-                                &module,
-                                &task_run_id,
-                                Some(&workflow_id),
-                                "draft",
-                                1,
-                                400,
-                                "draft workflow execution requires payload.mode = 'test'"
-                                    .to_string(),
-                                None,
-                            )
-                            .await;
-                            return;
-                        }
-                        let blueprint = match module.draft_blueprint(&workflow_id) {
-                            Ok(blueprint) => blueprint,
-                            Err(error) => {
-                                publish_async_workflow_failure(
-                                    &module,
-                                    &task_run_id,
-                                    Some(&workflow_id),
-                                    "draft",
-                                    1,
-                                    400,
-                                    error.to_string(),
-                                    None,
-                                )
-                                .await;
-                                return;
-                            }
-                        };
-                        module
-                            .execute_from_blueprint_outcome_with_context_and_run_id(
-                                blueprint,
-                                inputs,
-                                &execution_context,
-                                Some(task_run_id.clone()),
-                            )
-                            .await
-                    }
-                }
-            };
-
-            match execution {
-                Ok(outcome) => {
-                    let duration_ms = started.elapsed().as_millis();
-                    let error = outcome.error.clone();
-                    let trace_meta = workflow_trace_meta(&outcome);
-                    let response = workflow_execution_response(outcome, duration_ms, false);
-                    let succeeded = error.is_none();
-                    let result = response
-                        .pointer("/result/outputs")
-                        .cloned()
-                        .unwrap_or(Value::Null);
-                    if succeeded {
-                        let result_bytes = serde_json::to_vec(&result)
-                            .map(|bytes| bytes.len())
-                            .unwrap_or(usize::MAX);
-                        if result_bytes > MAX_WORKFLOW_RESULT_BYTES {
-                            publish_async_workflow_failure_kind(
-                                &module,
-                                &task_run_id,
-                                trace_meta.workflow_id.as_deref(),
-                                source,
-                                trace_meta.completed_sequence.unwrap_or(1),
-                                413,
-                                "WORKFLOW_RESULT_TOO_LARGE",
-                                format!(
-                                    "workflow result is {result_bytes} bytes, above the event-channel limit of {MAX_WORKFLOW_RESULT_BYTES} bytes"
-                                ),
-                                None,
-                            )
-                            .await;
-                            return;
-                        }
-                    }
-                    let mut payload = json!({
-                        "schema": "agent-runtime-workflow-trace/v1",
-                        "trace_type": if succeeded { "workflow.completed" } else { "workflow.failed" },
-                        "workflow_run_id": task_run_id,
-                        "run_id": task_run_id,
-                        "workflow_id": trace_meta.workflow_id,
-                        "sequence": trace_meta.completed_sequence.unwrap_or(1),
-                        "timestamp": chrono::Utc::now().to_rfc3339(),
-                        "status": if succeeded { "succeeded" } else { "failed" },
-                        "code": if succeeded { 0 } else { -1 },
-                        "duration_ms": duration_ms
-                    });
-                    if succeeded {
-                        payload["result"] = result;
-                    }
-                    if let Some(error) = error {
-                        payload["error"] = json!({
-                            "code": "WORKFLOW_EXECUTION_FAILED",
-                            "message": error,
-                            "node_id": trace_meta.failed_node_id,
-                            "execution_id": trace_meta.failed_execution_id
-                        });
-                    }
-                    module.publish_execution_event(payload).await;
-                }
-                Err(error) => {
-                    publish_async_workflow_failure(
-                        &module,
-                        &task_run_id,
-                        workflow_id.as_deref(),
-                        source,
-                        1,
-                        400,
-                        error.to_string(),
-                        None,
-                    )
-                    .await;
-                }
-            }
-        });
-
-        Ok(json!({
-            "schema": "agent-runtime-workflow-run/v1",
-            "workflow_run_id": workflow_run_id,
-            "run_id": workflow_run_id,
-            "status": "running"
-        }))
+            .submit(
+                module.clone(),
+                workflow_id.clone(),
+                trace,
+                move |run_id| async move {
+                    let _occupancy = occupancy;
+                    module
+                        .execute_catalog_outcome_with_run_id(&workflow_id, inputs, &context, run_id)
+                        .await
+                },
+            )
+            .map_err(workflow_input_error)
     }
 
     #[deprecated(note = "Legacy script API is disabled externally; internal compatibility only.")]
@@ -941,61 +702,6 @@ impl RuntimeFacade {
     }
 }
 
-async fn publish_async_workflow_failure(
-    module: &WorkflowsModule,
-    run_id: &str,
-    workflow_id: Option<&str>,
-    source: &str,
-    sequence: u64,
-    code: i32,
-    message: String,
-    diagnostics: Option<corework::workflow::workflows::WorkflowValidation>,
-) {
-    publish_async_workflow_failure_kind(
-        module,
-        run_id,
-        workflow_id,
-        source,
-        sequence,
-        code,
-        "WORKFLOW_PREPARATION_FAILED",
-        message,
-        diagnostics,
-    )
-    .await;
-}
-
-async fn publish_async_workflow_failure_kind(
-    module: &WorkflowsModule,
-    run_id: &str,
-    workflow_id: Option<&str>,
-    source: &str,
-    sequence: u64,
-    code: i32,
-    error_kind: &str,
-    message: String,
-    diagnostics: Option<corework::workflow::workflows::WorkflowValidation>,
-) {
-    let mut payload = json!({
-        "schema": "agent-runtime-workflow-trace/v1",
-        "trace_type": "workflow.failed",
-        "workflow_run_id": run_id,
-        "run_id": run_id,
-        "workflow_id": workflow_id,
-        "sequence": sequence,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "source": source,
-        "status": "failed",
-        "code": code,
-        "error": {"code": error_kind, "message": message}
-    });
-    if let Some(diagnostics) = diagnostics {
-        payload["diagnostics"] = json!(diagnostics.diagnostics);
-        payload["truncated"] = json!(diagnostics.truncated);
-    }
-    module.publish_execution_event(payload).await;
-}
-
 fn workflow_input_metadata(pin: &corework::workflow::blueprint_json::PinMetadata) -> Value {
     let data_type = pin.data_type.trim();
     let derived_element_type = data_type
@@ -1192,28 +898,16 @@ struct WorkflowTraceMeta {
     workflow_id: Option<String>,
     run_id: Option<String>,
     completed_sequence: Option<u64>,
-    failed_node_id: Option<String>,
-    failed_execution_id: Option<String>,
 }
 
 fn workflow_trace_meta(
     outcome: &corework::workflow::workflows::executor::WorkflowExecutionOutcome,
 ) -> WorkflowTraceMeta {
     let trace = outcome.report.trace.as_ref();
-    let failed_node = trace.and_then(|trace| {
-        trace.nodes.iter().rev().find(|node| {
-            matches!(
-                node.status,
-                corework::workflow::execution::WorkflowNodeStatus::Failed
-            )
-        })
-    });
     WorkflowTraceMeta {
         workflow_id: trace.map(|trace| trace.workflow_id.clone()),
         run_id: trace.map(|trace| trace.run_id.clone()),
         completed_sequence: trace.map(|trace| trace.event_count.saturating_add(1)),
-        failed_node_id: failed_node.and_then(|node| node.node_id.clone()),
-        failed_execution_id: failed_node.map(|node| node.execution_id.clone()),
     }
 }
 

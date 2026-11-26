@@ -5,7 +5,6 @@ pub(super) async fn install_event_forwarders(
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     projector: Arc<HostEventProjector>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
-    workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
     agent_test_event_tx: mpsc::UnboundedSender<Value>,
 ) -> Result<(), RuntimeError> {
     for event_type in forwarded_runtime_event_types() {
@@ -13,7 +12,6 @@ pub(super) async fn install_event_forwarders(
             event_sender: Arc::clone(&event_sender),
             projector: Arc::clone(&projector),
             event_log: Arc::clone(&event_log),
-            workflow_runs: Arc::clone(&workflow_runs),
             agent_test_event_tx: agent_test_event_tx.clone(),
         });
         event_bus
@@ -53,14 +51,13 @@ struct RuntimeEventForwarder {
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     projector: Arc<HostEventProjector>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
-    workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
     agent_test_event_tx: mpsc::UnboundedSender<Value>,
 }
 
 #[async_trait]
 impl EventHandler for RuntimeEventForwarder {
     async fn handle(&self, event: &BaseEvent) -> corework::error::Result<()> {
-        let envelope = self.projector.project(event).await.unwrap_or_else(|error| {
+        let mut envelope = self.projector.project(event).await.unwrap_or_else(|error| {
             json!({
                 "schema": "agent-runtime-event/v1",
                 "type": "runtime_error",
@@ -69,23 +66,34 @@ impl EventHandler for RuntimeEventForwarder {
                 }
             })
         });
+        let public_json = (!is_internal_studio_event(&envelope)).then(|| {
+            serde_json::to_string(&envelope).unwrap_or_else(|_| {
+                r#"{"type":"runtime_error","payload":{"message":"event serialization failed"}}"#
+                    .to_string()
+            })
+        });
+        // Preserve the full result on the host queue without retaining large
+        // result or trace bodies in the local Studio diagnostics ring.
+        if event.event_type == WORKFLOW_EXECUTION_COMPLETED_EVENT
+            && public_json
+                .as_ref()
+                .is_some_and(|json| json.len() > 128 * 1024)
+        {
+            if let Some(payload) = envelope["payload"].as_object_mut() {
+                payload.remove("result");
+                payload.remove("node_trace");
+            }
+        }
         if let Ok(mut event_log) = self.event_log.lock() {
             event_log.push_back(envelope.clone());
             while event_log.len() > 512 {
                 event_log.pop_front();
             }
         }
-        if let Ok(mut workflow_runs) = self.workflow_runs.lock() {
-            workflow_runs.finish_from_envelope(&envelope);
-        }
         let _ = self.agent_test_event_tx.send(envelope.clone());
-        if is_internal_studio_event(&envelope) {
+        let Some(json) = public_json else {
             return Ok(());
-        }
-        let json = serde_json::to_string(&envelope).unwrap_or_else(|_| {
-            r#"{"type":"runtime_error","payload":{"message":"event serialization failed"}}"#
-                .to_string()
-        });
+        };
         let sender = match self.event_sender.lock() {
             Ok(sender) => sender.clone(),
             Err(error) => {

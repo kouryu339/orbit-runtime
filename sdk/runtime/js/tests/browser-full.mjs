@@ -138,11 +138,23 @@ export async function run() {
     });
     check(validated.valid, "valid Workflow");
     await runtime.invoke("workflow.register", { source: text });
-    const executed = await runtime.invoke("workflow.execute", {
-      id: "web-flow",
-    });
+    const execute = async (id) => {
+      const terminal = new Map();
+      const unsubscribe = runtime.subscribe((event) => {
+        if (event.type === "workflow.execution_completed")
+          terminal.set(event.payload.run_id, event.payload);
+      });
+      try {
+        const submission = await runtime.invoke("workflow.execute", { id });
+        check(submission.status === "accepted" && submission.run_id, JSON.stringify(submission));
+        return await until(() => terminal.get(submission.run_id), Boolean);
+      } finally {
+        unsubscribe();
+      }
+    };
+    const executed = await execute("web-flow");
     check(
-      executed.code === 0 && executed.result.outputs.answer === "browser",
+      executed.code === 0 && executed.result.answer === "browser",
       JSON.stringify(executed),
     );
     checks.push("workflow compile + host tool execution");
@@ -170,10 +182,8 @@ export async function run() {
       returns: { count: { var: "count" } },
     });
     await runtime.invoke("workflow.register", { source: loop });
-    const controlled = await runtime.invoke("workflow.execute", {
-      id: "control-flow",
-    });
-    check(controlled.result.outputs.count === 9, JSON.stringify(controlled));
+    const controlled = await execute("control-flow");
+    check(controlled.result.count === 9, JSON.stringify(controlled));
     checks.push("shared for/switch/pure/variables");
     const info = await runtime.invoke("conversation.spawn", {
       cluster_id: "web-team",

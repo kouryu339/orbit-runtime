@@ -11,8 +11,9 @@ use corework::{
     },
     workflow::{
         workflows::{
-            catalog::WorkflowCatalogCheckpoint, source_store::MemoryWorkflowSourceStore,
-            WorkflowExecutionContext, WorkflowResourceKind,
+            catalog::WorkflowCatalogCheckpoint, host_runs::HostWorkflowRuns,
+            source_store::MemoryWorkflowSourceStore, WorkflowExecutionContext,
+            WorkflowResourceKind,
         },
         WorkflowsModule,
     },
@@ -59,7 +60,7 @@ const COMMANDS: &[&str] = &[
 pub fn capabilities() -> Value {
     json!({"schema":"agent-runtime-capabilities/v1","platform":"browser-wasm","abi":{"major":1,"minor":3},"commands":COMMANDS,
         "events":{"schema":"agent-runtime-event/v1","transport":"worker"},
-        "features":{"dynamic_rpc_additions":1,"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"host_tool_transport":1,"browser_resource_transactions":1},
+        "features":{"dynamic_rpc_additions":1,"workflow_async_execute":1,"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"host_tool_transport":1,"browser_resource_transactions":1},
         "unsupported":["rpc_event_sources","native_filesystem","managed_process","native_grpc","ambient_environment","conversation_recovery","skill_content_update","cluster_update","image_path_import","agent_workflow_editing","workflow_edits_with_live_conversations"]})
 }
 
@@ -76,6 +77,7 @@ pub struct Runtime {
     config: Mutex<Config>,
     mutation: tokio::sync::Mutex<()>,
     checkpoint: Mutex<Option<ResourceCheckpoint>>,
+    workflow_runs: Mutex<HostWorkflowRuns>,
 }
 #[derive(Default)]
 struct Config {
@@ -145,6 +147,7 @@ impl Runtime {
             }),
             mutation: tokio::sync::Mutex::new(()),
             checkpoint: Mutex::new(None),
+            workflow_runs: Mutex::new(HostWorkflowRuns::default()),
         })
     }
     pub async fn start(&self) -> Result<()> {
@@ -224,16 +227,17 @@ impl Runtime {
         if !COMMANDS.contains(&command) {
             return Err(format!("unsupported: {command}"));
         }
-        let gate_needed =
-            RESOURCE_COMMANDS.contains(&command) || command.starts_with("runtime.register_");
+        let gate_needed = RESOURCE_COMMANDS.contains(&command)
+            || command.starts_with("runtime.register_")
+            || command == "workflow.execute";
         let _gate = if gate_needed {
             Some(self.mutation.lock().await)
         } else {
             None
         };
+        self.ensure_open()?;
         if self.checkpoint.lock().unwrap().is_some()
             && (gate_needed
-                || command == "workflow.execute"
                 || command == "runtime.get_workflow_node_definitions"
                 || command == "workflow.list"
                 || command == "workflow.validate")
@@ -469,41 +473,62 @@ impl Runtime {
                 .map_err(err),
             "workflow.execute" => {
                 self.manager()?;
-                let id = required(p, "id")?;
-                let inputs: HashMap<String, Value> =
-                    serde_json::from_value(p.get("inputs").cloned().unwrap_or(json!({})))
-                        .map_err(err)?;
+                let fields = p
+                    .as_object()
+                    .ok_or("workflow.execute payload must be an object")?;
+                if let Some(field) = fields.keys().find(|field| {
+                    !matches!(
+                        field.as_str(),
+                        "id" | "inputs" | "trace" | "conversation_id" | "agent_id" | "turn_id"
+                    )
+                }) {
+                    return Err(format!("Unsupported payload field: {field}"));
+                }
+                let id = required(p, "id")?.to_owned();
+                let inputs: HashMap<String, Value> = serde_json::from_value(
+                    p.get("inputs")
+                        .filter(|value| !value.is_null())
+                        .cloned()
+                        .unwrap_or(json!({})),
+                )
+                .map_err(err)?;
+                let identity = |field| match p.get(field) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(_) => required(p, field).map(|value| Some(value.trim().to_owned())),
+                };
                 let context = WorkflowExecutionContext {
-                    conversation_id: p
-                        .get("conversation_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    agent_id: p.get("agent_id").and_then(Value::as_str).map(str::to_owned),
-                    turn_id: None,
+                    conversation_id: identity("conversation_id")?,
+                    agent_id: identity("agent_id")?,
+                    turn_id: match p.get("turn_id") {
+                        Some(Value::Number(value)) => Some(value.to_string()),
+                        _ => identity("turn_id")?,
+                    },
                 };
                 if context.conversation_id.is_some() != context.agent_id.is_some() {
                     return Err("conversation_id and agent_id must be supplied together".into());
                 }
-                let view = self.workflows.read_workflow_resource(id).map_err(err)?;
-                let _occupancy = self.workflows.reserve_catalog_execution(id).map_err(err)?;
-                let started = corework::platform::time::Instant::now();
-                let outcome = if view.summary.kind == WorkflowResourceKind::Registered {
-                    self.workflows
-                        .execute_registered_outcome_with_context(id, inputs, &context)
-                        .await
-                } else {
-                    self.workflows
-                        .execute_from_blueprint_outcome_with_context(
-                            self.workflows.draft_blueprint(id).map_err(err)?,
-                            inputs,
-                            &context,
-                        )
-                        .await
-                }
-                .map_err(err)?;
-                Ok(
-                    json!({"code":if outcome.error.is_some(){-1}else{0},"run_id":outcome.report.trace.as_ref().map(|trace|&trace.run_id),"trace":outcome.report.to_ai(corework::workflow::execution::WorkflowToAiMode::Detailed,outcome.error.as_deref()),"result":{"outputs":outcome.report.outputs_json(),"duration_ms":started.elapsed().as_millis()}}),
-                )
+                let trace = match p.get("trace") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(trace)) => *trace,
+                    Some(_) => return Err("trace must be a boolean".into()),
+                };
+                let module = self.workflows.clone();
+                let occupancy = module.reserve_catalog_execution(&id).map_err(err)?;
+                self.workflow_runs
+                    .lock()
+                    .unwrap()
+                    .submit(
+                        module.clone(),
+                        id.clone(),
+                        trace,
+                        move |run_id| async move {
+                            let _occupancy = occupancy;
+                            module
+                                .execute_catalog_outcome_with_run_id(&id, inputs, &context, run_id)
+                                .await
+                        },
+                    )
+                    .map_err(err)
             }
             "conversation.spawn" => {
                 let _guard = self.mutation.lock().await;
@@ -869,6 +894,11 @@ impl Runtime {
         if self.closing.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
+        let workflow_runs = {
+            let _gate = self.mutation.lock().await;
+            std::mem::take(&mut *self.workflow_runs.lock().unwrap())
+        };
+        workflow_runs.drain().await;
         self.bridge.cancel_all();
         if let Some(manager) = self.manager.get() {
             for info in manager.list().await {

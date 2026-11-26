@@ -765,6 +765,7 @@ class Runtime:
         conversation_id: str | None = None,
         agent_id: str | None = None,
     ) -> Any:
+        """Submit a run and read its result from workflow.execution_completed."""
         return self.invoke(
             "workflow.execute",
             {
@@ -816,59 +817,6 @@ class Runtime:
                 "trace": trace,
                 "conversation_id": conversation_id,
                 "agent_id": agent_id,
-            },
-        )
-
-    def start_workflow_run(self) -> Any:
-        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
-        return self.invoke("workflow.start", {})
-
-    def run_workflow(
-        self,
-        workflow_run_id: str,
-        workflow_id: str,
-        inputs: Mapping[str, Any] | None = None,
-    ) -> Any:
-        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
-        return self.invoke(
-            "workflow.run",
-            {
-                "workflow_run_id": workflow_run_id,
-                "id": workflow_id,
-                "inputs": dict(inputs or {}),
-            },
-        )
-
-    def run_workflow_draft_test(
-        self,
-        workflow_run_id: str,
-        workflow_id: str,
-        inputs: Mapping[str, Any] | None = None,
-    ) -> Any:
-        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
-        return self.invoke(
-            "workflow.run",
-            {
-                "workflow_run_id": workflow_run_id,
-                "id": workflow_id,
-                "mode": "test",
-                "inputs": dict(inputs or {}),
-            },
-        )
-
-    def run_workflow_script(
-        self,
-        workflow_run_id: str,
-        script: str,
-        inputs: Mapping[str, Any] | None = None,
-    ) -> Any:
-        """Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow."""
-        return self.invoke(
-            "workflow.run",
-            {
-                "workflow_run_id": workflow_run_id,
-                "script": script,
-                "inputs": dict(inputs or {}),
             },
         )
 

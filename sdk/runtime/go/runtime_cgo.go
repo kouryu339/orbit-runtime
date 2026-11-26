@@ -278,6 +278,7 @@ func (r *Runtime) ListWorkflows(ctx context.Context, kind string) (json.RawMessa
 	return r.invoke(ctx, "workflow.list", payload)
 }
 
+// ExecuteWorkflow submits a run. Its result arrives in workflow.execution_completed.
 func (r *Runtime) ExecuteWorkflow(ctx context.Context, id string, inputs map[string]any, trace bool) (json.RawMessage, error) {
 	return r.invoke(ctx, "workflow.execute", map[string]any{"id": id, "inputs": inputs, "trace": trace})
 }
@@ -314,26 +315,6 @@ func (r *Runtime) ExecuteWorkflowScriptInContext(ctx context.Context, script str
 		"conversation_id": conversationID,
 		"agent_id":        agentID,
 	})
-}
-
-// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
-func (r *Runtime) StartWorkflowRun(ctx context.Context) (json.RawMessage, error) {
-	return r.invoke(ctx, "workflow.start", map[string]any{})
-}
-
-// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
-func (r *Runtime) RunWorkflow(ctx context.Context, workflowRunID string, id string, inputs map[string]any) (json.RawMessage, error) {
-	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "id": id, "inputs": inputs})
-}
-
-// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
-func (r *Runtime) RunWorkflowDraftTest(ctx context.Context, workflowRunID string, id string, inputs map[string]any) (json.RawMessage, error) {
-	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "id": id, "mode": "test", "inputs": inputs})
-}
-
-// Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.
-func (r *Runtime) RunWorkflowScript(ctx context.Context, workflowRunID string, script string, inputs map[string]any) (json.RawMessage, error) {
-	return r.invoke(ctx, "workflow.run", map[string]any{"workflow_run_id": workflowRunID, "script": script, "inputs": inputs})
 }
 
 // Deprecated: Legacy Workflow API is disabled. Use register_workflow, remove_workflow, validate_workflow, promote_workflow or execute_workflow.

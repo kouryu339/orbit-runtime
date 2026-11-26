@@ -703,12 +703,11 @@ fn invoke_command(
         "workflow.execute" => {
             let id = required_string(payload, "id")?;
             let context = optional_workflow_execution_context(payload)?;
-            return Ok(facade.execute_workflow_resource(
-                &id,
-                None,
+            return Ok(facade.submit_workflow(
+                id,
                 optional_inputs(payload)?,
                 optional_bool(payload, "trace")?,
-                &context,
+                context,
             )?);
         }
         _ => {}
@@ -938,27 +937,6 @@ fn invoke_command_inner(
                 optional_inputs(payload)?,
                 optional_bool(payload, "trace")?,
                 &execution_context,
-            )?
-        }
-        "workflow.start" => facade.start_workflow_run()?,
-        "workflow.run" => {
-            let execution_context = optional_workflow_execution_context(payload)?;
-            facade.run_workflow(
-                required_string(payload, "workflow_run_id")?,
-                payload
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                payload
-                    .get("script")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                payload
-                    .get("mode")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                optional_inputs(payload)?,
-                execution_context,
             )?
         }
         "conversation.spawn" => {
@@ -1291,7 +1269,7 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
     CAPABILITIES
         .get_or_init(|| {
             let legacy =
-            CString::new(r#"{"schema":"agent-runtime-capabilities/v1","abi":{"major":1,"minor":3},"commands":["runtime.register_resources","runtime.register_llm","runtime.reload_llm","runtime.register_agent_cluster","runtime.set_auth_context","runtime.configure_providers","runtime.get_provider_definitions","runtime.get_tool_definitions","runtime.get_workflow_node_definitions","runtime.get_agent_cluster_definitions","runtime.get_rpc_endpoint_definitions","runtime.set_current_model","runtime.set_language","runtime.export_snapshot","workflow.get_reference_node","workflow.create","workflow.read","workflow.register","workflow.update","workflow.revise","workflow.validate_revision","workflow.compile","workflow.delete","workflow.list","workflow.convert.script_to_blueprint","workflow.convert.blueprint_to_script","workflow.execute","workflow.execute_script","workflow.start","workflow.run","conversation.spawn","conversation.spawn_from_snapshot","conversation.import_image","conversation.send_message","conversation.pause","conversation.resume","conversation.close","conversation.export_snapshot","conversation.agent_tasks","conversation.materialize","conversation.import_snapshot","conversation.set_dynamic_snapshot","conversation.resolve_tool_permission","conversation.set_model","conversation.set_summary_model","conversation.compact_history","studio.open_workflow","studio.open_agent_test"],"events":{"transport":"pull","schema":"agent-runtime-event/v1","types":["conversation:created","conversation:closed","conversation.ledger_delta","conversation.state_delta","frontend:state_snapshot","workflow.resource_changed","workflow.execution_started","workflow.node_started","workflow.node_completed","workflow.node_failed","workflow.trace_event","workflow.execution_completed"],"lines":{"workflow":{"selector":"event_line=workflow","aggregate_id":"payload.workflow_id","conversation_scoped":false},"workflow_run":{"selector":"payload.workflow_run_id","aggregate_id":"payload.workflow_run_id","conversation_scoped":false}},"drain_after_shutdown":true},"ledger":{"delta_schema":"agent-runtime-ledger-delta/v1","ops":["append"],"idempotency":["conversation_id","record_id"]},"state":{"delta_schema":"agent-runtime-state-delta/v1","ops":["focus.set","conversation.model.set","agent.upsert","agent.retired","dynamic_snapshot.set","agent_task.upsert","agent_skills.set","agent_plan.set"],"agent_scoped":["agent.upsert","agent.retired","dynamic_snapshot.set","agent_skills.set","agent_plan.set"],"conversation_scoped":["focus.set","conversation.model.set","agent_task.upsert"],"host_owned":["dynamic_snapshot.set"]},"shutdown":{"timeout":true,"retryable":true},"threading":{"handle_calls":"safe_serialized","callbacks":false}}"#)
+            CString::new(r#"{"schema":"agent-runtime-capabilities/v1","abi":{"major":1,"minor":3},"commands":["runtime.register_resources","runtime.register_llm","runtime.reload_llm","runtime.register_agent_cluster","runtime.set_auth_context","runtime.configure_providers","runtime.get_provider_definitions","runtime.get_tool_definitions","runtime.get_workflow_node_definitions","runtime.get_agent_cluster_definitions","runtime.get_rpc_endpoint_definitions","runtime.set_current_model","runtime.set_language","runtime.export_snapshot","workflow.get_reference_node","workflow.create","workflow.read","workflow.register","workflow.update","workflow.revise","workflow.validate_revision","workflow.compile","workflow.delete","workflow.list","workflow.convert.script_to_blueprint","workflow.convert.blueprint_to_script","workflow.execute","workflow.execute_script","conversation.spawn","conversation.spawn_from_snapshot","conversation.import_image","conversation.send_message","conversation.pause","conversation.resume","conversation.close","conversation.export_snapshot","conversation.agent_tasks","conversation.materialize","conversation.import_snapshot","conversation.set_dynamic_snapshot","conversation.resolve_tool_permission","conversation.set_model","conversation.set_summary_model","conversation.compact_history","studio.open_workflow","studio.open_agent_test"],"events":{"transport":"pull","schema":"agent-runtime-event/v1","types":["conversation:created","conversation:closed","conversation.ledger_delta","conversation.state_delta","frontend:state_snapshot","workflow.resource_changed","workflow.execution_started","workflow.node_started","workflow.node_completed","workflow.node_failed","workflow.trace_event","workflow.execution_completed"],"lines":{"workflow":{"selector":"event_line=workflow","aggregate_id":"payload.workflow_id","conversation_scoped":false},"workflow_run":{"selector":"payload.workflow_run_id","aggregate_id":"payload.workflow_run_id","conversation_scoped":false}},"drain_after_shutdown":true},"ledger":{"delta_schema":"agent-runtime-ledger-delta/v1","ops":["append"],"idempotency":["conversation_id","record_id"]},"state":{"delta_schema":"agent-runtime-state-delta/v1","ops":["focus.set","conversation.model.set","agent.upsert","agent.retired","dynamic_snapshot.set","agent_task.upsert","agent_skills.set","agent_plan.set"],"agent_scoped":["agent.upsert","agent.retired","dynamic_snapshot.set","agent_skills.set","agent_plan.set"],"conversation_scoped":["focus.set","conversation.model.set","agent_task.upsert"],"host_owned":["dynamic_snapshot.set"]},"shutdown":{"timeout":true,"retryable":true},"threading":{"handle_calls":"safe_serialized","callbacks":false}}"#)
                 .expect("static capabilities JSON contains no NUL");
             let mut capabilities: Value = serde_json::from_str(
                 legacy.to_str().expect("capabilities JSON must be UTF-8"),
@@ -1310,6 +1288,7 @@ pub extern "C" fn agent_runtime_capabilities_v1() -> *const c_char {
             capabilities["features"] = json!({"workflow_edit_to_draft":true,"workflow_running_edit_guard":true,"skill_candidate_transactions":1,"dynamic_rpc_additions":1});
             capabilities["commands"].as_array_mut().unwrap().extend(
                 corework::rpc_event::COMMANDS.iter().map(|v| json!(v)));
+            capabilities["features"]["workflow_async_execute"] = json!(1);
             capabilities["features"]["rpc_event_sources"] = json!(1);
             capabilities["features"]["conversation_read_access"] = json!(1);
             capabilities["features"]["file_decoders"] = json!({"version":1,"representations":["text","json"],"transport":"loopback-length-prefixed-json/v1","registration":"before_start","defaults_preserved":true});

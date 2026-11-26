@@ -63,7 +63,6 @@ mod skill_transactions;
 mod tool_definitions;
 mod workflow_node_definitions;
 mod workflow_operations;
-mod workflow_runs;
 
 pub(crate) use workflow_node_definitions::workflow_node_definition_values;
 
@@ -277,7 +276,7 @@ pub struct RuntimeFacade {
     sidecar_children: Vec<ManagedSidecar>,
     event_sender: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
     event_log: Arc<StdMutex<VecDeque<Value>>>,
-    workflow_runs: Arc<StdMutex<workflow_runs::WorkflowRunRegistry>>,
+    workflow_runs: corework::workflow::workflows::host_runs::HostWorkflowRuns,
     jev_manager: Option<Arc<JevManager>>,
     jev_definitions: Vec<JevDefinition>,
     jev_api_key: Option<String>,
@@ -362,7 +361,7 @@ impl RuntimeFacade {
             sidecar_children: Vec::new(),
             event_sender: Arc::new(Mutex::new(None)),
             event_log: Arc::new(StdMutex::new(VecDeque::new())),
-            workflow_runs: Arc::new(StdMutex::new(workflow_runs::WorkflowRunRegistry::default())),
+            workflow_runs: Default::default(),
             jev_manager: None,
             jev_definitions: Vec::new(),
             jev_api_key: None,
@@ -759,7 +758,6 @@ impl RuntimeFacade {
         let event_metadata = self.event_metadata();
         let event_sender = Arc::clone(&self.event_sender);
         let event_log = Arc::clone(&self.event_log);
-        let workflow_runs = Arc::clone(&self.workflow_runs);
         let next_tool_registry = Arc::new(corework::system::SystemRegistry::isolated_runtime());
         let tool_registry = next_tool_registry.clone();
         let rpc_tools = self.config.rpc_tools.clone();
@@ -847,7 +845,6 @@ impl RuntimeFacade {
                 event_sender.clone(),
                 projector.clone(),
                 event_log.clone(),
-                workflow_runs.clone(),
                 agent_test_event_tx,
             )
             .await?;
@@ -1221,6 +1218,7 @@ impl RuntimeFacade {
     }
 
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
+        self.rt.block_on(std::mem::take(&mut self.workflow_runs).drain());
         self.event_sources.close();
         self.workflow_studio_server = None;
         self.agent_test_studio_server = None;

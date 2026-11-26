@@ -11,6 +11,12 @@ Six resource operations are exposed. Existing create/read/revise/update/compile/
 | promoteWorkflow | workflow.promote | workflow_id / id, expected_revision |
 | executeWorkflow | workflow.execute | workflow_id / id, inputs, optional trace |
 
+Hosts subscribe to events before calling `workflow.execute`. The command
+returns `run_id` and `status:"accepted"`. Final outputs arrive in
+`workflow.execution_completed`. The AI tool `executeWorkflow` still returns
+its results in the same tool call.
+[Execution contract](11-runtime-workflow-execution-contract.md#113-submission-and-results)
+
 ## Public schemas and source syntax
 
 Distribute these files alongside the DLL from the Runtime package:

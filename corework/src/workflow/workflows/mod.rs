@@ -4,6 +4,7 @@ pub mod draft;
 pub mod draft_ops;
 pub mod executor;
 pub mod flowchart;
+pub mod host_runs;
 pub mod reference;
 pub mod resource_api;
 pub mod revision;

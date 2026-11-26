@@ -11,6 +11,11 @@
 | 转正 | `promoteWorkflow` | `workflow.promote` | AI: `workflow_id, expected_revision`；Runtime: `id, expected_revision` |
 | 执行 | `executeWorkflow` | `workflow.execute` | AI: `workflow_id, input.<name>?, trace?`；Runtime: `id, inputs?, trace?` |
 
+宿主先监听事件，再调用 `workflow.execute`。命令返回 `run_id` 和
+`status:"accepted"`，终态和输出通过 `workflow.execution_completed` 送达。
+AI 使用的 `executeWorkflow` 仍在同一工具调用中返回结果。
+[执行契约](11-runtime-workflow-execution-contract.md#113-执行提交与结果)
+
 执行还支持宿主身份上下文 `conversation_id, agent_id, turn_id`。前两个必须同时提供且非空。AI 通过自身上下文传递身份。真实执行继续由 AI 工具权限策略控制，验证不执行节点、不申请执行授权。
 
 ## 对外提供的 Schema 与语法说明
