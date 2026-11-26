@@ -286,10 +286,7 @@ fn dynamic_rpc_addition_reaches_existing_contexts_and_workflow_without_granting_
     )
     .unwrap();
     let output = super::await_workflow_completion(&facade, &output);
-    assert_eq!(
-        output["result"]["value"], "late-value",
-        "{output}"
-    );
+    assert_eq!(output["result"]["value"], "late-value", "{output}");
     assert_eq!(server.service.calls.load(Ordering::SeqCst), 2);
     facade
         .close_conversation(&conversation.conversation_id)

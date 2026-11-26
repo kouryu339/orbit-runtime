@@ -1218,7 +1218,8 @@ impl RuntimeFacade {
     }
 
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
-        self.rt.block_on(std::mem::take(&mut self.workflow_runs).drain());
+        self.rt
+            .block_on(std::mem::take(&mut self.workflow_runs).drain());
         self.event_sources.close();
         self.workflow_studio_server = None;
         self.agent_test_studio_server = None;
